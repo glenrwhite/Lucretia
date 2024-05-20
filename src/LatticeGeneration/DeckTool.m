@@ -2881,12 +2881,12 @@ classdef DeckTool < handle
     end
   end
   methods
-    function WriteSpreadsheet(obj,filename,boreoffset,regionID)
+    function WriteSpreadsheet(obj,filename,boreoffset)
       %WRITESPREADSHEET generate master spreadsheet for BEAMLINE lattice, including separate sheet for each Class of elements
       %WriteSpreadsheet(filename [,boreoffset,spotsize,regionID])
       % boreoffset : added distance to physical bore aperture (e.g. including beam pipe wall thickness), default = 0
       % regionID : Structure with region names as field names, each region has 'id1' and 'id2' fields with BEAMLINE indices defining region of BEAMLINE array
-      global BEAMLINE PS GIRDER WF
+      global BEAMLINE PS GIRDER WF SECTION
       if exist(filename,'file'); delete(filename); end
       BL0=BEAMLINE; PS0=PS; GIR0=GIRDER; WF0=WF;
       if ~exist('boreoffset','var') || isempty(boreoffset)
@@ -2918,23 +2918,17 @@ classdef DeckTool < handle
       YPf = arrayfun(@(x) BEAMLINE{x}.Anglef(2),id);
       ZPf = arrayfun(@(x) BEAMLINE{x}.Anglef(3),id);
       classes = arrayfun(@(x) BEAMLINE{x}.Class,id,'UniformOutput',false);
-      regions=repmat("NONE",length(id),1);
-      if exist('regionID','var') && ~isempty(regionID)
-        fn=fieldnames(regionID);
-        for ifn=1:length(fn)
-          if regionID.(fn{ifn}).id2<=length(BEAMLINE)
-            regions(id>=regionID.(fn{ifn}).id1 & id<=regionID.(fn{ifn}).id2) = string(fn{ifn}) ;
-          else
-            BEAMLINE=BL0; PS=PS0; GIRDER=GIR0; WF=WF0;
-            error('Bad region definition')
-          end
+      sections=string([]);
+      for iele=id
+        if ~isfield(BEAMLINE{iele},'Section') || isempty(BEAMLINE{iele}.Section) || ~BEAMLINE{iele}.Section
+          sections(end+1)="---";
+        else
+          sections(end+1)=SECTION(BEAMLINE{iele}.Section).Name;
         end
       end
-      for iele=1:length(id)
-        BEAMLINE{id(iele)}.Region = regions(iele) ;
-      end
-      T=table(id(:),names(:),regions(:),classes(:), types(:),L(:),P(:),S(:),Xi(:),Yi(:),Zi(:),XPi(:),YPi(:),ZPi(:),Xf(:),Yf(:),Zf(:),XPf(:),YPf(:),ZPf(:),'VariableNames',...
-        {'Model ID'; 'Model Name'; 'Region Name'; 'Class'; 'Engineering Type';'Path Length [m]';'E [GeV]';'S [m]';'X Coord (init) [m]';'Y Coord (init) [m]';'Z Coord (init) [m]';'X Angle (init) [rad]';'Y Angle (init) [rad]';'Z Angle (init) [rad]';'X Coord (fin) [m]';'Y Coord (fin) [m]';'Z Coord (fin) [m]';'X Angle (fin) [rad]';'Y Angle (fin) [rad]';'Z Angle (fin) [rad]'}) ;
+      sections=sections';
+      T=table(id(:),names(:),sections(:),classes(:), types(:),L(:),P(:),S(:),Xi(:),Yi(:),Zi(:),XPi(:),YPi(:),ZPi(:),Xf(:),Yf(:),Zf(:),XPf(:),YPf(:),ZPf(:),'VariableNames',...
+        {'Model ID'; 'Model Name'; 'Section Name'; 'Class'; 'Engineering Type';'Path Length [m]';'E [GeV]';'S [m]';'X Coord (init) [m]';'Y Coord (init) [m]';'Z Coord (init) [m]';'X Angle (init) [rad]';'Y Angle (init) [rad]';'Z Angle (init) [rad]';'X Coord (fin) [m]';'Y Coord (fin) [m]';'Z Coord (fin) [m]';'X Angle (fin) [rad]';'Y Angle (fin) [rad]';'Z Angle (fin) [rad]'}) ;
       writetable(T,filename,'Sheet','All');
       % - COLL Sheet
       sid = ismember(id,findcells(BEAMLINE,'Class','COLL')) ;
@@ -2944,7 +2938,7 @@ classdef DeckTool < handle
         ygap = arrayfun(@(x) BEAMLINE{x}.aper(2),id(sid));
         xoff = arrayfun(@(x) BEAMLINE{x}.Offset(1),id(sid));
         yoff = arrayfun(@(x) BEAMLINE{x}.Offset(3),id(sid));
-        T_COLL=table(id(sid)',names(sid)',regions(sid),types(sid),L(sid),P(sid)',S(sid)',geom(:),xgap(:),ygap(:),xoff(:),yoff(:),Xi(sid)',Yi(sid)',Zi(sid)',XPi(sid)',YPi(sid)',ZPi(sid)',Xf(sid)',Yf(sid)',Zf(sid)',XPf(sid)',YPf(sid)',ZPf(sid)','VariableNames',...
+        T_COLL=table(id(sid)',names(sid)',sections(sid),types(sid),L(sid),P(sid)',S(sid)',geom(:),xgap(:),ygap(:),xoff(:),yoff(:),Xi(sid)',Yi(sid)',Zi(sid)',XPi(sid)',YPi(sid)',ZPi(sid)',Xf(sid)',Yf(sid)',Zf(sid)',XPf(sid)',YPf(sid)',ZPf(sid)','VariableNames',...
           {'Model ID'; 'Model Name'; 'Region Name'; 'Engineering Type';'Path Length [m]';'E [GeV]';'S [m]';'Geometry';'X Gap [m]';'Y Gap [m]';'X Offset [m]';'Y Offset [m]';'X Coord (init) [m]';'Y Coord (init) [m]';'Z Coord (init) [m]';'X Angle (init) [rad]';'Y Angle (init) [rad]';'Z Angle (init) [rad]';'X Coord (fin) [m]';'Y Coord (fin) [m]';'Z Coord (fin) [m]';'X Angle (fin) [rad]';'Y Angle (fin) [rad]';'Z Angle (fin) [rad]'}) ;
       end
       % - COR Sheet
@@ -2954,49 +2948,49 @@ classdef DeckTool < handle
         dim(ismember(id(sid),findcells(BEAMLINE,'Class','YCOR'))) = 'Y' ;
         dim(ismember(id(sid),findcells(BEAMLINE,'Class','XYCOR'))) = 'XY' ;
         tilt = rad2deg(arrayfun(@(x) BEAMLINE{x}.Tilt,id(sid))) ;
-        T_COR=table(id(sid)',names(sid)',regions(sid),types(sid),L(sid),P(sid)',S(sid)',dim(:),tilt(:),Xi(sid)',Yi(sid)',Zi(sid)',XPi(sid)',YPi(sid)',ZPi(sid)',Xf(sid)',Yf(sid)',Zf(sid)',XPf(sid)',YPf(sid)',ZPf(sid)','VariableNames',...
+        T_COR=table(id(sid)',names(sid)',sections(sid),types(sid),L(sid),P(sid)',S(sid)',dim(:),tilt(:),Xi(sid)',Yi(sid)',Zi(sid)',XPi(sid)',YPi(sid)',ZPi(sid)',Xf(sid)',Yf(sid)',Zf(sid)',XPf(sid)',YPf(sid)',ZPf(sid)','VariableNames',...
           {'Model ID'; 'Model Name'; 'Region Name'; 'Engineering Type';'Path Length [m]';'E [GeV]';'S [m]';'Dimension';'Tilt [deg]';'X Coord (init) [m]';'Y Coord (init) [m]';'Z Coord (init) [m]';'X Angle (init) [rad]';'Y Angle (init) [rad]';'Z Angle (init) [rad]';'X Coord (fin) [m]';'Y Coord (fin) [m]';'Z Coord (fin) [m]';'X Angle (fin) [rad]';'Y Angle (fin) [rad]';'Z Angle (fin) [rad]'}) ;
       end
       % - BPM Sheet
       sid = ismember(id,findcells(BEAMLINE,'Class','MONI')) ;
       if any(sid)
-        T_MONI=table(id(sid)',names(sid)',regions(sid),types(sid),L(sid),P(sid)',S(sid)',Xi(sid)',Yi(sid)',Zi(sid)',XPi(sid)',YPi(sid)',ZPi(sid)',Xf(sid)',Yf(sid)',Zf(sid)',XPf(sid)',YPf(sid)',ZPf(sid)','VariableNames',...
+        T_MONI=table(id(sid)',names(sid)',sections(sid),types(sid),L(sid),P(sid)',S(sid)',Xi(sid)',Yi(sid)',Zi(sid)',XPi(sid)',YPi(sid)',ZPi(sid)',Xf(sid)',Yf(sid)',Zf(sid)',XPf(sid)',YPf(sid)',ZPf(sid)','VariableNames',...
           {'Model ID'; 'Model Name'; 'Region Name'; 'Engineering Type';'Path Length [m]';'E [GeV]';'S [m]';'X Coord (init) [m]';'Y Coord (init) [m]';'Z Coord (init) [m]';'X Angle (init) [rad]';'Y Angle (init) [rad]';'Z Angle (init) [rad]';'X Coord (fin) [m]';'Y Coord (fin) [m]';'Z Coord (fin) [m]';'X Angle (fin) [rad]';'Y Angle (fin) [rad]';'Z Angle (fin) [rad]'}) ;
       end
       % - WIRE Sheet
       sid = ismember(id,findcells(BEAMLINE,'Class','WIRE')) ;
       if any(sid)
-        T_WIRE=table(id(sid)',names(sid)',regions(sid),types(sid),L(sid),P(sid)',S(sid)',Xi(sid)',Yi(sid)',Zi(sid)',XPi(sid)',YPi(sid)',ZPi(sid)',Xf(sid)',Yf(sid)',Zf(sid)',XPf(sid)',YPf(sid)',ZPf(sid)','VariableNames',...
+        T_WIRE=table(id(sid)',names(sid)',sections(sid),types(sid),L(sid),P(sid)',S(sid)',Xi(sid)',Yi(sid)',Zi(sid)',XPi(sid)',YPi(sid)',ZPi(sid)',Xf(sid)',Yf(sid)',Zf(sid)',XPf(sid)',YPf(sid)',ZPf(sid)','VariableNames',...
           {'Model ID'; 'Model Name'; 'Region Name'; 'Engineering Type';'Path Length [m]';'E [GeV]';'S [m]';'X Coord (init) [m]';'Y Coord (init) [m]';'Z Coord (init) [m]';'X Angle (init) [rad]';'Y Angle (init) [rad]';'Z Angle (init) [rad]';'X Coord (fin) [m]';'Y Coord (fin) [m]';'Z Coord (fin) [m]';'X Angle (fin) [rad]';'Y Angle (fin) [rad]';'Z Angle (fin) [rad]'}) ;
       end
       % - PROF Sheet
       sid = ismember(id,findcells(BEAMLINE,'Class','PROF')) ;
       if any(sid)
-        T_PROF=table(id(sid)',names(sid)',regions(sid),types(sid),L(sid),P(sid)',S(sid)',Xi(sid)',Yi(sid)',Zi(sid)',XPi(sid)',YPi(sid)',ZPi(sid)',Xf(sid)',Yf(sid)',Zf(sid)',XPf(sid)',YPf(sid)',ZPf(sid)','VariableNames',...
+        T_PROF=table(id(sid)',names(sid)',sections(sid),types(sid),L(sid),P(sid)',S(sid)',Xi(sid)',Yi(sid)',Zi(sid)',XPi(sid)',YPi(sid)',ZPi(sid)',Xf(sid)',Yf(sid)',Zf(sid)',XPf(sid)',YPf(sid)',ZPf(sid)','VariableNames',...
           {'Model ID'; 'Model Name'; 'Region Name'; 'Engineering Type';'Path Length [m]';'E [GeV]';'S [m]';'X Coord (init) [m]';'Y Coord (init) [m]';'Z Coord (init) [m]';'X Angle (init) [rad]';'Y Angle (init) [rad]';'Z Angle (init) [rad]';'X Coord (fin) [m]';'Y Coord (fin) [m]';'Z Coord (fin) [m]';'X Angle (fin) [rad]';'Y Angle (fin) [rad]';'Z Angle (fin) [rad]'}) ;
       end
       % - IMON Sheet
       sid = ismember(id,findcells(BEAMLINE,'Class','IMON')) ;
       if any(sid)
-        T_IMON=table(id(sid)',names(sid)',regions(sid),types(sid),L(sid),P(sid)',S(sid)',Xi(sid)',Yi(sid)',Zi(sid)',XPi(sid)',YPi(sid)',ZPi(sid)',Xf(sid)',Yf(sid)',Zf(sid)',XPf(sid)',YPf(sid)',ZPf(sid)','VariableNames',...
+        T_IMON=table(id(sid)',names(sid)',sections(sid),types(sid),L(sid),P(sid)',S(sid)',Xi(sid)',Yi(sid)',Zi(sid)',XPi(sid)',YPi(sid)',ZPi(sid)',Xf(sid)',Yf(sid)',Zf(sid)',XPf(sid)',YPf(sid)',ZPf(sid)','VariableNames',...
           {'Model ID'; 'Model Name'; 'Region Name'; 'Engineering Type';'Path Length [m]';'E [GeV]';'S [m]';'X Coord (init) [m]';'Y Coord (init) [m]';'Z Coord (init) [m]';'X Angle (init) [rad]';'Y Angle (init) [rad]';'Z Angle (init) [rad]';'X Coord (fin) [m]';'Y Coord (fin) [m]';'Z Coord (fin) [m]';'X Angle (fin) [rad]';'Y Angle (fin) [rad]';'Z Angle (fin) [rad]'}) ;
       end
       % - BLMO Sheet
       sid = ismember(id,findcells(BEAMLINE,'Class','BLMO')) ;
       if any(sid)
-        T_BLMO=table(id(sid)',names(sid)',regions(sid),types(sid),L(sid),P(sid)',S(sid)',Xi(sid)',Yi(sid)',Zi(sid)',XPi(sid)',YPi(sid)',ZPi(sid)',Xf(sid)',Yf(sid)',Zf(sid)',XPf(sid)',YPf(sid)',ZPf(sid)','VariableNames',...
+        T_BLMO=table(id(sid)',names(sid)',sections(sid),types(sid),L(sid),P(sid)',S(sid)',Xi(sid)',Yi(sid)',Zi(sid)',XPi(sid)',YPi(sid)',ZPi(sid)',Xf(sid)',Yf(sid)',Zf(sid)',XPf(sid)',YPf(sid)',ZPf(sid)','VariableNames',...
           {'Model ID'; 'Model Name'; 'Region Name'; 'Engineering Type';'Path Length [m]';'E [GeV]';'S [m]';'X Coord (init) [m]';'Y Coord (init) [m]';'Z Coord (init) [m]';'X Angle (init) [rad]';'Y Angle (init) [rad]';'Z Angle (init) [rad]';'X Coord (fin) [m]';'Y Coord (fin) [m]';'Z Coord (fin) [m]';'X Angle (fin) [rad]';'Y Angle (fin) [rad]';'Z Angle (fin) [rad]'}) ;
       end
       % - INST Sheet
       sid = ismember(id,findcells(BEAMLINE,'Class','INST')) ;
       if any(sid)
-        T_INST=table(id(sid)',names(sid)',regions(sid),types(sid),L(sid),P(sid)',S(sid)',Xi(sid)',Yi(sid)',Zi(sid)',XPi(sid)',YPi(sid)',ZPi(sid)',Xf(sid)',Yf(sid)',Zf(sid)',XPf(sid)',YPf(sid)',ZPf(sid)','VariableNames',...
+        T_INST=table(id(sid)',names(sid)',sections(sid),types(sid),L(sid),P(sid)',S(sid)',Xi(sid)',Yi(sid)',Zi(sid)',XPi(sid)',YPi(sid)',ZPi(sid)',Xf(sid)',Yf(sid)',Zf(sid)',XPf(sid)',YPf(sid)',ZPf(sid)','VariableNames',...
           {'Model ID'; 'Model Name'; 'Region Name'; 'Engineering Type';'Path Length [m]';'E [GeV]';'S [m]';'X Coord (init) [m]';'Y Coord (init) [m]';'Z Coord (init) [m]';'X Angle (init) [rad]';'Y Angle (init) [rad]';'Z Angle (init) [rad]';'X Coord (fin) [m]';'Y Coord (fin) [m]';'Z Coord (fin) [m]';'X Angle (fin) [rad]';'Y Angle (fin) [rad]';'Z Angle (fin) [rad]'}) ;
       end
       % - MARK Sheet
       sid = ismember(id,findcells(BEAMLINE,'Class','MARK')) ;
       if any(sid)
-        T_MARK=table(id(sid)',names(sid)',regions(sid),types(sid),L(sid),P(sid)',S(sid)',Xi(sid)',Yi(sid)',Zi(sid)',XPi(sid)',YPi(sid)',ZPi(sid)',Xf(sid)',Yf(sid)',Zf(sid)',XPf(sid)',YPf(sid)',ZPf(sid)','VariableNames',...
+        T_MARK=table(id(sid)',names(sid)',sections(sid),types(sid),L(sid),P(sid)',S(sid)',Xi(sid)',Yi(sid)',Zi(sid)',XPi(sid)',YPi(sid)',ZPi(sid)',Xf(sid)',Yf(sid)',Zf(sid)',XPf(sid)',YPf(sid)',ZPf(sid)','VariableNames',...
           {'Model ID'; 'Model Name'; 'Region Name'; 'Engineering Type';'Path Length [m]';'E [GeV]';'S [m]';'X Coord (init) [m]';'Y Coord (init) [m]';'Z Coord (init) [m]';'X Angle (init) [rad]';'Y Angle (init) [rad]';'Z Angle (init) [rad]';'X Coord (fin) [m]';'Y Coord (fin) [m]';'Z Coord (fin) [m]';'X Angle (fin) [rad]';'Y Angle (fin) [rad]';'Z Angle (fin) [rad]'}) ;
       end
       % -- Unsplit magnets for other Sheets
@@ -3004,7 +2998,10 @@ classdef DeckTool < handle
       id = 1:length(BEAMLINE) ;
       nod = ~ismember(id,findcells(BEAMLINE,'Class','DRIF'));
       id = id(nod) ;
-      names = regexprep(arrayfun(@(x) BEAMLINE{x}.Name,id,'UniformOutput',false),'_.*$','') ;
+      names = regexprep(arrayfun(@(x) BEAMLINE{x}.Name,id,'UniformOutput',false),'(_\d+)\w$','$1') ;
+      for iname=find(cellfun(@(x) x(end)=='_',names))
+        names{iname}=names{iname}(1:end-1);
+      end
       itid = findcells(BEAMLINE,'Type') ; tid=ismember(id,itid) ;
       types = repmat("UNKNOWN",length(id),1) ;
       types(tid) = arrayfun(@(x) string(BEAMLINE{x}.Type),id(tid));
@@ -3027,7 +3024,9 @@ classdef DeckTool < handle
       ZPf = arrayfun(@(x) BEAMLINE{x}.Anglef(3),id);
       regions=repmat("NONE",length(id),1);
       for iele=1:length(id)
-        regions(iele)=BEAMLINE{id(iele)}.Region;
+        if isfield(BEAMLINE{id(iele)},'Section') && ~isempty(BEAMLINE{id(iele)}.Section) && BEAMLINE{id(iele)}.Section
+          regions(iele)=SECTION(BEAMLINE{id(iele)}.Section).Name;
+        end
       end
       % - LCAV Sheet
       sid = ismember(id,findcells(BEAMLINE,'Class','LCAV')) ;
