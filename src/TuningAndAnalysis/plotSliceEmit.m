@@ -18,7 +18,7 @@ for islice=1:length(zslice)-1
   B=beam;
   sel=ns&beam.Bunch(ibunch).x(5,:)>=zslice(islice)&beam.Bunch(ibunch).x(5,:)<zslice(islice+1);
   B.Bunch(ibunch).x=beam.Bunch(ibunch).x(:,sel); B.Bunch(ibunch).Q=beam.Bunch(ibunch).Q(sel); B.Bunch(ibunch).stop=beam.Bunch(ibunch).stop(sel);
-  [ex,ey]=GetNEmitFromBeam(B,(ibunch));
+  [ex,ey]=GetNEmitFromBeam(B,ibunch);
   nx(islice)=ex; ny(islice)=ey;
   Q(islice)=sum(beam.Bunch(ibunch).Q(sel));
   de(islice)=std(beam.Bunch(ibunch).x(6,sel))./mean(beam.Bunch(ibunch).x(6,sel));
