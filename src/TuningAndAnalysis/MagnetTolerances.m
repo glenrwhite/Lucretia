@@ -99,7 +99,9 @@ for iele=findcells(BEAMLINE,'Class','SBEN',i1,i2)
 end
 
 % - Quad b2/b1
-for iele=findcells(BEAMLINE,'Class','QUAD',i1,i2)
+iben=findcells(BEAMLINE,'Class','SBEN',i1,i2);
+ibenquad=iben(arrayfun(@(x) length(BEAMLINE{x}.B)>1,iben)) ;
+for iele=[findcells(BEAMLINE,'Class','QUAD',i1,i2) ibenquad]
   if ~isfield(BEAMLINE{iele},'Slices'); BEAMLINE{iele}.Slices=iele; end
   if iele~=BEAMLINE{iele}.Slices(1)
     continue
@@ -134,7 +136,7 @@ for iele=findcells(BEAMLINE,'Class','QUAD',i1,i2)
     if isfield(BEAMLINE{isl},'BMAX')
       b1=b1+BEAMLINE{isl}.BMAX*r0;
     else
-      b1=b1+BEAMLINE{isl}.B*r0;
+      b1=b1+BEAMLINE{isl}.B(end)*r0;
       if isfield(BEAMLINE{iele},'PS') && BEAMLINE{iele}.PS>0
         b1=b1*PS(BEAMLINE{iele}.PS).Ampl;
       end
@@ -148,7 +150,7 @@ for iele=findcells(BEAMLINE,'Class','QUAD',i1,i2)
 end
 
 % - Quad offset + roll
-for iele=findcells(BEAMLINE,'Class','QUAD',i1,i2)
+for iele=[findcells(BEAMLINE,'Class','QUAD',i1,i2) ibenquad]
   if ~isfield(BEAMLINE{iele},'Slices'); BEAMLINE{iele}.Slices=iele; end
   if iele~=BEAMLINE{iele}.Slices(1)
     continue

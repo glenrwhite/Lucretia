@@ -2382,13 +2382,17 @@ classdef DeckTool < handle
         end
         % Inherting from another element?
         if length(en.(fn{ifn}).Class)<4 || ~ismember(upper(en.(fn{ifn}).Class(1:4)),plist)
-          iobj = en.(en.(fn{ifn}).Class) ;
-          en.(fn{ifn}).Class = iobj.Class ;
-          fn2=fieldnames(iobj);
-          for ifn2=1:length(fn2)
-            if ~isfield(en.(fn{ifn}),fn2{ifn2})
-              en.(fn{ifn}).(fn2{ifn2}) = iobj.(fn2{ifn2}) ;
+          try
+            iobj = en.(en.(fn{ifn}).Class) ;
+            en.(fn{ifn}).Class = iobj.Class ;
+            fn2=fieldnames(iobj);
+            for ifn2=1:length(fn2)
+              if ~isfield(en.(fn{ifn}),fn2{ifn2})
+                en.(fn{ifn}).(fn2{ifn2}) = iobj.(fn2{ifn2}) ;
+              end
             end
+          catch % If this doesn't work, then just unknown class, make it a marker
+            en.(fn{ifn}).Class='marker';
           end
         end
         switch upper(en.(fn{ifn}).Class(1:4))
@@ -3087,7 +3091,7 @@ classdef DeckTool < handle
         n=0; K1=zeros(1,sum(sid)); g=K1; gl=K1;
         for iele=id(sid)
           n=n+1;
-          if length(BEAMLINE{iele}.B)==1
+          if isscalar(BEAMLINE{iele}.B)
             K1(n) = 0 ;
             g(n) = 0 ;
             gl(n) = 0 ;
