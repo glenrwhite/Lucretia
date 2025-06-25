@@ -72,6 +72,7 @@ classdef Track < handle
     centerTInd=[]; % Indices to re-center transverse distribution
     zOffset=0; % Phase offset in bunch (m), used if centerZInd present
     isgpu=false; % Wishing to track with GPU-optimized mex function?
+    storeFullBeam logical = false % Store full beam @beamStoreInd? (else just beam centroid)
   end
   properties(SetAccess=protected)
     isDistrib=false; % Is this Track object opererating in distributed mode?
@@ -387,7 +388,11 @@ classdef Track < handle
                     t2=interele(iele+1);
                   end
                   if ismember(interele(iele),bsind)
-                    bstore{bi}=beamout;
+                    if obj.storeFullBeam
+                      bstore{bi}=beamout;
+                    else
+                      bstore{bi}=mean(beamout.Bunch.x(:,~beamout.Bunch.stop),2);
+                    end
                   end
                   if ismember(interele(iele),czind)
                     B.Bunch.x(5,:)=B.Bunch.x(5,~B.Bunch.stop)-median(B.Bunch.x(5,~B.Bunch.stop))+obj.zOffset;
@@ -448,7 +453,11 @@ classdef Track < handle
               end
             end
             if ismember(interele(iele),bsind)
-              obj.beamStore{bi}=B;
+              if obj.storeFullBeam
+                obj.beamStore{bi}=B;
+              else
+                obj.beamStore{bi}=mean(B.Bunch.x(:,~B.Bunch.stop),2);
+              end
               bi=bi+1;
             end
           end
