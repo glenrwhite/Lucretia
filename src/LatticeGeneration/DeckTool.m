@@ -2929,6 +2929,7 @@ classdef DeckTool < handle
       aper_x = k0 ;
       aper_y = k0 ;
       girid = k0 ;
+      psid = k0 ;
       isB = arrayfun(@(x) string(BEAMLINE{x}.Class)=="SBEN",id) ;
       k0(isB) = arrayfun(@(x) BEAMLINE{x}.B(1),id(isB)) ./ arrayfun(@(x) BEAMLINE{x}.L,id(isB)) ./ arrayfun(@(x) BEAMLINE{x}.P,id(isB)) ./ 3.335640952 ;
       isB = isB(arrayfun(@(x) length(BEAMLINE{x}.B)>1,id(isB))) ;
@@ -2949,6 +2950,8 @@ classdef DeckTool < handle
       classes = arrayfun(@(x) BEAMLINE{x}.Class,id,'UniformOutput',false) ;
       sel = arrayfun(@(x) isfield(BEAMLINE{x},'Girder'),id ) ;
       girid(sel) = arrayfun(@(x) BEAMLINE{x}.Girder,id(sel)) ;
+      sel = arrayfun(@(x) isfield(BEAMLINE{x},'PS'),id ) ;
+      psid(sel) = arrayfun(@(x) BEAMLINE{x}.PS(1),id(sel)) ;
       sections=string([]);
       for iele=id
         if ~isfield(BEAMLINE{iele},'Section') || isempty(BEAMLINE{iele}.Section) || ~BEAMLINE{iele}.Section
@@ -2977,6 +2980,7 @@ classdef DeckTool < handle
       end
       racks=racks';
       girid=girid';
+      psid=psid';
       T=table(id(:),names(:),sections(:),pps(:),racks(:), girid(:), classes(:), types(:),L(:),P(:),S(:),Xi(:),Yi(:),Zi(:),XPi(:),YPi(:),ZPi(:),Xf(:),Yf(:),Zf(:),XPf(:),YPf(:),ZPf(:),k0(:),k1(:),tilt(:),E1(:),E2(:),aper_x(:),aper_y(:),'VariableNames',...
         {'Model ID'; 'Model Name'; 'Section Name'; 'PPS Zone'; 'RACK Zone'; 'Girder ID'; 'Class'; 'Engineering Type';'Path Length [m]';'E [GeV]';'S [m]';'X Coord (init) [m]';'Y Coord (init) [m]';'Z Coord (init) [m]';'X Angle (init) [rad]';'Y Angle (init) [rad]';'Z Angle (init) [rad]';'X Coord (fin) [m]';'Y Coord (fin) [m]';'Z Coord (fin) [m]';'X Angle (fin) [rad]';'Y Angle (fin) [rad]';'Z Angle (fin) [rad]';'k0';'k1';'Tilt [rad]';'E1';'E2';'X Aper [m]';'Y Aper [m]'}) ;
       writetable(T,filename,'Sheet','All');
@@ -2998,8 +3002,8 @@ classdef DeckTool < handle
         dim(ismember(id(sid),findcells(BEAMLINE,'Class','YCOR'))) = 'Y' ;
         dim(ismember(id(sid),findcells(BEAMLINE,'Class','XYCOR'))) = 'XY' ;
         tilt = rad2deg(arrayfun(@(x) BEAMLINE{x}.Tilt,id(sid))) ;
-        T_COR=table(id(sid)',names(sid)',sections(sid),pps(sid),racks(sid),girid(sid),types(sid),L(sid),P(sid)',S(sid)',dim(:),tilt(:),Xi(sid)',Yi(sid)',Zi(sid)',XPi(sid)',YPi(sid)',ZPi(sid)',Xf(sid)',Yf(sid)',Zf(sid)',XPf(sid)',YPf(sid)',ZPf(sid)','VariableNames',...
-          {'Model ID'; 'Model Name'; 'Section Name'; 'PPS Zone'; 'RACK Zone'; 'Girder ID'; 'Engineering Type';'Path Length [m]';'E [GeV]';'S [m]';'Dimension';'Tilt [deg]';'X Coord (init) [m]';'Y Coord (init) [m]';'Z Coord (init) [m]';'X Angle (init) [rad]';'Y Angle (init) [rad]';'Z Angle (init) [rad]';'X Coord (fin) [m]';'Y Coord (fin) [m]';'Z Coord (fin) [m]';'X Angle (fin) [rad]';'Y Angle (fin) [rad]';'Z Angle (fin) [rad]'}) ;
+        T_COR=table(id(sid)',names(sid)',sections(sid),pps(sid),racks(sid),girid(sid),psid(sid),types(sid),L(sid),P(sid)',S(sid)',dim(:),tilt(:),Xi(sid)',Yi(sid)',Zi(sid)',XPi(sid)',YPi(sid)',ZPi(sid)',Xf(sid)',Yf(sid)',Zf(sid)',XPf(sid)',YPf(sid)',ZPf(sid)','VariableNames',...
+          {'Model ID'; 'Model Name'; 'Section Name'; 'PPS Zone'; 'RACK Zone'; 'Girder ID'; 'PS ID'; 'Engineering Type';'Path Length [m]';'E [GeV]';'S [m]';'Dimension';'Tilt [deg]';'X Coord (init) [m]';'Y Coord (init) [m]';'Z Coord (init) [m]';'X Angle (init) [rad]';'Y Angle (init) [rad]';'Z Angle (init) [rad]';'X Coord (fin) [m]';'Y Coord (fin) [m]';'Z Coord (fin) [m]';'X Angle (fin) [rad]';'Y Angle (fin) [rad]';'Z Angle (fin) [rad]'}) ;
       end
       % - BPM Sheet
       sid = ismember(id,findcells(BEAMLINE,'Class','MONI')) ;
@@ -3043,112 +3047,41 @@ classdef DeckTool < handle
         T_MARK=table(id(sid)',names(sid)',sections(sid),pps(sid),racks(sid),girid(sid),types(sid),L(sid),P(sid)',S(sid)',Xi(sid)',Yi(sid)',Zi(sid)',XPi(sid)',YPi(sid)',ZPi(sid)',Xf(sid)',Yf(sid)',Zf(sid)',XPf(sid)',YPf(sid)',ZPf(sid)','VariableNames',...
           {'Model ID'; 'Model Name'; 'Section Name'; 'PPS Zone'; 'RACK Zone'; 'Girer ID';'Engineering Type';'Path Length [m]';'E [GeV]';'S [m]';'X Coord (init) [m]';'Y Coord (init) [m]';'Z Coord (init) [m]';'X Angle (init) [rad]';'Y Angle (init) [rad]';'Z Angle (init) [rad]';'X Coord (fin) [m]';'Y Coord (fin) [m]';'Z Coord (fin) [m]';'X Angle (fin) [rad]';'Y Angle (fin) [rad]';'Z Angle (fin) [rad]'}) ;
       end
-      % -- Unsplit magnets for other Sheets
-      obj.unsplitMags();
-      id = 1:length(BEAMLINE) ;
-      nod = ~ismember(id,findcells(BEAMLINE,'Class','DRIF'));
-      id = id(nod) ;
-      names = regexprep(arrayfun(@(x) BEAMLINE{x}.Name,id,'UniformOutput',false),'(_\d+)\D$','$1') ;
-      for iname=find(cellfun(@(x) x(end)=='_',names))
-        names{iname}=names{iname}(1:end-1);
-      end
-      itid = findcells(BEAMLINE,'Type') ; tid=ismember(id,itid) ;
-      types = repmat("UNKNOWN",length(id),1) ;
-      types(tid) = arrayfun(@(x) string(BEAMLINE{x}.Type),id(tid));
-      L = zeros(length(id),1) ;
-      iLid = findcells(BEAMLINE,'L') ; Lid=ismember(id,iLid) ;
-      L(Lid) = arrayfun(@(x) BEAMLINE{x}.L,id(Lid));
-      P = arrayfun(@(x) BEAMLINE{x}.P,id);
-      S = arrayfun(@(x) BEAMLINE{x}.S,id);
-      Xi = arrayfun(@(x) BEAMLINE{x}.Coordi(1),id);
-      Yi = arrayfun(@(x) BEAMLINE{x}.Coordi(2),id);
-      Zi = arrayfun(@(x) BEAMLINE{x}.Coordi(3),id);
-      Xf = arrayfun(@(x) BEAMLINE{x}.Coordf(1),id);
-      Yf = arrayfun(@(x) BEAMLINE{x}.Coordf(2),id);
-      Zf = arrayfun(@(x) BEAMLINE{x}.Coordf(3),id);
-      XPi = arrayfun(@(x) BEAMLINE{x}.Anglei(1),id);
-      YPi = arrayfun(@(x) BEAMLINE{x}.Anglei(2),id);
-      ZPi = arrayfun(@(x) BEAMLINE{x}.Anglei(3),id);
-      XPf = arrayfun(@(x) BEAMLINE{x}.Anglef(1),id);
-      YPf = arrayfun(@(x) BEAMLINE{x}.Anglef(2),id);
-      ZPf = arrayfun(@(x) BEAMLINE{x}.Anglef(3),id);
-      regions=repmat("NONE",length(id),1);
-      for iele=1:length(id)
-        if isfield(BEAMLINE{id(iele)},'Section') && ~isempty(BEAMLINE{id(iele)}.Section) && BEAMLINE{id(iele)}.Section
-          regions(iele)=SECTION(BEAMLINE{id(iele)}.Section).Name;
-        end
-      end
-      regions_pps=repmat("NONE",length(id),1);
-      for iele=1:length(id)
-        if isfield(BEAMLINE{id(iele)},'PPS') && ~isempty(BEAMLINE{id(iele)}.PPS) && BEAMLINE{id(iele)}.PPS
-          regions_pps(iele)=PPS(BEAMLINE{id(iele)}.PPS).Name;
-        end
-      end
-      regions_rack=repmat("NONE",length(id),1);
-      for iele=1:length(id)
-        if isfield(BEAMLINE{id(iele)},'RACK') && ~isempty(BEAMLINE{id(iele)}.RACK) && BEAMLINE{id(iele)}.RACK
-          regions_rack(iele)=RACK(BEAMLINE{id(iele)}.RACK).Name;
-        end
+      % -- Following sheets are for "Unsplit" devices
+      ids1 = ( arrayfun(@(x) isfield(BEAMLINE{x},'Slices') && x==BEAMLINE{x}.Slices(1),id) ) | arrayfun(@(x) ~isfield(BEAMLINE{x},'Slices'),id) ;
+      for iele=id(ids1)
+        if ~isfield(BEAMLINE{iele},'Slices'); BEAMLINE{iele}.Slices=iele; end
       end
       % - LCAV Sheet
-      sid = ismember(id,findcells(BEAMLINE,'Class','LCAV')) ;
+      sid = ismember(id,findcells(BEAMLINE,'Class','LCAV')) & ids1 ;
       if any(sid)
-        id_this = id(sid) ;
-        names_this = names(sid) ;
-        regions_this = regions(sid) ;
-        regions_thispps = regions_pps(sid) ;
-        regions_thisrack = regions_rack(sid) ;
-        types_this = types(sid) ;
-        P_this = P(sid) ;
-        S_this = S(sid) ;
-        girid_this = girid(sid) ;
-        freq = arrayfun(@(x) BEAMLINE{x}.Freq,id_this) ;
-        volt = arrayfun(@(x) BEAMLINE{x}.Volt,id_this) ;
-        phase = arrayfun(@(x) BEAMLINE{x}.Phase,id_this) ;
-        egain = arrayfun(@(x) BEAMLINE{x}.Egain, id_this) ;
-        kloss = arrayfun(@(x) BEAMLINE{x}.Kloss,id_this) ;
-        L_this = arrayfun(@(x) BEAMLINE{x}.L,id_this) ;
-        Xi_this = Xi(sid) ;
-        Yi_this = Yi(sid) ;
-        Zi_this = Zi(sid) ;
-        XPi_this = XPi(sid) ;
-        YPi_this = YPi(sid) ;
-        ZPi_this = ZPi(sid) ;
-        Xf_this = Xf(sid) ;
-        Yf_this = Yf(sid) ;
-        Zf_this = Zf(sid) ;
-        XPf_this = XPf(sid) ;
-        YPf_this = YPf(sid) ;
-        ZPf_this = ZPf(sid) ;
-        isel=true(length(id_this),1);
-        for istruc=1:length(id_this)
-          ele = id_this(istruc) ;
-          if isfield(BEAMLINE{ele},'Slices')
-            if BEAMLINE{ele}.Slices(end) ~= ele
-              isel(istruc)=false;
-              volt(istruc+1) = volt(istruc+1) + volt(istruc) ;
-              egain(istruc+1) = egain(istruc+1) + egain(istruc) ;
-              kloss(istruc+1) = kloss(istruc+1) + kloss(istruc) ;
-              L_this(istruc+1) = L_this(istruc+1) + L_this(istruc) ;
-            end
-          end
-        end
-        T=table(id_this(isel)',names_this(isel)',regions_this(isel),regions_thispps(isel),regions_thisrack(isel),girid_this(isel),types_this(isel),L_this(isel)',P_this(isel)',S_this(isel)',freq(isel)',volt(isel)',phase(isel)',egain(isel)',kloss(isel)',Xi_this(isel)',Yi_this(isel)',Zi_this(isel)',XPi_this(isel)',YPi_this(isel)',ZPi_this(isel)',Xf_this(isel)',Yf_this(isel)',Zf_this(isel)',XPf_this(isel)',YPf_this(isel)',ZPf_this(isel)','VariableNames',...
+        x2 = arrayfun(@(x) BEAMLINE{BEAMLINE{x}.Slices(end)}.Coordf(1),id(sid)) ; y2 = arrayfun(@(x) BEAMLINE{BEAMLINE{x}.Slices(end)}.Coordf(2),id(sid)) ; z2 = arrayfun(@(x) BEAMLINE{BEAMLINE{x}.Slices(end)}.Coordf(3),id(sid)) ;
+        xp2 = arrayfun(@(x) BEAMLINE{BEAMLINE{x}.Slices(end)}.Anglef(1),id(sid)) ; yp2 = arrayfun(@(x) BEAMLINE{BEAMLINE{x}.Slices(end)}.Anglef(2),id(sid)) ; zp2 = arrayfun(@(x) BEAMLINE{BEAMLINE{x}.Slices(end)}.Anglef(3),id(sid)) ;
+        freq = arrayfun(@(x) BEAMLINE{x}.Freq,id(sid)) ;
+        volt = arrayfun(@(x) sum(arrayfun(@(xx) BEAMLINE{xx}.Volt,BEAMLINE{x}.Slices)),id(sid)) ;
+        phase = arrayfun(@(x) BEAMLINE{x}.Phase,id(sid)) ;
+        egain = arrayfun(@(x) sum(arrayfun(@(xx) BEAMLINE{xx}.Egain,BEAMLINE{x}.Slices)), id(sid)) ;
+        kloss = arrayfun(@(x) BEAMLINE{x}.Kloss,id(sid)) ;
+        L_this = arrayfun(@(x) sum(arrayfun(@(xx) BEAMLINE{xx}.L,BEAMLINE{x}.Slices)),id(sid)) ;
+        T=table(id(sid)',names(sid)',sections(sid),pps(sid),racks(sid),girid(sid),types(sid),L_this(:),P(sid)',S(sid)',freq(:),volt(:),phase(:),egain(:),kloss(:),Xi(sid)',Yi(sid)',Zi(sid)',XPi(sid)',YPi(sid)',ZPi(sid)',x2(:),y2(:),z2(:),xp2(:),yp2(:),zp2(:),'VariableNames',...
           {'Model ID'; 'Model Name'; 'Section Name'; 'PPS Zone'; 'RACK Zone'; 'Girder ID';'Engineering Type';'Path Length [m]';'E [GeV]';'S [m]';'Freq [MHz]';'Voltage [MV]';'Phase [deg]';'EGAIN [MV]';'Kloss [V/C/m]';'X Coord (init) [m]';'Y Coord (init) [m]';'Z Coord (init) [m]';'X Angle (init) [rad]';'Y Angle (init) [rad]';'Z Angle (init) [rad]';'X Coord (fin) [m]';'Y Coord (fin) [m]';'Z Coord (fin) [m]';'X Angle (fin) [rad]';'Y Angle (fin) [rad]';'Z Angle (fin) [rad]'}) ;
         writetable(T,filename,'Sheet','LCAV');
       end
       % - SBEN Sheet
-      sid=ismember(id,findcells(BEAMLINE,'Class','SBEN')) ;
+      sid=ismember(id,findcells(BEAMLINE,'Class','SBEN')) & ids1 ;
       if any(sid)
-        Zlen = arrayfun(@(x) BEAMLINE{x}.Coordf(3),id(sid)) - arrayfun(@(x) BEAMLINE{x}.Coordi(3),id(sid)) ;
+        Zlen = arrayfun(@(x) BEAMLINE{BEAMLINE{x}.Slices(end)}.Coordf(3),id(sid)) - arrayfun(@(x) BEAMLINE{BEAMLINE{x}.Slices(1)}.Coordi(3),id(sid)) ;
+        x2 = arrayfun(@(x) BEAMLINE{BEAMLINE{x}.Slices(end)}.Coordf(1),id(sid)) ; y2 = arrayfun(@(x) BEAMLINE{BEAMLINE{x}.Slices(end)}.Coordf(2),id(sid)) ; z2 = arrayfun(@(x) BEAMLINE{BEAMLINE{x}.Slices(end)}.Coordf(3),id(sid)) ;
+        xp2 = arrayfun(@(x) BEAMLINE{BEAMLINE{x}.Slices(end)}.Anglef(1),id(sid)) ; yp2 = arrayfun(@(x) BEAMLINE{BEAMLINE{x}.Slices(end)}.Anglef(2),id(sid)) ; zp2 = arrayfun(@(x) BEAMLINE{BEAMLINE{x}.Slices(end)}.Anglef(3),id(sid)) ;
         gap = arrayfun(@(x) max(BEAMLINE{x}.HGAP),id(sid)) ;
         fint = arrayfun(@(x) max(BEAMLINE{x}.FINT),id(sid)) ;
         tilt = rad2deg(arrayfun(@(x) BEAMLINE{x}.Tilt,id(sid))) ;
-        ang = rad2deg(arrayfun(@(x) BEAMLINE{x}.Angle,id(sid))) ;
-        e1 = arrayfun(@(x) BEAMLINE{x}.EdgeCurvature(1),id(sid)) ;
-        e2 = arrayfun(@(x) BEAMLINE{x}.EdgeCurvature(2),id(sid)) ;
-        BL = arrayfun(@(x) BEAMLINE{x}.B(1),id(sid)) ;
-        B = arrayfun(@(x) BEAMLINE{x}.B(1)/BEAMLINE{x}.L,id(sid)) ;
+        ang = rad2deg(arrayfun(@(x) sum(arrayfun(@(xx) BEAMLINE{xx}.Angle,BEAMLINE{x}.Slices)),id(sid))) ;
+        e1 = arrayfun(@(x) BEAMLINE{BEAMLINE{x}.Slices(1)}.EdgeCurvature(1),id(sid)) ;
+        e2 = arrayfun(@(x) BEAMLINE{BEAMLINE{x}.Slices(end)}.EdgeCurvature(2),id(sid)) ;
+        BL = arrayfun(@(x) sum(arrayfun(@(xx) BEAMLINE{xx}.B(1),BEAMLINE{x}.Slices)),id(sid)) ;
+        B = arrayfun(@(x) sum(arrayfun(@(xx) BEAMLINE{xx}.B(1)/BEAMLINE{xx}.L,BEAMLINE{x}.Slices)),id(sid)) ;
+        L_this = arrayfun(@(x) sum(arrayfun(@(xx) BEAMLINE{xx}.L,BEAMLINE{x}.Slices)),id(sid)) ;
         n=0; K1=zeros(1,sum(sid)); g=K1; gl=K1;
         for iele=id(sid)
           n=n+1;
@@ -3158,50 +3091,59 @@ classdef DeckTool < handle
             gl(n) = 0 ;
           else
             Brho=physConsts.clight./(BEAMLINE{iele}.P*1e9);
-            K1(n) = Brho * ( BEAMLINE{iele}.B(2) / BEAMLINE{iele}.L ) ;
-            gl(n) = BEAMLINE{iele}.B(2) ;
-            g(n) = gl(n) / BEAMLINE{iele}.L ;
+            K1(n) = Brho * ( sum(arrayfun(@(x) BEAMLINE{x}.B(2) / BEAMLINE{x}.L,BEAMLINE{iele}.Slices)) ) ;
+            gl(n) = sum(arrayfun(@(x) BEAMLINE{x}.B(2),BEAMLINE{iele}.Slices)) ;
+            g(n) = gl(n) / sum(arrayfun(@(x) BEAMLINE{x}.L,BEAMLINE{iele}.Slices)) ;
           end
         end
-        T=table(id(sid)',names(sid)',regions(sid),regions_pps(sid),regions_rack(sid),girid(sid),types(sid),L(sid),P(sid)',S(sid)',Zlen(:),gap(:),fint(:),tilt(:),ang(:),e1(:),e2(:),BL(:),B(:),K1(:),gl(:),g(:),Xi(sid)',Yi(sid)',Zi(sid)',XPi(sid)',YPi(sid)',ZPi(sid)',Xf(sid)',Yf(sid)',Zf(sid)',XPf(sid)',YPf(sid)',ZPf(sid)','VariableNames',...
-          {'Model ID'; 'Model Name'; 'Section Name'; 'PPS Zone'; 'RACK Zone'; 'Girder ID';'Engineering Type';'Path Length [m]';'E [GeV]';'S [m]';'Z Length [m]';'Gap [m]';'Field Integral';'Tilt [deg]';'Bend Angle [deg]';'E1 [deg]';'E2 [deg]';'BL [T.m]';'B [T]';'K1 [1/m^2]';'GL [T]';'G [T/m]';'X Coord (init) [m]';'Y Coord (init) [m]';'Z Coord (init) [m]';'X Angle (init) [rad]';'Y Angle (init) [rad]';'Z Angle (init) [rad]';'X Coord (fin) [m]';'Y Coord (fin) [m]';'Z Coord (fin) [m]';'X Angle (fin) [rad]';'Y Angle (fin) [rad]';'Z Angle (fin) [rad]'}) ;
+        T=table(id(sid)',names(sid)',sections(sid),pps(sid),racks(sid),girid(sid),psid(sid),types(sid),L_this(:),P(sid)',S(sid)',Zlen(:),gap(:),fint(:),tilt(:),ang(:),e1(:),e2(:),BL(:),B(:),K1(:),gl(:),g(:),Xi(sid)',Yi(sid)',Zi(sid)',XPi(sid)',YPi(sid)',ZPi(sid)',x2(:),y2(:),z2(:),xp2(:),yp2(:),zp2(:),'VariableNames',...
+          {'Model ID'; 'Model Name'; 'Section Name'; 'PPS Zone'; 'RACK Zone'; 'Girder ID'; 'PS ID'; 'Engineering Type';'Path Length [m]';'E [GeV]';'S [m]';'Z Length [m]';'Gap [m]';'Field Integral';'Tilt [deg]';'Bend Angle [deg]';'E1 [deg]';'E2 [deg]';'BL [T.m]';'B [T]';'K1 [1/m^2]';'GL [T]';'G [T/m]';'X Coord (init) [m]';'Y Coord (init) [m]';'Z Coord (init) [m]';'X Angle (init) [rad]';'Y Angle (init) [rad]';'Z Angle (init) [rad]';'X Coord (fin) [m]';'Y Coord (fin) [m]';'Z Coord (fin) [m]';'X Angle (fin) [rad]';'Y Angle (fin) [rad]';'Z Angle (fin) [rad]'}) ;
         writetable(T,filename,'Sheet','SBEN');
       end
       % - QUAD Sheet
-      sid = ismember(id,findcells(BEAMLINE,'Class','QUAD')) ;
+      sid = ismember(id,findcells(BEAMLINE,'Class','QUAD')) & ids1 ;
       if any(sid)
+        L_this = arrayfun(@(x) sum(arrayfun(@(xx) BEAMLINE{xx}.L,BEAMLINE{x}.Slices)),id(sid)) ;
+        x2 = arrayfun(@(x) BEAMLINE{BEAMLINE{x}.Slices(end)}.Coordf(1),id(sid)) ; y2 = arrayfun(@(x) BEAMLINE{BEAMLINE{x}.Slices(end)}.Coordf(2),id(sid)) ; z2 = arrayfun(@(x) BEAMLINE{BEAMLINE{x}.Slices(end)}.Coordf(3),id(sid)) ;
+        xp2 = arrayfun(@(x) BEAMLINE{BEAMLINE{x}.Slices(end)}.Anglef(1),id(sid)) ; yp2 = arrayfun(@(x) BEAMLINE{BEAMLINE{x}.Slices(end)}.Anglef(2),id(sid)) ; zp2 = arrayfun(@(x) BEAMLINE{BEAMLINE{x}.Slices(end)}.Anglef(3),id(sid)) ;
         bore = arrayfun(@(x) max(BEAMLINE{x}.aper),id(sid)) + boreoffset ;
         tilt = rad2deg(arrayfun(@(x) BEAMLINE{x}.Tilt,id(sid))) ;
         Brho = physConsts.clight./(arrayfun(@(x) BEAMLINE{x}.P,id(sid)).*1e9);
-        g = arrayfun(@(x) BEAMLINE{x}.B/BEAMLINE{x}.L,id(sid)) ;
-        gl = arrayfun(@(x) BEAMLINE{x}.B,id(sid)) ;
+        g = arrayfun(@(x) sum(arrayfun(@(xx) BEAMLINE{xx}.B/BEAMLINE{xx}.L,BEAMLINE{x}.Slices)),id(sid)) ;
+        gl = arrayfun(@(x) sum(arrayfun(@(xx) BEAMLINE{xx}.B,BEAMLINE{x}.Slices)),id(sid)) ;
         K1 = Brho .* gl ;
-        T=table(id(sid)',names(sid)',regions(sid),regions_pps(sid),regions_rack(sid),girid(sid),types(sid),L(sid),P(sid)',S(sid)',bore(:),tilt(:),K1(:),gl(:),g(:),Xi(sid)',Yi(sid)',Zi(sid)',XPi(sid)',YPi(sid)',ZPi(sid)',Xf(sid)',Yf(sid)',Zf(sid)',XPf(sid)',YPf(sid)',ZPf(sid)','VariableNames',...
-          {'Model ID'; 'Model Name'; 'Section Name'; 'PPS Zone'; 'RACK Zone'; 'Girder ID';'Engineering Type';'Path Length [m]';'E [GeV]';'S [m]';'Bore [m]';'Tilt [deg]';'K1 [1/m^2]';'GL [T]';'G [T/m]';'X Coord (init) [m]';'Y Coord (init) [m]';'Z Coord (init) [m]';'X Angle (init) [rad]';'Y Angle (init) [rad]';'Z Angle (init) [rad]';'X Coord (fin) [m]';'Y Coord (fin) [m]';'Z Coord (fin) [m]';'X Angle (fin) [rad]';'Y Angle (fin) [rad]';'Z Angle (fin) [rad]'}) ;
+        T=table(id(sid)',names(sid)',sections(sid),pps(sid),racks(sid),girid(sid),psid(sid),types(sid),L_this(:),P(sid)',S(sid)',bore(:),tilt(:),K1(:),gl(:),g(:),Xi(sid)',Yi(sid)',Zi(sid)',XPi(sid)',YPi(sid)',ZPi(sid)',x2(:),y2(:),z2(:),xp2(:),yp2(:),zp2(:),'VariableNames',...
+          {'Model ID'; 'Model Name'; 'Section Name'; 'PPS Zone'; 'RACK Zone'; 'Girder ID'; 'PS ID'; 'Engineering Type';'Path Length [m]';'E [GeV]';'S [m]';'Bore [m]';'Tilt [deg]';'K1 [1/m^2]';'GL [T]';'G [T/m]';'X Coord (init) [m]';'Y Coord (init) [m]';'Z Coord (init) [m]';'X Angle (init) [rad]';'Y Angle (init) [rad]';'Z Angle (init) [rad]';'X Coord (fin) [m]';'Y Coord (fin) [m]';'Z Coord (fin) [m]';'X Angle (fin) [rad]';'Y Angle (fin) [rad]';'Z Angle (fin) [rad]'}) ;
         writetable(T,filename,'Sheet','QUAD');
       end
       % - SEXT Sheet
-      sid = ismember(id,findcells(BEAMLINE,'Class','SEXT')) ;
+      sid = ismember(id,findcells(BEAMLINE,'Class','SEXT')) & ids1 ;
       if any(sid)
+        L_this = arrayfun(@(x) sum(arrayfun(@(xx) BEAMLINE{xx}.L,BEAMLINE{x}.Slices)),id(sid)) ;
+        x2 = arrayfun(@(x) BEAMLINE{BEAMLINE{x}.Slices(end)}.Coordf(1),id(sid)) ; y2 = arrayfun(@(x) BEAMLINE{BEAMLINE{x}.Slices(end)}.Coordf(2),id(sid)) ; z2 = arrayfun(@(x) BEAMLINE{BEAMLINE{x}.Slices(end)}.Coordf(3),id(sid)) ;
+        xp2 = arrayfun(@(x) BEAMLINE{BEAMLINE{x}.Slices(end)}.Anglef(1),id(sid)) ; yp2 = arrayfun(@(x) BEAMLINE{BEAMLINE{x}.Slices(end)}.Anglef(2),id(sid)) ; zp2 = arrayfun(@(x) BEAMLINE{BEAMLINE{x}.Slices(end)}.Anglef(3),id(sid)) ;
         bore = arrayfun(@(x) max(BEAMLINE{x}.aper),id(sid)) + boreoffset ;
         tilt = rad2deg(arrayfun(@(x) BEAMLINE{x}.Tilt,id(sid))) ;
-        g = arrayfun(@(x) BEAMLINE{x}.B/BEAMLINE{x}.L,id(sid)) ;
-        gl = arrayfun(@(x) BEAMLINE{x}.B,id(sid)) ;
         Brho = physConsts.clight./(arrayfun(@(x) BEAMLINE{x}.P,id(sid)).*1e9);
+        g = arrayfun(@(x) sum(arrayfun(@(xx) BEAMLINE{xx}.B/BEAMLINE{xx}.L,BEAMLINE{x}.Slices)),id(sid)) ;
+        gl = arrayfun(@(x) sum(arrayfun(@(xx) BEAMLINE{xx}.B,BEAMLINE{x}.Slices)),id(sid)) ;
         K2 = 0.5 .* Brho .* gl ;
-        T=table(id(sid)',names(sid)',regions(sid),regions_pps(sid),regions_rack(sid),girid(sid),types(sid),L(sid),P(sid)',S(sid)',bore(:),tilt(:),K2(:),gl(:),g(:),Xi(sid)',Yi(sid)',Zi(sid)',XPi(sid)',YPi(sid)',ZPi(sid)',Xf(sid)',Yf(sid)',Zf(sid)',XPf(sid)',YPf(sid)',ZPf(sid)','VariableNames',...
-          {'Model ID'; 'Model Name'; 'Section Name'; 'PPS Zone'; 'RACK Zone'; 'Girder ID';'Engineering Type';'Path Length [m]';'E [GeV]';'S [m]';'Bore [m]';'Tilt [deg]';'K2 [1/m^3]';'G''L [T/m]';'G'' [T/m^2]';'X Coord (init) [m]';'Y Coord (init) [m]';'Z Coord (init) [m]';'X Angle (init) [rad]';'Y Angle (init) [rad]';'Z Angle (init) [rad]';'X Coord (fin) [m]';'Y Coord (fin) [m]';'Z Coord (fin) [m]';'X Angle (fin) [rad]';'Y Angle (fin) [rad]';'Z Angle (fin) [rad]'}) ;
+        T=table(id(sid)',names(sid)',sections(sid),pps(sid),racks(sid),girid(sid),psid(sid),types(sid),L_this(:),P(sid)',S(sid)',bore(:),tilt(:),K2(:),gl(:),g(:),Xi(sid)',Yi(sid)',Zi(sid)',XPi(sid)',YPi(sid)',ZPi(sid)',x2(:),y2(:),z2(:),xp2(:),yp2(:),zp2(:),'VariableNames',...
+          {'Model ID'; 'Model Name'; 'Section Name'; 'PPS Zone'; 'RACK Zone'; 'Girder ID';'PS ID';'Engineering Type';'Path Length [m]';'E [GeV]';'S [m]';'Bore [m]';'Tilt [deg]';'K2 [1/m^3]';'G''L [T/m]';'G'' [T/m^2]';'X Coord (init) [m]';'Y Coord (init) [m]';'Z Coord (init) [m]';'X Angle (init) [rad]';'Y Angle (init) [rad]';'Z Angle (init) [rad]';'X Coord (fin) [m]';'Y Coord (fin) [m]';'Z Coord (fin) [m]';'X Angle (fin) [rad]';'Y Angle (fin) [rad]';'Z Angle (fin) [rad]'}) ;
         writetable(T,filename,'Sheet','SEXT');
       end
       % - SOLENOID Sheet
-      sid = ismember(id,findcells(BEAMLINE,'Class','SOLENOID')) ;
+      sid = ismember(id,findcells(BEAMLINE,'Class','SOLENOID')) & ids1 ;
       if any(sid)
-        g = arrayfun(@(x) BEAMLINE{x}.B/BEAMLINE{x}.L,id(sid)) ;
-        gl = arrayfun(@(x) BEAMLINE{x}.B,id(sid)) ;
+        L_this = arrayfun(@(x) sum(arrayfun(@(xx) BEAMLINE{xx}.L,BEAMLINE{x}.Slices)),id(sid)) ;
+        x2 = arrayfun(@(x) BEAMLINE{BEAMLINE{x}.Slices(end)}.Coordf(1),id(sid)) ; y2 = arrayfun(@(x) BEAMLINE{BEAMLINE{x}.Slices(end)}.Coordf(2),id(sid)) ; z2 = arrayfun(@(x) BEAMLINE{BEAMLINE{x}.Slices(end)}.Coordf(3),id(sid)) ;
+        xp2 = arrayfun(@(x) BEAMLINE{BEAMLINE{x}.Slices(end)}.Anglef(1),id(sid)) ; yp2 = arrayfun(@(x) BEAMLINE{BEAMLINE{x}.Slices(end)}.Anglef(2),id(sid)) ; zp2 = arrayfun(@(x) BEAMLINE{BEAMLINE{x}.Slices(end)}.Anglef(3),id(sid)) ;
+        g = arrayfun(@(x) sum(arrayfun(@(xx) BEAMLINE{xx}.B/BEAMLINE{xx}.L,BEAMLINE{x}.Slices)),id(sid)) ;
+        gl = arrayfun(@(x) sum(arrayfun(@(xx) BEAMLINE{xx}.B,BEAMLINE{x}.Slices)),id(sid)) ;
         Brho = physConsts.clight./(arrayfun(@(x) BEAMLINE{x}.P,id(sid)).*1e9);
         KS = 0.5 .* Brho .* gl ;
-        T=table(id(sid)',names(sid)',regions(sid),regions_pps(sid),regions_rack(sid),girid(sid),types(sid),L(sid),P(sid)',S(sid)',KS(:),gl(:),g(:),Xi(sid)',Yi(sid)',Zi(sid)',XPi(sid)',YPi(sid)',ZPi(sid)',Xf(sid)',Yf(sid)',Zf(sid)',XPf(sid)',YPf(sid)',ZPf(sid)','VariableNames',...
-          {'Model ID'; 'Model Name'; 'Section Name'; 'PPS Zone'; 'RACK Zone'; 'Girder ID';'Engineering Type';'Path Length [m]';'E [GeV]';'S [m]';'KS [1/m]';'BL [T/m]';'B'' [T]';'X Coord (init) [m]';'Y Coord (init) [m]';'Z Coord (init) [m]';'X Angle (init) [rad]';'Y Angle (init) [rad]';'Z Angle (init) [rad]';'X Coord (fin) [m]';'Y Coord (fin) [m]';'Z Coord (fin) [m]';'X Angle (fin) [rad]';'Y Angle (fin) [rad]';'Z Angle (fin) [rad]'}) ;
+        T=table(id(sid)',names(sid)',sections(sid),pps(sid),racks(sid),girid(sid),psid(sid),types(sid),L_this(:),P(sid)',S(sid)',KS(:),gl(:),g(:),Xi(sid)',Yi(sid)',Zi(sid)',XPi(sid)',YPi(sid)',ZPi(sid)',x2(:),y2(:),z2(:),xp2(:),yp2(:),zp2(:),'VariableNames',...
+          {'Model ID'; 'Model Name'; 'Section Name'; 'PPS Zone'; 'RACK Zone'; 'Girder ID';'PS ID';'Engineering Type';'Path Length [m]';'E [GeV]';'S [m]';'KS [1/m]';'BL [T/m]';'B'' [T]';'X Coord (init) [m]';'Y Coord (init) [m]';'Z Coord (init) [m]';'X Angle (init) [rad]';'Y Angle (init) [rad]';'Z Angle (init) [rad]';'X Coord (fin) [m]';'Y Coord (fin) [m]';'Z Coord (fin) [m]';'X Angle (fin) [rad]';'Y Angle (fin) [rad]';'Z Angle (fin) [rad]'}) ;
         writetable(T,filename,'Sheet','SOLENOID');
       end
       % - Type Sheet
