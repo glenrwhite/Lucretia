@@ -2929,7 +2929,8 @@ classdef DeckTool < handle
       aper_x = k0 ;
       aper_y = k0 ;
       girid = k0 ;
-      psid = k0 ;
+      psid = cell(1,length(k0)) ;
+      klyid = k0 ;
       isB = arrayfun(@(x) string(BEAMLINE{x}.Class)=="SBEN",id) ;
       k0(isB) = arrayfun(@(x) BEAMLINE{x}.B(1),id(isB)) ./ arrayfun(@(x) BEAMLINE{x}.L,id(isB)) ./ arrayfun(@(x) BEAMLINE{x}.P,id(isB)) ./ 3.335640952 ;
       isB = isB(arrayfun(@(x) length(BEAMLINE{x}.B)>1,id(isB))) ;
@@ -2951,7 +2952,9 @@ classdef DeckTool < handle
       sel = arrayfun(@(x) isfield(BEAMLINE{x},'Girder'),id ) ;
       girid(sel) = arrayfun(@(x) BEAMLINE{x}.Girder,id(sel)) ;
       sel = arrayfun(@(x) isfield(BEAMLINE{x},'PS'),id ) ;
-      psid(sel) = arrayfun(@(x) BEAMLINE{x}.PS(1),id(sel)) ;
+      psid(sel) = arrayfun(@(x) BEAMLINE{x}.PS,id(sel),'UniformOutput',false) ;
+      sel = arrayfun(@(x) isfield(BEAMLINE{x},'Klystron'),id ) & arrayfun(@(x) strcmp(BEAMLINE{x}.Class,'LCAV'),id ) ;
+      klyid(sel) = arrayfun(@(x) BEAMLINE{x}.Klystron,id(sel)) ;
       sections=string([]);
       for iele=id
         if ~isfield(BEAMLINE{iele},'Section') || isempty(BEAMLINE{iele}.Section) || ~BEAMLINE{iele}.Section
@@ -2981,6 +2984,7 @@ classdef DeckTool < handle
       racks=racks';
       girid=girid';
       psid=psid';
+      klyid=klyid';
       T=table(id(:),names(:),sections(:),pps(:),racks(:), girid(:), classes(:), types(:),L(:),P(:),S(:),Xi(:),Yi(:),Zi(:),XPi(:),YPi(:),ZPi(:),Xf(:),Yf(:),Zf(:),XPf(:),YPf(:),ZPf(:),k0(:),k1(:),tilt(:),E1(:),E2(:),aper_x(:),aper_y(:),'VariableNames',...
         {'Model ID'; 'Model Name'; 'Section Name'; 'PPS Zone'; 'RACK Zone'; 'Girder ID'; 'Class'; 'Engineering Type';'Path Length [m]';'E [GeV]';'S [m]';'X Coord (init) [m]';'Y Coord (init) [m]';'Z Coord (init) [m]';'X Angle (init) [rad]';'Y Angle (init) [rad]';'Z Angle (init) [rad]';'X Coord (fin) [m]';'Y Coord (fin) [m]';'Z Coord (fin) [m]';'X Angle (fin) [rad]';'Y Angle (fin) [rad]';'Z Angle (fin) [rad]';'k0';'k1';'Tilt [rad]';'E1';'E2';'X Aper [m]';'Y Aper [m]'}) ;
       writetable(T,filename,'Sheet','All');
@@ -3063,8 +3067,8 @@ classdef DeckTool < handle
         egain = arrayfun(@(x) sum(arrayfun(@(xx) BEAMLINE{xx}.Egain,BEAMLINE{x}.Slices)), id(sid)) ;
         kloss = arrayfun(@(x) BEAMLINE{x}.Kloss,id(sid)) ;
         L_this = arrayfun(@(x) sum(arrayfun(@(xx) BEAMLINE{xx}.L,BEAMLINE{x}.Slices)),id(sid)) ;
-        T=table(id(sid)',names(sid)',sections(sid),pps(sid),racks(sid),girid(sid),types(sid),L_this(:),P(sid)',S(sid)',freq(:),volt(:),phase(:),egain(:),kloss(:),Xi(sid)',Yi(sid)',Zi(sid)',XPi(sid)',YPi(sid)',ZPi(sid)',x2(:),y2(:),z2(:),xp2(:),yp2(:),zp2(:),'VariableNames',...
-          {'Model ID'; 'Model Name'; 'Section Name'; 'PPS Zone'; 'RACK Zone'; 'Girder ID';'Engineering Type';'Path Length [m]';'E [GeV]';'S [m]';'Freq [MHz]';'Voltage [MV]';'Phase [deg]';'EGAIN [MV]';'Kloss [V/C/m]';'X Coord (init) [m]';'Y Coord (init) [m]';'Z Coord (init) [m]';'X Angle (init) [rad]';'Y Angle (init) [rad]';'Z Angle (init) [rad]';'X Coord (fin) [m]';'Y Coord (fin) [m]';'Z Coord (fin) [m]';'X Angle (fin) [rad]';'Y Angle (fin) [rad]';'Z Angle (fin) [rad]'}) ;
+        T=table(id(sid)',names(sid)',sections(sid),pps(sid),racks(sid),girid(sid),klyid(sid),types(sid),L_this(:),P(sid)',S(sid)',freq(:),volt(:),phase(:),egain(:),kloss(:),Xi(sid)',Yi(sid)',Zi(sid)',XPi(sid)',YPi(sid)',ZPi(sid)',x2(:),y2(:),z2(:),xp2(:),yp2(:),zp2(:),'VariableNames',...
+          {'Model ID'; 'Model Name'; 'Section Name'; 'PPS Zone'; 'RACK Zone'; 'Girder ID';'Klystron ID'; 'Engineering Type';'Path Length [m]';'E [GeV]';'S [m]';'Freq [MHz]';'Voltage [MV]';'Phase [deg]';'EGAIN [MV]';'Kloss [V/C/m]';'X Coord (init) [m]';'Y Coord (init) [m]';'Z Coord (init) [m]';'X Angle (init) [rad]';'Y Angle (init) [rad]';'Z Angle (init) [rad]';'X Coord (fin) [m]';'Y Coord (fin) [m]';'Z Coord (fin) [m]';'X Angle (fin) [rad]';'Y Angle (fin) [rad]';'Z Angle (fin) [rad]'}) ;
         writetable(T,filename,'Sheet','LCAV');
       end
       % - SBEN Sheet
@@ -3082,6 +3086,7 @@ classdef DeckTool < handle
         BL = arrayfun(@(x) sum(arrayfun(@(xx) BEAMLINE{xx}.B(1),BEAMLINE{x}.Slices)),id(sid)) ;
         B = arrayfun(@(x) sum(arrayfun(@(xx) BEAMLINE{xx}.B(1)/BEAMLINE{xx}.L,BEAMLINE{x}.Slices)),id(sid)) ;
         L_this = arrayfun(@(x) sum(arrayfun(@(xx) BEAMLINE{xx}.L,BEAMLINE{x}.Slices)),id(sid)) ;
+        names_this = names(sid) ; names_this = regexprep(names_this,'(A|B)$','') ;
         n=0; K1=zeros(1,sum(sid)); g=K1; gl=K1;
         for iele=id(sid)
           n=n+1;
@@ -3096,7 +3101,7 @@ classdef DeckTool < handle
             g(n) = gl(n) / sum(arrayfun(@(x) BEAMLINE{x}.L,BEAMLINE{iele}.Slices)) ;
           end
         end
-        T=table(id(sid)',names(sid)',sections(sid),pps(sid),racks(sid),girid(sid),psid(sid),types(sid),L_this(:),P(sid)',S(sid)',Zlen(:),gap(:),fint(:),tilt(:),ang(:),e1(:),e2(:),BL(:),B(:),K1(:),gl(:),g(:),Xi(sid)',Yi(sid)',Zi(sid)',XPi(sid)',YPi(sid)',ZPi(sid)',x2(:),y2(:),z2(:),xp2(:),yp2(:),zp2(:),'VariableNames',...
+        T=table(id(sid)',names_this(:),sections(sid),pps(sid),racks(sid),girid(sid),psid(sid),types(sid),L_this(:),P(sid)',S(sid)',Zlen(:),gap(:),fint(:),tilt(:),ang(:),e1(:),e2(:),BL(:),B(:),K1(:),gl(:),g(:),Xi(sid)',Yi(sid)',Zi(sid)',XPi(sid)',YPi(sid)',ZPi(sid)',x2(:),y2(:),z2(:),xp2(:),yp2(:),zp2(:),'VariableNames',...
           {'Model ID'; 'Model Name'; 'Section Name'; 'PPS Zone'; 'RACK Zone'; 'Girder ID'; 'PS ID'; 'Engineering Type';'Path Length [m]';'E [GeV]';'S [m]';'Z Length [m]';'Gap [m]';'Field Integral';'Tilt [deg]';'Bend Angle [deg]';'E1 [deg]';'E2 [deg]';'BL [T.m]';'B [T]';'K1 [1/m^2]';'GL [T]';'G [T/m]';'X Coord (init) [m]';'Y Coord (init) [m]';'Z Coord (init) [m]';'X Angle (init) [rad]';'Y Angle (init) [rad]';'Z Angle (init) [rad]';'X Coord (fin) [m]';'Y Coord (fin) [m]';'Z Coord (fin) [m]';'X Angle (fin) [rad]';'Y Angle (fin) [rad]';'Z Angle (fin) [rad]'}) ;
         writetable(T,filename,'Sheet','SBEN');
       end
