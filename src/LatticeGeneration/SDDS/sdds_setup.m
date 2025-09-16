@@ -1,3 +1,6 @@
+if ~contains(string(javaclasspath),"SDDS.jar")
+  return
+end
 sddspath=regexprep(which('DeckTool'),'LatticeGeneration/DeckTool.m','LatticeGeneration/SDDS');
 addpath(sddspath);
 javaaddpath(fullfile(sddspath,'SDDS.jar'), '-end');

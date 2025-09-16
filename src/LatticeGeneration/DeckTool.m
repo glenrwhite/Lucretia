@@ -2373,7 +2373,7 @@ classdef DeckTool < handle
       % Parse element list
       fn=fieldnames(en); lines=[]; ifn=1;
       plist={'MARK' 'DRIF' 'CSRD' 'CSRC' 'CSBE' 'QUAD' 'SEXT' 'OCTU' 'MULT' 'CSBE' 'SOLE' 'LCAV' 'DRIF' 'HKIC' ...
-            'VKIC' 'KICK' 'MONI' 'HMON' 'VMON' 'INST' 'PROF' 'WIRE' 'BLMO' 'SLMO' 'IMON' 'WIGG' 'CWIG' 'WATC' 'IBSC' 'LSRM' 'CHAR' ...
+            'VKIC' 'KICK' 'EKIC' 'MONI' 'HMON' 'VMON' 'INST' 'PROF' 'WIRE' 'BLMO' 'SLMO' 'IMON' 'WIGG' 'CWIG' 'WATC' 'IBSC' 'LSRM' 'CHAR' ...
             'COLL' 'MATR' 'BETA' 'BEAM' 'LINE' 'SIGM' 'RCOL' 'ECOL' 'SROT' 'ROLL' 'ZROT' 'YROT' 'GKIC' 'TWIS'};
       while ifn<=length(fn) %for ifn=1:length(fn)
         % if no class field at this stage, then it is a marker
@@ -2400,7 +2400,7 @@ classdef DeckTool < handle
             L=obj.collectPar(en.(fn{ifn}),'l');
             en.(fn{ifn}).LucretiaElement = DrifStruc( L, fn{ifn} ) ;
           case {'CSBE', 'CSRC'}
-            [L,ANG,K1,K2,E1,E2,Tilt,H1,H2,Hgap,Fint,Hgap2,Fint2,Type]=obj.collectPar(en.(fn{ifn}),'l','angle','k1','k2','e1','e2','tilt','h1','h2','hgap','fint','hgapx','fintx','type');
+            [L,ANG,K1,K2,E1,E2,Tilt,H1,H2,Hgap,Fint,Hgap2,Fint2,Type]=obj.collectPar(en.(fn{ifn}),'l','angle','k1','k2','e1','e2','tilt','h1','h2','hgap','fint','hgapx','fintx','group');
             E=[E1,E2];
             H=[H1,H2];
             if L==0
@@ -2437,7 +2437,7 @@ classdef DeckTool < handle
               en.(fn{ifn}).LucretiaElement.B = BField.*L ;
             end
           case 'QUAD'
-            [L, B, Tilt, aper, Type] = obj.collectPar(en.(fn{ifn}),'l','k1','tilt','aperture','type') ;
+            [L, B, Tilt, aper, Type] = obj.collectPar(en.(fn{ifn}),'l','k1','tilt','aperture','group') ;
             if L==0
               L=1e-9;
             end
@@ -2448,7 +2448,7 @@ classdef DeckTool < handle
             en.(fn{ifn}).LucretiaElement = QuadStruc( L, B*L, Tilt, aper, fn{ifn} ) ;
             en.(fn{ifn}).LucretiaElement.Type=Type;
           case 'SEXT'
-            [L, B, Tilt, aper, Type] = obj.collectPar(en.(fn{ifn}),'l','k2','tilt','aperture','type') ;
+            [L, B, Tilt, aper, Type] = obj.collectPar(en.(fn{ifn}),'l','k2','tilt','aperture','group') ;
             if L==0
               L=1e-9;
             end
@@ -2458,14 +2458,14 @@ classdef DeckTool < handle
             en.(fn{ifn}).LucretiaElement = SextStruc( L, B*L, Tilt, aper, fn{ifn} ) ;
             en.(fn{ifn}).LucretiaElement.Type=Type;
           case 'OCTU'
-            [L, B, Tilt, aper, Type] = obj.collectPar(en.(fn{ifn}),'l','k3','tilt','aperture','type') ;
+            [L, B, Tilt, aper, Type] = obj.collectPar(en.(fn{ifn}),'l','k3','tilt','aperture','group') ;
             if isempty(Tilt)
               Tilt=pi/8;
             end
             en.(fn{ifn}).LucretiaElement = OctuStruc( L, B*L, Tilt, aper, fn{ifn} ) ;
             en.(fn{ifn}).LucretiaElement.Type=Type;
           case 'MULT'
-            [L, LRAD, TiltAll, aper, Type] = obj.collectPar(en.(fn{ifn}),'l','lrad','tilt','aperture','type') ;
+            [L, LRAD, TiltAll, aper, Type] = obj.collectPar(en.(fn{ifn}),'l','lrad','tilt','aperture','group') ;
             B=[]; Tilt=[]; PIndx=[];
             mpn=fieldnames(en.(fn{ifn}));
             kv=regexp(mpn,'^k(\d+)l?','ignorecase','tokens','once');
@@ -2490,7 +2490,7 @@ classdef DeckTool < handle
               en.(fn{ifn}).LucretiaElement.Lrad=LRAD;
             end
           case 'SOLE'
-            [L, B, aper,tilt, Type] = obj.collectPar(en.(fn{ifn}),'l','ks','aperture','tilt','type') ;
+            [L, B, aper,tilt, Type] = obj.collectPar(en.(fn{ifn}),'l','ks','aperture','tilt','group') ;
             if L==0
               L=1e-9;
             end
@@ -2498,7 +2498,7 @@ classdef DeckTool < handle
             en.(fn{ifn}).LucretiaElement.Offset(6) = tilt ;
             en.(fn{ifn}).LucretiaElement.Type=Type;
           case {'LCAV','TCAV'}
-            [L, V,phi,freq,eloss,lfile,tfile,aper,nbin,tilt,Type] = obj.collectPar(en.(fn{ifn}),'l','deltae','phi0','freq','eloss','lfile','tfile','aperture','nbin','tilt','type');
+            [L, V,phi,freq,eloss,lfile,tfile,aper,nbin,tilt,Type] = obj.collectPar(en.(fn{ifn}),'l','deltae','phi0','freq','eloss','lfile','tfile','aperture','nbin','tilt','group');
             BinWidth=1/nbin; % BinWidth is fraction of sigma - default here to 0.1
             srwf_z=0; srwf_t=0;
             if ~any(isnan(lfile)) && ~isempty(lfile) && ~ismember(lfile,obj.parsedWFfiles) && exist(fullfile(obj.basedir,lfile),'file')
@@ -2552,18 +2552,18 @@ classdef DeckTool < handle
               dphi=ang;
             end
             en.(fn{ifn}).LucretiaElement = CoordStruc( dx, dtheta, dy, dphi, dz, dpsi, fn{ifn} );
-          case {'HKIC','VKIC','KICK'}
-            [L,KICK,HKICK,VKICK,TILT, Type]=obj.collectPar(en.(fn{ifn}),'l','kick','hkick','vkick','tilt','type');
+          case {'HKIC','VKIC','KICK','EKIC'}
+            [L,KICK,HKICK,VKICK,TILT, Type]=obj.collectPar(en.(fn{ifn}),'l','kick','hkick','vkick','tilt','group');
             if strcmpi(en.(fn{ifn}).Class(1:4),'HKIC')
               en.(fn{ifn}).LucretiaElement = CorrectorStruc(  L, KICK, TILT, 1, fn{ifn} ) ;
             elseif strcmpi(en.(fn{ifn}).Class(1:4),'VKIC')
               en.(fn{ifn}).LucretiaElement = CorrectorStruc(  L, KICK, TILT, 2, fn{ifn} ) ;
-            elseif strcmpi(en.(fn{ifn}).Class(1:4),'KICK')
+            elseif strcmpi(en.(fn{ifn}).Class(1:4),'KICK') || strcmpi(en.(fn{ifn}).Class(1:4),'EKIC')
               en.(fn{ifn}).LucretiaElement = CorrectorStruc(  L, [HKICK,VKICK], TILT, 3, fn{ifn} ) ;
             end
             en.(fn{ifn}).LucretiaElement.Type=Type;
           case {'ECOL','RCOL'}
-            [L,xgap,ygap,Tilt,Type]=obj.collectPar(en.(fn{ifn}),'l','xsize','ysize','tilt','type') ;
+            [L,xgap,ygap,Tilt,Type]=obj.collectPar(en.(fn{ifn}),'l','xsize','ysize','tilt','group') ;
             if strcmpi(en.(fn{ifn}).Class(1:4),'ECOL')
               en.(fn{ifn}).LucretiaElement = CollStruc( L, xgap, ygap, 'Ellipse', Tilt, fn{ifn} ) ;
             else
@@ -2592,11 +2592,11 @@ classdef DeckTool < handle
               en.(fn{ifn}).LucretiaElement.Tinds = Tinds;
             end
           case {'HMON','VMON','MONI'}
-            [L, Type]=obj.collectPar(en.(fn{ifn}),'l','type') ;
+            [L, Type]=obj.collectPar(en.(fn{ifn}),'l','group') ;
             en.(fn{ifn}).LucretiaElement = BPMStruc( L, fn{ifn} ) ;
             en.(fn{ifn}).LucretiaElement.Type=Type;
           case {'BLMO', 'PROF', 'WIRE', 'SLMO', 'IMON', 'INST'}
-            [L, Type]=obj.collectPar(en.(fn{ifn}),'l','type') ;
+            [L, Type]=obj.collectPar(en.(fn{ifn}),'l','group') ;
             en.(fn{ifn}).LucretiaElement = InstStruc( L, upper(en.(fn{ifn}).Class(1:4)), fn{ifn} ) ;
             en.(fn{ifn}).LucretiaElement.Type=Type;
           case {'MARK','WATC','IBSC','CHAR'}
@@ -3510,7 +3510,7 @@ classdef DeckTool < handle
               varargout{ipar}=NaN;
             case {'freq','xsize','ysize','betax','betay','betx','bety','npart','kbunch'}
               varargout{ipar}=1;
-            case 'type'
+            case {'type','group'}
               varargout{ipar}='UNKNOWN';
             case 'nbin'
               varargout{ipar}=10;
