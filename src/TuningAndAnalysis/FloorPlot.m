@@ -114,7 +114,7 @@ classdef FloorPlot < handle
           elseif isempty(aper)
             aper=0.000000001;
           end
-          if length(aper)==1; aper=ones(1,2).*aper; end
+          if isscalar(aper); aper=ones(1,2).*aper; end
           if any(aper==1)
             aper=[0.015 0.015];
           end

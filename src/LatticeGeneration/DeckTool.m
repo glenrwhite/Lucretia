@@ -415,8 +415,8 @@ classdef DeckTool < handle
         case 'BMAD'
           % Mapping of classnames (properties of this object) to BMAD elements types
           classnames={'marker' 'drift' 'quadrupole' 'sextupole' 'octupole' 'multipole' 'sbend' 'solenoid' ...
-            'lcavity, cavity_type=traveling_wave' 'crab_cavity' 'hkicker' ...
-            'vkicker' 'kicker' 'instrument' 'instrument' 'instrument' 'instrument' 'instrument' 'instrument' 'instrument' 'instrument' 'instrument' ...
+            'lcavity, cavity_type=traveling_wave' 'crab_cavity' 'kicker' ...
+            'kicker' 'kicker' 'instrument' 'instrument' 'instrument' 'instrument' 'instrument' 'instrument' 'instrument' 'instrument' 'instrument' ...
             'COLL' 'patch' 'taylor'};
         case 'Elegant'
           % Mapping of classnames (properties of this object) to Elegant elements types
@@ -746,8 +746,13 @@ classdef DeckTool < handle
               pinfo.name{end+1}='DELTAE';
               pinfo.val(end+1)=GetTrueVoltage(iele);
             case 'BMAD'
-              pinfo.name{end+1}='gradient';
-              pinfo.val(end+1)=1e6*BEAMLINE{iele}.Volt/BEAMLINE{iele}.L;
+              if strcmp(BEAMLINE{iele}.Class,'TCAV')
+                pinfo.name{end+1}='voltage';
+                pinfo.val(end+1)=GetTrueVoltage(iele)*1e6;
+              else
+                pinfo.name{end+1}='gradient';
+                pinfo.val(end+1)=1e6*BEAMLINE{iele}.Volt/BEAMLINE{iele}.L;
+              end
             case 'Elegant'
               if strcmp(BEAMLINE{iele}.Class,'TCAV')
                 pinfo.name{end+1}='VOLTAGE';
@@ -773,10 +778,13 @@ classdef DeckTool < handle
           switch obj.deckType
             case 'XSIF'
               pinfo.name{end+1}='ELOSS';
+              pinfo.val(end+1)=val*BEAMLINE{iele}.L;
             case 'BMAD'
-              pinfo.name{end+1}='e_loss';
+              if ~strcmp(BEAMLINE{iele}.Class,'TCAV')
+                pinfo.name{end+1}='e_loss';
+                pinfo.val(end+1)=val*BEAMLINE{iele}.L;
+              end
           end
-          pinfo.val(end+1)=val*BEAMLINE{iele}.L;
         case 'Change'
           switch obj.deckType
             case 'XSIF'
@@ -859,11 +867,17 @@ classdef DeckTool < handle
       end
     end
     function deckWrite(obj,Initial,filename,linename,useline)
-      % Write out external deck format file
+      %DECKWRITE Write out external deck format file
+      %deckWrite(Initial,filename,linename,useline)
+      % For Elegant files, prepend '+' to filename to omit initialization code (charge &* twiss parameters)
       global BEAMLINE WF SDDS_SETUP
       if isempty(SDDS_SETUP)
         SDDS_SETUP=false;
       end
+
+      % Generate Initial charge and Twiss parameters (for Elegant lattice file)?
+      InitCode = true ;
+
       % Constants and derived parameters
       qe=1.60217662e-19; % electron charge / C
       me=5.109989465237626e-04; % electron rest mass / GeV
@@ -871,6 +885,10 @@ classdef DeckTool < handle
       % - Open file for writing
       if strcmp(obj.deckType,'Elegant')
         filename=[regexprep(filename,'\.lte','') '.lte'];
+        if ~isempty(regexp(filename,'^(\+)','once'))
+          filename = regexprep(filename,'^(\+)','') ;
+          InitCode = false ;
+        end
       end
       fid=fopen(filename,'w');
       if ~fid; error('Error opening %s',filename); end
@@ -880,7 +898,7 @@ classdef DeckTool < handle
       
       % - Loop through CLASSes and write out beamline elements and properties
       BL0=BEAMLINE;
-      try
+      % try
         if strcmp(obj.deckType,'Elegant')
           obj.AssignCSR; % Assign CSR tags to DRIFTs downstream of CSR BENDS
         end
@@ -911,7 +929,7 @@ classdef DeckTool < handle
             for iprop=1:length(plist)
               pinfo=obj.GetPropInfo(eleind,plist{iprop},obj.(classList{iclass}).(plist{iprop}){IA(itype)});
               % Additional properties for LCAV/TCAV?
-              if ~addprop && ismember(BEAMLINE{eleind}.Class,{'LCAV','TCAV'}) && strcmp(obj.deckType,'Elegant') % switch on edge-focusing treatment in RF structures
+              if ~addprop && strcmp(BEAMLINE{eleind}.Class,'LCAV') && strcmp(obj.deckType,'Elegant') % switch on edge-focusing treatment in RF structures
                 pinfo.name{end+1}='END1_FOCUS';
                 pinfo.val(end+1)=1;
                 pinfo.name{end+1}='END2_FOCUS';
@@ -987,12 +1005,12 @@ classdef DeckTool < handle
                 newstr{end+1}=sprintf('TRWAKEFILE="%s"',twname);
                 dowake=true;
               end
+              newstr{end+1}='CELL_LENGTH=1';
               if dowake
                 newstr{end+1}='TCOLUMN=T';
                 newstr{end+1}='WXCOLUMN=X';
                 newstr{end+1}='WYCOLUMN=X';
                 newstr{end+1}='WZCOLUMN=Z';
-                newstr{end+1}='CELL_LENGTH=1';
                 if ~SDDS_SETUP
                   sddspath=regexprep(which('DeckTool'),'LatticeGeneration/DeckTool.m','LatticeGeneration/SDDS');
                   addpath(sddspath);
@@ -1053,10 +1071,10 @@ classdef DeckTool < handle
           end
           BEAMLINE=BL1;
         end
-      catch ME
-        BEAMLINE=BL0;
-        throw(ME);
-      end
+      % catch ME
+      %   BEAMLINE=BL0;
+      %   throw(ME);
+      % end
       BEAMLINE=BL0;
       switch obj.deckType
         case 'XSIF'
@@ -1090,15 +1108,15 @@ classdef DeckTool < handle
           fprintf(fid,'parameter[lattice] = %s\n',linename);
           fprintf(fid,'parameter[n_part] = %d\n',ceil(Initial.Q/qe));
           fprintf(fid,'parameter[particle] = electron\n');
-          fprintf(fid,'beam_start[x] = %g\n',Initial.x.pos);
-          fprintf(fid,'beam_start[px] = %g\n',Initial.x.ang);
-          fprintf(fid,'beam_start[y] = %g\n',Initial.y.pos);
-          fprintf(fid,'beam_start[py] = %g\n',Initial.y.ang);
-          fprintf(fid,'beam_start[z] = %g\n',Initial.zpos);
-          fprintf(fid,'beam_start[emittance_a] = %g\n',Initial.x.NEmit/gamma);
-          fprintf(fid,'beam_start[emittance_b] = %g\n',Initial.y.NEmit/gamma);
-          fprintf(fid,'beam_start[sig_z] = %g\n',Initial.sigz);
-          fprintf(fid,'beam_start[sig_e] = %g\n',Initial.SigPUncorrel/Initial.Momentum);
+          fprintf(fid,'particle_start[x] = %g\n',Initial.x.pos);
+          fprintf(fid,'particle_start[px] = %g\n',Initial.x.ang);
+          fprintf(fid,'particle_start[y] = %g\n',Initial.y.pos);
+          fprintf(fid,'particle_start[py] = %g\n',Initial.y.ang);
+          fprintf(fid,'particle_start[z] = %g\n',Initial.zpos);
+          fprintf(fid,'particle_start[emittance_a] = %g\n',Initial.x.NEmit/gamma);
+          fprintf(fid,'particle_start[emittance_b] = %g\n',Initial.y.NEmit/gamma);
+          fprintf(fid,'particle_start[sig_z] = %g\n',Initial.sigz);
+          fprintf(fid,'particle_start[sig_e] = %g\n',Initial.SigPUncorrel/Initial.Momentum);
           fprintf(fid,'beginning[beta_a] = %.15g\n',Initial.x.Twiss.beta);
           fprintf(fid,'beginning[beta_b] = %.15g\n',Initial.y.Twiss.beta);
           fprintf(fid,'beginning[alpha_a] = %.15g\n',Initial.x.Twiss.alpha);
@@ -1161,17 +1179,22 @@ classdef DeckTool < handle
           fprintf(cfid,'    etap_y = %g,\n',Initial.y.Twiss.etap);
           fprintf(cfid,'&end\n');
           fclose(cfid);
-          fprintf(fid,'BQ0: CHARGE, TOTAL=%g, ALLOW_TOTAL_CHANGE=1\n',Initial.Q);
-          fprintf(fid,'TWSS0: TWISS, BETAX=%g, ALPHAX=%g, ETAX=%g, ETAXP=%g, BETAY=%g, ALPHAY=%g, ETAY=%g, ETAYP=%g\n',...
-                      Initial.x.Twiss.beta,Initial.x.Twiss.alpha,Initial.x.Twiss.eta,Initial.x.Twiss.etap,...
-                      Initial.y.Twiss.beta,Initial.y.Twiss.alpha,Initial.y.Twiss.eta,Initial.y.Twiss.etap) ;
-          if isfield(BEAMLINE{1},'Coordi')
-            fprintf(fid,'ICOORD: FLOOR, X=%g, Y=%g, Z=%g, THETA=%g, PHI=%g, PSI=%g\n',BEAMLINE{1}.Coordi,BEAMLINE{1}.Anglei);
+          if InitCode
+            fprintf(fid,'BQ0: CHARGE, TOTAL=%g, ALLOW_TOTAL_CHANGE=1\n',Initial.Q);
+            fprintf(fid,'TWSS0: TWISS, BETAX=%g, ALPHAX=%g, ETAX=%g, ETAXP=%g, BETAY=%g, ALPHAY=%g, ETAY=%g, ETAYP=%g\n',...
+                        Initial.x.Twiss.beta,Initial.x.Twiss.alpha,Initial.x.Twiss.eta,Initial.x.Twiss.etap,...
+                        Initial.y.Twiss.beta,Initial.y.Twiss.alpha,Initial.y.Twiss.eta,Initial.y.Twiss.etap) ;
+            if isfield(BEAMLINE{1},'Coordi')
+              fprintf(fid,'ICOORD: FLOOR, X=%g, Y=%g, Z=%g, THETA=%g, PHI=%g, PSI=%g\n',BEAMLINE{1}.Coordi,BEAMLINE{1}.Anglei);
+            else
+              fprintf(fid,'ICOORD: MARK\n');
+            end
+            fprintf(fid,'\n! ================================\n');
+            fprintf(fid,sprintf('\n%s: LINE=(BQ0,TWSS0,ICOORD,%s',linename,BEAMLINE{1}.Name));
           else
-            fprintf(fid,'ICOORD: MARK\n');
+            fprintf(fid,'\n! ================================\n');
+            fprintf(fid,sprintf('\n%s: LINE=(%s',linename,BEAMLINE{1}.Name));
           end
-          fprintf(fid,'\n! ================================\n');
-          fprintf(fid,sprintf('\n%s: LINE=(BQ0,TWSS0,ICOORD,%s',linename,BEAMLINE{1}.Name));
         otherwise
           error('Unknown deck type')
       end
@@ -3057,7 +3080,7 @@ classdef DeckTool < handle
         if ~isfield(BEAMLINE{iele},'Slices'); BEAMLINE{iele}.Slices=iele; end
       end
       % - LCAV Sheet
-      sid = ismember(id,findcells(BEAMLINE,'Class','LCAV')) & ids1 ;
+      sid = ismember(id,[findcells(BEAMLINE,'Class','LCAV') findcells(BEAMLINE,'Class','TCAV')]) & ids1 ;
       if any(sid)
         x2 = arrayfun(@(x) BEAMLINE{BEAMLINE{x}.Slices(end)}.Coordf(1),id(sid)) ; y2 = arrayfun(@(x) BEAMLINE{BEAMLINE{x}.Slices(end)}.Coordf(2),id(sid)) ; z2 = arrayfun(@(x) BEAMLINE{BEAMLINE{x}.Slices(end)}.Coordf(3),id(sid)) ;
         xp2 = arrayfun(@(x) BEAMLINE{BEAMLINE{x}.Slices(end)}.Anglef(1),id(sid)) ; yp2 = arrayfun(@(x) BEAMLINE{BEAMLINE{x}.Slices(end)}.Anglef(2),id(sid)) ; zp2 = arrayfun(@(x) BEAMLINE{BEAMLINE{x}.Slices(end)}.Anglef(3),id(sid)) ;
@@ -3067,9 +3090,9 @@ classdef DeckTool < handle
         egain = arrayfun(@(x) sum(arrayfun(@(xx) BEAMLINE{xx}.Egain,BEAMLINE{x}.Slices)), id(sid)) ;
         kloss = arrayfun(@(x) BEAMLINE{x}.Kloss,id(sid)) ;
         L_this = arrayfun(@(x) sum(arrayfun(@(xx) BEAMLINE{xx}.L,BEAMLINE{x}.Slices)),id(sid)) ;
-        T=table(id(sid)',names(sid)',sections(sid),pps(sid),racks(sid),girid(sid),klyid(sid),types(sid),L_this(:),P(sid)',S(sid)',freq(:),volt(:),phase(:),egain(:),kloss(:),Xi(sid)',Yi(sid)',Zi(sid)',XPi(sid)',YPi(sid)',ZPi(sid)',x2(:),y2(:),z2(:),xp2(:),yp2(:),zp2(:),'VariableNames',...
+        T_LCAV=table(id(sid)',names(sid)',sections(sid),pps(sid),racks(sid),girid(sid),klyid(sid),types(sid),L_this(:),P(sid)',S(sid)',freq(:),volt(:),phase(:),egain(:),kloss(:),Xi(sid)',Yi(sid)',Zi(sid)',XPi(sid)',YPi(sid)',ZPi(sid)',x2(:),y2(:),z2(:),xp2(:),yp2(:),zp2(:),'VariableNames',...
           {'Model ID'; 'Model Name'; 'Section Name'; 'PPS Zone'; 'RACK Zone'; 'Girder ID';'Klystron ID'; 'Engineering Type';'Path Length [m]';'E [GeV]';'S [m]';'Freq [MHz]';'Voltage [MV]';'Phase [deg]';'EGAIN [MV]';'Kloss [V/C/m]';'X Coord (init) [m]';'Y Coord (init) [m]';'Z Coord (init) [m]';'X Angle (init) [rad]';'Y Angle (init) [rad]';'Z Angle (init) [rad]';'X Coord (fin) [m]';'Y Coord (fin) [m]';'Z Coord (fin) [m]';'X Angle (fin) [rad]';'Y Angle (fin) [rad]';'Z Angle (fin) [rad]'}) ;
-        writetable(T,filename,'Sheet','LCAV');
+        writetable(T_LCAV,filename,'Sheet','LCAV');
       end
       % - SBEN Sheet
       sid=ismember(id,findcells(BEAMLINE,'Class','SBEN')) & ids1 ;
@@ -3101,9 +3124,9 @@ classdef DeckTool < handle
             g(n) = gl(n) / sum(arrayfun(@(x) BEAMLINE{x}.L,BEAMLINE{iele}.Slices)) ;
           end
         end
-        T=table(id(sid)',names_this(:),sections(sid),pps(sid),racks(sid),girid(sid),psid(sid),types(sid),L_this(:),P(sid)',S(sid)',Zlen(:),gap(:),fint(:),tilt(:),ang(:),e1(:),e2(:),BL(:),B(:),K1(:),gl(:),g(:),Xi(sid)',Yi(sid)',Zi(sid)',XPi(sid)',YPi(sid)',ZPi(sid)',x2(:),y2(:),z2(:),xp2(:),yp2(:),zp2(:),'VariableNames',...
+        T_SBEN=table(id(sid)',names_this(:),sections(sid),pps(sid),racks(sid),girid(sid),psid(sid),types(sid),L_this(:),P(sid)',S(sid)',Zlen(:),gap(:),fint(:),tilt(:),ang(:),e1(:),e2(:),BL(:),B(:),K1(:),gl(:),g(:),Xi(sid)',Yi(sid)',Zi(sid)',XPi(sid)',YPi(sid)',ZPi(sid)',x2(:),y2(:),z2(:),xp2(:),yp2(:),zp2(:),'VariableNames',...
           {'Model ID'; 'Model Name'; 'Section Name'; 'PPS Zone'; 'RACK Zone'; 'Girder ID'; 'PS ID'; 'Engineering Type';'Path Length [m]';'E [GeV]';'S [m]';'Z Length [m]';'Gap [m]';'Field Integral';'Tilt [deg]';'Bend Angle [deg]';'E1 [deg]';'E2 [deg]';'BL [T.m]';'B [T]';'K1 [1/m^2]';'GL [T]';'G [T/m]';'X Coord (init) [m]';'Y Coord (init) [m]';'Z Coord (init) [m]';'X Angle (init) [rad]';'Y Angle (init) [rad]';'Z Angle (init) [rad]';'X Coord (fin) [m]';'Y Coord (fin) [m]';'Z Coord (fin) [m]';'X Angle (fin) [rad]';'Y Angle (fin) [rad]';'Z Angle (fin) [rad]'}) ;
-        writetable(T,filename,'Sheet','SBEN');
+        writetable(T_SBEN,filename,'Sheet','SBEN');
       end
       % - QUAD Sheet
       sid = ismember(id,findcells(BEAMLINE,'Class','QUAD')) & ids1 ;
@@ -3117,9 +3140,9 @@ classdef DeckTool < handle
         g = arrayfun(@(x) sum(arrayfun(@(xx) BEAMLINE{xx}.B/BEAMLINE{xx}.L,BEAMLINE{x}.Slices)),id(sid)) ;
         gl = arrayfun(@(x) sum(arrayfun(@(xx) BEAMLINE{xx}.B,BEAMLINE{x}.Slices)),id(sid)) ;
         K1 = Brho .* gl ;
-        T=table(id(sid)',names(sid)',sections(sid),pps(sid),racks(sid),girid(sid),psid(sid),types(sid),L_this(:),P(sid)',S(sid)',bore(:),tilt(:),K1(:),gl(:),g(:),Xi(sid)',Yi(sid)',Zi(sid)',XPi(sid)',YPi(sid)',ZPi(sid)',x2(:),y2(:),z2(:),xp2(:),yp2(:),zp2(:),'VariableNames',...
+        T_QUAD=table(id(sid)',names(sid)',sections(sid),pps(sid),racks(sid),girid(sid),psid(sid),types(sid),L_this(:),P(sid)',S(sid)',bore(:),tilt(:),K1(:),gl(:),g(:),Xi(sid)',Yi(sid)',Zi(sid)',XPi(sid)',YPi(sid)',ZPi(sid)',x2(:),y2(:),z2(:),xp2(:),yp2(:),zp2(:),'VariableNames',...
           {'Model ID'; 'Model Name'; 'Section Name'; 'PPS Zone'; 'RACK Zone'; 'Girder ID'; 'PS ID'; 'Engineering Type';'Path Length [m]';'E [GeV]';'S [m]';'Bore [m]';'Tilt [deg]';'K1 [1/m^2]';'GL [T]';'G [T/m]';'X Coord (init) [m]';'Y Coord (init) [m]';'Z Coord (init) [m]';'X Angle (init) [rad]';'Y Angle (init) [rad]';'Z Angle (init) [rad]';'X Coord (fin) [m]';'Y Coord (fin) [m]';'Z Coord (fin) [m]';'X Angle (fin) [rad]';'Y Angle (fin) [rad]';'Z Angle (fin) [rad]'}) ;
-        writetable(T,filename,'Sheet','QUAD');
+        writetable(T_QUAD,filename,'Sheet','QUAD');
       end
       % - SEXT Sheet
       sid = ismember(id,findcells(BEAMLINE,'Class','SEXT')) & ids1 ;
@@ -3133,9 +3156,9 @@ classdef DeckTool < handle
         g = arrayfun(@(x) sum(arrayfun(@(xx) BEAMLINE{xx}.B/BEAMLINE{xx}.L,BEAMLINE{x}.Slices)),id(sid)) ;
         gl = arrayfun(@(x) sum(arrayfun(@(xx) BEAMLINE{xx}.B,BEAMLINE{x}.Slices)),id(sid)) ;
         K2 = 0.5 .* Brho .* gl ;
-        T=table(id(sid)',names(sid)',sections(sid),pps(sid),racks(sid),girid(sid),psid(sid),types(sid),L_this(:),P(sid)',S(sid)',bore(:),tilt(:),K2(:),gl(:),g(:),Xi(sid)',Yi(sid)',Zi(sid)',XPi(sid)',YPi(sid)',ZPi(sid)',x2(:),y2(:),z2(:),xp2(:),yp2(:),zp2(:),'VariableNames',...
+        T_SEXT=table(id(sid)',names(sid)',sections(sid),pps(sid),racks(sid),girid(sid),psid(sid),types(sid),L_this(:),P(sid)',S(sid)',bore(:),tilt(:),K2(:),gl(:),g(:),Xi(sid)',Yi(sid)',Zi(sid)',XPi(sid)',YPi(sid)',ZPi(sid)',x2(:),y2(:),z2(:),xp2(:),yp2(:),zp2(:),'VariableNames',...
           {'Model ID'; 'Model Name'; 'Section Name'; 'PPS Zone'; 'RACK Zone'; 'Girder ID';'PS ID';'Engineering Type';'Path Length [m]';'E [GeV]';'S [m]';'Bore [m]';'Tilt [deg]';'K2 [1/m^3]';'G''L [T/m]';'G'' [T/m^2]';'X Coord (init) [m]';'Y Coord (init) [m]';'Z Coord (init) [m]';'X Angle (init) [rad]';'Y Angle (init) [rad]';'Z Angle (init) [rad]';'X Coord (fin) [m]';'Y Coord (fin) [m]';'Z Coord (fin) [m]';'X Angle (fin) [rad]';'Y Angle (fin) [rad]';'Z Angle (fin) [rad]'}) ;
-        writetable(T,filename,'Sheet','SEXT');
+        writetable(T_SEXT,filename,'Sheet','SEXT');
       end
       % - SOLENOID Sheet
       sid = ismember(id,findcells(BEAMLINE,'Class','SOLENOID')) & ids1 ;
@@ -3147,9 +3170,9 @@ classdef DeckTool < handle
         gl = arrayfun(@(x) sum(arrayfun(@(xx) BEAMLINE{xx}.B,BEAMLINE{x}.Slices)),id(sid)) ;
         Brho = physConsts.clight./(arrayfun(@(x) BEAMLINE{x}.P,id(sid)).*1e9);
         KS = 0.5 .* Brho .* gl ;
-        T=table(id(sid)',names(sid)',sections(sid),pps(sid),racks(sid),girid(sid),psid(sid),types(sid),L_this(:),P(sid)',S(sid)',KS(:),gl(:),g(:),Xi(sid)',Yi(sid)',Zi(sid)',XPi(sid)',YPi(sid)',ZPi(sid)',x2(:),y2(:),z2(:),xp2(:),yp2(:),zp2(:),'VariableNames',...
+        T_SOL=table(id(sid)',names(sid)',sections(sid),pps(sid),racks(sid),girid(sid),psid(sid),types(sid),L_this(:),P(sid)',S(sid)',KS(:),gl(:),g(:),Xi(sid)',Yi(sid)',Zi(sid)',XPi(sid)',YPi(sid)',ZPi(sid)',x2(:),y2(:),z2(:),xp2(:),yp2(:),zp2(:),'VariableNames',...
           {'Model ID'; 'Model Name'; 'Section Name'; 'PPS Zone'; 'RACK Zone'; 'Girder ID';'PS ID';'Engineering Type';'Path Length [m]';'E [GeV]';'S [m]';'KS [1/m]';'BL [T/m]';'B'' [T]';'X Coord (init) [m]';'Y Coord (init) [m]';'Z Coord (init) [m]';'X Angle (init) [rad]';'Y Angle (init) [rad]';'Z Angle (init) [rad]';'X Coord (fin) [m]';'Y Coord (fin) [m]';'Z Coord (fin) [m]';'X Angle (fin) [rad]';'Y Angle (fin) [rad]';'Z Angle (fin) [rad]'}) ;
-        writetable(T,filename,'Sheet','SOLENOID');
+        writetable(T_SOL,filename,'Sheet','SOLENOID');
       end
       % - Type Sheet
       ttab = obj.MagnetTypeData ;
@@ -3157,13 +3180,40 @@ classdef DeckTool < handle
       if exist('T_COLL','var'); writetable(T_COLL,filename,'Sheet','COLL'); end
       if exist('T_COR','var'); writetable(T_COR,filename,'Sheet','COR'); end
       if exist('T_MONI','var'); writetable(T_MONI,filename,'Sheet','MONI'); end
-      if exist('T_WIER','var'); writetable(T_WIRE,filename,'Sheet','WIRE'); end
+      if exist('T_WIRE','var'); writetable(T_WIRE,filename,'Sheet','WIRE'); end
       if exist('T_PROF','var'); writetable(T_PROF,filename,'Sheet','PROF'); end
       if exist('T_IMON','var'); writetable(T_IMON,filename,'Sheet','IMON'); end
       if exist('T_BLMO','var'); writetable(T_BLMO,filename,'Sheet','BLMO'); end
       if exist('T_INST','var'); writetable(T_INST,filename,'Sheet','INST'); end
       if exist('T_MARK','var'); writetable(T_MARK,filename,'Sheet','MARK'); end
       if ~isempty(ttab); writetable(ttab,filename,'Sheet','MagnetTypes'); end
+      % - "Cube Farm" sheet (list of each physical device and it's center location)
+      TypeList = ["T_QUAD" "T_SEXT" "T_LCAV" "T_SOL" "T_COLL" "T_COR" "T_MONI" "T_WIRE" "T_PROF" "T_IMON" "T_BLMO" "T_INST" "T_MARK"] ;
+      X_cent=zeros(0,3); mid=[]; mname=[]; X_ang=X_cent; snam=[];
+      for itype=1:length(TypeList)
+        if ~exist(TypeList(itype),'var'); continue; end
+        evalc(sprintf("T=%s",TypeList(itype))) ;
+        xc =  ([T.("X Coord (init) [m]") T.("Y Coord (init) [m]") T.("Z Coord (init) [m]")] + [T.("X Coord (fin) [m]") T.("Y Coord (fin) [m]") T.("Z Coord (fin) [m]")]) ./ 2 ;
+        X_cent = [X_cent;xc] ;
+        xa = [T.("X Angle (init) [rad]") T.("Y Angle (init) [rad]") T.("Z Angle (init) [rad]")] ;
+        X_ang = [X_ang; xa] ;
+        mid = [mid; T.("Model ID")]; mname=[mname;T.("Model Name")]; snam=[snam;T.("Section Name")];
+      end
+      for iben=1:height(T_SBEN)
+        id1 = BEAMLINE{T_SBEN{iben,"Model ID"}}.Slices(1) ;
+        mid = [mid; id1] ; mname=[mname;T_SBEN{iben,"Model Name"}]; snam=[snam;T_SBEN{iben,"Section Name"}];
+        X_cent = [X_cent;BEAMLINE{id1}.Coordf] ;
+        xa = BEAMLINE{id1}.Anglei;
+        if BEAMLINE{id1}.Tilt==0
+          xa(1)=xa(1)+BEAMLINE{id1}.EdgeAngle(1) ;
+        else
+          xa(2)=xa(2)+BEAMLINE{id1}.EdgeAngle(1) ;
+        end
+        X_ang = [X_ang; xa] ;
+      end
+      T_CUBE = table(mid,mname,snam,X_cent(:,1),X_cent(:,2),X_cent(:,3),X_ang(:,1),X_ang(:,2),X_ang(:,3),'VariableNames', {'Model ID'; 'Model Name'; 'Section Name'; 'X Coord (center) [m]'; 'Y Coord (center) [m]'; 'Z Coord (center) [m]'; 'X Angle (center) [m]'; 'Y Angle (center) [m]'; 'Z Angle (center) [m]' } ) ;
+      
+      writetable(T_CUBE,filename,'Sheet','AllGeom'); 
       BEAMLINE=BL0; PS=PS0; GIRDER=GIR0; WF=WF0;
     end
     function restoreLucretiaData(obj)
