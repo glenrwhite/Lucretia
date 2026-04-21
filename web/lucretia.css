@@ -1,0 +1,465 @@
+/* ==========================================================================
+   Lucretia documentation stylesheet
+   Modernizes the legacy HTML pages: provides a top nav, readable typography,
+   tables, and code blocks. Carefully overrides the old inline styles
+   (font-size: 24pt, deeply nested centered divs, etc.) without touching the
+   markup itself.
+   ========================================================================== */
+
+:root {
+    --lucretia-pink: #d60093;
+    --lucretia-pink-dark: #a50071;
+    --link: #0a58a6;
+    --link-hover: #d60093;
+    --text: #222;
+    --muted: #666;
+    --rule: #e3e3e3;
+    --bg: #ffffff;
+    --bg-soft: #f7f7fa;
+    --bg-code: #f4f4f8;
+    --nav-bg: #1f1f24;
+    --nav-text: #e8e8ec;
+    --nav-text-hover: #ffffff;
+    --nav-accent: var(--lucretia-pink);
+    --max-width: 880px;
+    --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+        "Helvetica Neue", Arial, sans-serif;
+    --font-mono: "SF Mono", Menlo, Monaco, Consolas, "Liberation Mono",
+        "Courier New", monospace;
+}
+
+/* -- Reset / base ---------------------------------------------------------- */
+html {
+    box-sizing: border-box;
+    -webkit-text-size-adjust: 100%;
+}
+*, *::before, *::after { box-sizing: inherit; }
+
+/* Constrain the *body itself* into a readable column. This way, both block
+   children (div, ul, table) and bare text/<br> children stay in the same
+   column -- avoiding the mixed-alignment artefact where blocks were 880px
+   centered while inline text spanned the viewport. The nav uses
+   position: fixed so it escapes this constraint. */
+body {
+    margin: 0 auto;
+    max-width: var(--max-width);
+    padding: 80px 28px 64px;          /* top padding leaves room for fixed nav */
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font-sans);
+    font-size: 16px;
+    line-height: 1.6;
+    text-align: left;                  /* override any inherited centering */
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+}
+
+/* For pages that need a wider canvas (sidebar layouts) */
+body.wide {
+    max-width: 1200px;
+}
+
+/* -- Typography ------------------------------------------------------------ */
+h1, h2, h3, h4 {
+    font-weight: 600;
+    line-height: 1.25;
+    color: #111;
+    margin: 1.8em 0 0.6em;
+}
+h1 { font-size: 1.9em; border-bottom: 2px solid var(--rule); padding-bottom: 0.3em; }
+h2 { font-size: 1.5em; border-bottom: 1px solid var(--rule); padding-bottom: 0.25em; }
+h3 { font-size: 1.2em; }
+h4 { font-size: 1.05em; }
+
+p { margin: 0.8em 0; }
+
+a { color: var(--link); text-decoration: none; }
+a:hover { color: var(--link-hover); text-decoration: underline; }
+
+ul, ol { padding-left: 1.6em; }
+li { margin: 0.25em 0; }
+
+hr { border: 0; border-top: 1px solid var(--rule); margin: 2em 0; }
+
+blockquote {
+    margin: 1em 0;
+    padding: 0.6em 1.2em;
+    border-left: 4px solid var(--lucretia-pink);
+    background: var(--bg-soft);
+    color: #333;
+}
+
+/* Code / monospace ------------------------------------------------------- */
+code, kbd, samp, tt {
+    font-family: var(--font-mono);
+    font-size: 0.92em;
+    background: var(--bg-code);
+    padding: 0.1em 0.35em;
+    border-radius: 3px;
+}
+pre {
+    font-family: var(--font-mono);
+    font-size: 0.92em;
+    background: var(--bg-code);
+    padding: 12px 16px;
+    border-radius: 6px;
+    overflow-x: auto;
+    line-height: 1.45;
+    border: 1px solid var(--rule);
+}
+pre code { background: transparent; padding: 0; }
+
+/* The legacy pages use inline span style="font-family: Courier..." for code.
+   Catch those too. */
+span[style*="Courier"], span[style*="courier"], span[style*="monospace"] {
+    font-family: var(--font-mono) !important;
+    background: var(--bg-code);
+    padding: 0.1em 0.35em;
+    border-radius: 3px;
+    font-size: 0.92em;
+}
+
+/* -- Tables --------------------------------------------------------------- */
+table {
+    border-collapse: collapse;
+    margin: 1.2em 0;
+    width: 100%;
+    font-size: 0.95em;
+    background: var(--bg);
+}
+table, th, td {
+    border: 1px solid var(--rule) !important;
+}
+th, td {
+    padding: 8px 12px !important;
+    text-align: left;
+    vertical-align: top;
+}
+th {
+    background: var(--bg-soft);
+    font-weight: 600;
+    color: #111;
+}
+tbody tr:nth-child(even) td { background: #fafafb; }
+tbody tr:hover td { background: #f3f6fb; }
+
+/* -- Images --------------------------------------------------------------- */
+img {
+    max-width: 100%;
+    height: auto;
+}
+
+/* -- Top navigation ------------------------------------------------------- */
+nav.lucretia-nav {
+    position: fixed;
+    top: 0; left: 0; right: 0;
+    z-index: 1000;
+    background: var(--nav-bg);
+    color: var(--nav-text);
+    border-bottom: 3px solid var(--lucretia-pink);
+    box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+}
+nav.lucretia-nav .nav-inner {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 0 20px;
+    display: flex;
+    align-items: center;
+    height: 48px;
+    gap: 4px;
+    flex-wrap: wrap;
+}
+nav.lucretia-nav .nav-brand {
+    font-weight: 700;
+    color: var(--nav-text-hover);
+    text-decoration: none;
+    margin-right: 18px;
+    letter-spacing: 0.5px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+nav.lucretia-nav .nav-brand:hover { color: var(--lucretia-pink); text-decoration: none; }
+nav.lucretia-nav .nav-brand .pink { color: var(--lucretia-pink); }
+nav.lucretia-nav a.nav-link {
+    color: var(--nav-text);
+    text-decoration: none;
+    padding: 6px 12px;
+    border-radius: 4px;
+    font-size: 0.92em;
+    line-height: 1;
+    transition: background 0.15s, color 0.15s;
+}
+nav.lucretia-nav a.nav-link:hover {
+    background: rgba(255,255,255,0.08);
+    color: var(--nav-text-hover);
+    text-decoration: none;
+}
+nav.lucretia-nav a.nav-link.active {
+    background: var(--lucretia-pink);
+    color: #fff;
+}
+nav.lucretia-nav .nav-spacer { flex: 1; }
+
+@media (max-width: 720px) {
+    nav.lucretia-nav .nav-inner { height: auto; padding: 8px 12px; }
+    nav.lucretia-nav a.nav-link { padding: 4px 8px; font-size: 0.85em; }
+}
+
+/* -- Legacy header tameing ------------------------------------------------- */
+/* Legacy pages have huge inline-styled headers (logo + "The LUCRETIA Project"
+   + page title). Don't hide them; just stop them being absurdly large and add
+   a little breathing room beneath. */
+body > div:first-of-type span[style*="font-size: 24pt"],
+body > div:first-of-type span[style*="font-size:24pt"] {
+    font-size: 1.4em !important;     /* was 24pt */
+    line-height: 1.25;
+}
+/* The page-title <small> inside the 24pt span: bump up so it reads as a title. */
+body > div:first-of-type span[style*="font-size: 24pt"] small,
+body > div:first-of-type span[style*="font-size:24pt"] small {
+    font-size: 1.15em;
+    font-weight: 600;
+    color: #222;
+}
+/* Logo image scaled down */
+body > div:first-of-type img[alt="LucretiaLogo"] {
+    width: 56px !important;
+    height: auto !important;
+}
+/* Trim the visual weight of the LUCRETIA wordmark in the legacy header */
+body > div:first-of-type span[style*="rgb(214, 0, 147)"] {
+    color: var(--lucretia-pink) !important;
+    font-weight: 700;
+}
+/* The legacy header uses a bunch of &nbsp; for indentation -- collapse them
+   visually by reducing their effective width via letter-spacing. */
+body > div:first-of-type {
+    margin-bottom: 1.5em;
+    padding-bottom: 1em;
+    border-bottom: 1px solid var(--rule);
+}
+
+/* -- Footer (author + SLAC logo) tame-up ---------------------------------- */
+img[alt="SLAC-logo"] {
+    width: 80px !important;
+    height: auto !important;
+    opacity: 0.85;
+}
+img[src="SLAC_whitebkgd.jpg"] {
+    margin-top: 1em;
+}
+
+/* -- Index/landing page specifics ----------------------------------------- */
+.hero {
+    padding: 1.5em 0 0.5em;
+    text-align: center;
+}
+.hero h1 {
+    border: none;
+    font-size: 2.3em;
+    margin-bottom: 0.2em;
+}
+.hero h1 .pink { color: var(--lucretia-pink); }
+.hero .tagline {
+    color: var(--muted);
+    font-size: 1.1em;
+    margin-top: 0;
+}
+.hero img.logo {
+    width: 96px;
+    height: auto;
+}
+
+.section-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    gap: 18px;
+    margin: 1.5em 0;
+}
+.section-grid .card {
+    border: 1px solid var(--rule);
+    border-radius: 8px;
+    padding: 18px 20px;
+    background: var(--bg);
+    transition: box-shadow 0.15s, border-color 0.15s, transform 0.15s;
+}
+.section-grid .card:hover {
+    box-shadow: 0 4px 14px rgba(0,0,0,0.07);
+    border-color: var(--lucretia-pink);
+    transform: translateY(-2px);
+}
+.section-grid .card h3 {
+    margin: 0 0 0.4em;
+    font-size: 1.1em;
+}
+.section-grid .card h3 a { color: var(--text); }
+.section-grid .card h3 a:hover { color: var(--lucretia-pink); text-decoration: none; }
+.section-grid .card p {
+    margin: 0;
+    color: var(--muted);
+    font-size: 0.93em;
+}
+
+.toc-list {
+    list-style: none;
+    padding: 0;
+    margin: 1em 0;
+    columns: 2;
+    column-gap: 32px;
+}
+.toc-list li {
+    break-inside: avoid;
+    padding: 3px 0;
+}
+@media (max-width: 600px) {
+    .toc-list { columns: 1; }
+}
+
+/* Footer of the index page */
+.site-footer {
+    margin-top: 3em;
+    padding-top: 1.5em;
+    border-top: 1px solid var(--rule);
+    color: var(--muted);
+    font-size: 0.9em;
+    text-align: center;
+}
+
+/* -- Documentation index: sticky sidebar layout --------------------------- */
+.docs-layout {
+    display: grid;
+    grid-template-columns: 240px minmax(0, 1fr);
+    gap: 36px;
+    align-items: start;
+    margin-top: 1em;
+}
+.docs-sidebar {
+    position: sticky;
+    top: 72px;                                 /* clears the fixed nav */
+    align-self: start;
+    max-height: calc(100vh - 88px);
+    overflow-y: auto;
+    border-right: 1px solid var(--rule);
+    padding-right: 16px;
+    font-size: 0.93em;
+}
+.docs-sidebar .sidebar-title {
+    text-transform: uppercase;
+    letter-spacing: 0.6px;
+    font-size: 0.78em;
+    color: var(--muted);
+    font-weight: 700;
+    margin: 0.2em 0 0.5em;
+}
+.docs-sidebar input.sidebar-filter {
+    width: 100%;
+    padding: 6px 10px;
+    border: 1px solid var(--rule);
+    border-radius: 6px;
+    font: inherit;
+    font-size: 0.92em;
+    margin-bottom: 12px;
+    background: var(--bg);
+    color: var(--text);
+}
+.docs-sidebar input.sidebar-filter:focus {
+    outline: none;
+    border-color: var(--lucretia-pink);
+    box-shadow: 0 0 0 2px rgba(214,0,147,0.12);
+}
+.docs-sidebar ul.sidebar-nav {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+}
+.docs-sidebar ul.sidebar-nav li { margin: 0; }
+.docs-sidebar ul.sidebar-nav a {
+    display: block;
+    padding: 5px 10px;
+    border-radius: 4px;
+    color: var(--text);
+    text-decoration: none;
+    border-left: 3px solid transparent;
+    transition: background 0.12s, border-color 0.12s, color 0.12s;
+}
+.docs-sidebar ul.sidebar-nav a:hover {
+    background: var(--bg-soft);
+    color: var(--lucretia-pink);
+    text-decoration: none;
+}
+.docs-sidebar ul.sidebar-nav a.active {
+    border-left-color: var(--lucretia-pink);
+    background: var(--bg-soft);
+    color: var(--lucretia-pink-dark);
+    font-weight: 600;
+}
+
+.docs-main { min-width: 0; }
+.docs-main h1 {
+    margin-top: 0;
+    font-size: 2em;
+}
+.docs-main .docs-section {
+    margin-top: 2em;
+    padding-top: 1em;
+    scroll-margin-top: 72px;                   /* anchor jumps clear the nav */
+}
+.docs-main .docs-section h2 {
+    margin-top: 0;
+    font-size: 1.35em;
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+}
+.docs-main .docs-section h2 a.section-link {
+    font-size: 0.85em;
+    font-weight: 500;
+    color: var(--muted);
+}
+.docs-main .docs-section h2 a.section-link:hover {
+    color: var(--lucretia-pink);
+}
+.docs-main .docs-section .section-desc {
+    color: var(--muted);
+    margin-top: 0.2em;
+    margin-bottom: 0.8em;
+    font-size: 0.95em;
+}
+.docs-main ul.func-list {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    gap: 4px 16px;
+}
+.docs-main ul.func-list li {
+    margin: 0;
+    padding: 0;
+}
+.docs-main ul.func-list a {
+    display: inline-block;
+    padding: 3px 0;
+    font-family: var(--font-mono);
+    font-size: 0.92em;
+}
+.docs-main ul.func-list li.hidden { display: none; }
+
+/* Hide whole section when its functions are filtered out */
+.docs-section.hidden { display: none; }
+
+@media (max-width: 860px) {
+    .docs-layout {
+        grid-template-columns: 1fr;
+    }
+    .docs-sidebar {
+        position: static;
+        max-height: none;
+        border-right: none;
+        border-bottom: 1px solid var(--rule);
+        padding-right: 0;
+        padding-bottom: 12px;
+        margin-bottom: 12px;
+    }
+}

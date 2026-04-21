@@ -3107,7 +3107,8 @@ classdef DeckTool < handle
         e1 = arrayfun(@(x) BEAMLINE{BEAMLINE{x}.Slices(1)}.EdgeCurvature(1),id(sid)) ;
         e2 = arrayfun(@(x) BEAMLINE{BEAMLINE{x}.Slices(end)}.EdgeCurvature(2),id(sid)) ;
         BL = arrayfun(@(x) sum(arrayfun(@(xx) BEAMLINE{xx}.B(1),BEAMLINE{x}.Slices)),id(sid)) ;
-        B = arrayfun(@(x) sum(arrayfun(@(xx) BEAMLINE{xx}.B(1)/BEAMLINE{xx}.L,BEAMLINE{x}.Slices)),id(sid)) ;
+        B = arrayfun(@(x) sum(arrayfun(@(xx) BEAMLINE{xx}.B(1),BEAMLINE{x}.Slices)),id(sid)) ...
+         ./ arrayfun(@(x) sum(arrayfun(@(xx) BEAMLINE{xx}.L,BEAMLINE{x}.Slices)),id(sid)) ;
         L_this = arrayfun(@(x) sum(arrayfun(@(xx) BEAMLINE{xx}.L,BEAMLINE{x}.Slices)),id(sid)) ;
         names_this = names(sid) ; names_this = regexprep(names_this,'(A|B)$','') ;
         n=0; K1=zeros(1,sum(sid)); g=K1; gl=K1;
@@ -3137,7 +3138,8 @@ classdef DeckTool < handle
         bore = arrayfun(@(x) max(BEAMLINE{x}.aper),id(sid)) + boreoffset ;
         tilt = rad2deg(arrayfun(@(x) BEAMLINE{x}.Tilt,id(sid))) ;
         Brho = physConsts.clight./(arrayfun(@(x) BEAMLINE{x}.P,id(sid)).*1e9);
-        g = arrayfun(@(x) sum(arrayfun(@(xx) BEAMLINE{xx}.B/BEAMLINE{xx}.L,BEAMLINE{x}.Slices)),id(sid)) ;
+        g = arrayfun(@(x) sum(arrayfun(@(xx) BEAMLINE{xx}.B,BEAMLINE{x}.Slices)),id(sid)) ...
+          ./ arrayfun(@(x) sum(arrayfun(@(xx) BEAMLINE{xx}.L,BEAMLINE{x}.Slices)),id(sid));
         gl = arrayfun(@(x) sum(arrayfun(@(xx) BEAMLINE{xx}.B,BEAMLINE{x}.Slices)),id(sid)) ;
         K1 = Brho .* gl ;
         T_QUAD=table(id(sid)',names(sid)',sections(sid),pps(sid),racks(sid),girid(sid),psid(sid),types(sid),L_this(:),P(sid)',S(sid)',bore(:),tilt(:),K1(:),gl(:),g(:),Xi(sid)',Yi(sid)',Zi(sid)',XPi(sid)',YPi(sid)',ZPi(sid)',x2(:),y2(:),z2(:),xp2(:),yp2(:),zp2(:),'VariableNames',...
@@ -3153,7 +3155,8 @@ classdef DeckTool < handle
         bore = arrayfun(@(x) max(BEAMLINE{x}.aper),id(sid)) + boreoffset ;
         tilt = rad2deg(arrayfun(@(x) BEAMLINE{x}.Tilt,id(sid))) ;
         Brho = physConsts.clight./(arrayfun(@(x) BEAMLINE{x}.P,id(sid)).*1e9);
-        g = arrayfun(@(x) sum(arrayfun(@(xx) BEAMLINE{xx}.B/BEAMLINE{xx}.L,BEAMLINE{x}.Slices)),id(sid)) ;
+        g = arrayfun(@(x) sum(arrayfun(@(xx) BEAMLINE{xx}.B,BEAMLINE{x}.Slices)),id(sid)) ...
+          ./ arrayfun(@(x) sum(arrayfun(@(xx) BEAMLINE{xx}.L,BEAMLINE{x}.Slices)),id(sid)) ;
         gl = arrayfun(@(x) sum(arrayfun(@(xx) BEAMLINE{xx}.B,BEAMLINE{x}.Slices)),id(sid)) ;
         K2 = 0.5 .* Brho .* gl ;
         T_SEXT=table(id(sid)',names(sid)',sections(sid),pps(sid),racks(sid),girid(sid),psid(sid),types(sid),L_this(:),P(sid)',S(sid)',bore(:),tilt(:),K2(:),gl(:),g(:),Xi(sid)',Yi(sid)',Zi(sid)',XPi(sid)',YPi(sid)',ZPi(sid)',x2(:),y2(:),z2(:),xp2(:),yp2(:),zp2(:),'VariableNames',...
@@ -3166,7 +3169,8 @@ classdef DeckTool < handle
         L_this = arrayfun(@(x) sum(arrayfun(@(xx) BEAMLINE{xx}.L,BEAMLINE{x}.Slices)),id(sid)) ;
         x2 = arrayfun(@(x) BEAMLINE{BEAMLINE{x}.Slices(end)}.Coordf(1),id(sid)) ; y2 = arrayfun(@(x) BEAMLINE{BEAMLINE{x}.Slices(end)}.Coordf(2),id(sid)) ; z2 = arrayfun(@(x) BEAMLINE{BEAMLINE{x}.Slices(end)}.Coordf(3),id(sid)) ;
         xp2 = arrayfun(@(x) BEAMLINE{BEAMLINE{x}.Slices(end)}.Anglef(1),id(sid)) ; yp2 = arrayfun(@(x) BEAMLINE{BEAMLINE{x}.Slices(end)}.Anglef(2),id(sid)) ; zp2 = arrayfun(@(x) BEAMLINE{BEAMLINE{x}.Slices(end)}.Anglef(3),id(sid)) ;
-        g = arrayfun(@(x) sum(arrayfun(@(xx) BEAMLINE{xx}.B/BEAMLINE{xx}.L,BEAMLINE{x}.Slices)),id(sid)) ;
+        g = arrayfun(@(x) sum(arrayfun(@(xx) BEAMLINE{xx}.B,BEAMLINE{x}.Slices)),id(sid)) ...
+          ./ arrayfun(@(x) sum(arrayfun(@(xx) BEAMLINE{xx}.L,BEAMLINE{x}.Slices)),id(sid)) ;
         gl = arrayfun(@(x) sum(arrayfun(@(xx) BEAMLINE{xx}.B,BEAMLINE{x}.Slices)),id(sid)) ;
         Brho = physConsts.clight./(arrayfun(@(x) BEAMLINE{x}.P,id(sid)).*1e9);
         KS = 0.5 .* Brho .* gl ;

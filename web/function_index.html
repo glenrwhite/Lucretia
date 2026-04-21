@@ -1,251 +1,313 @@
-<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN">
-<html>
+<!DOCTYPE html>
+<html lang="en">
 <head>
-  <meta http-equiv="content-type"
- content="text/html; charset=ISO-8859-1">
-  <title>Lucretia: Script and Function Index</title>
-  <meta name="author" content="Peter Tenenbaum">
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Lucretia: Script, Function and Class Documentation</title>
+    <meta name="author" content="Peter Tenenbaum">
+    <link rel="stylesheet" href="lucretia.css">
 </head>
-<body>
-<div style="text-align: center;"><a
- href="http://www.slac.stanford.edu/accel/ilc/codes/Lucretia/"><span
- style="font-size: 24pt;"><img alt="LucretiaLogo"
- title="Lucretia home page" src="LucretiaLogo.gif"
- style="border: 0px solid ; width: 80px; height: 90px;" align="right"
- hspace="20"></span></a><span style="font-size: 24pt;"><br>
-</span>
-<div style="text-align: center;"><span style="font-size: 24pt;">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
-The <span style="color: rgb(214, 0, 147);">LUCRETIA</span>
-Project</span><br>
+<body class="wide">
+
+<nav class="lucretia-nav">
+  <div class="nav-inner">
+    <a class="nav-brand" href="index.html"><img src="LucretiaLogo.gif" alt="" style="width:22px;height:auto;"><span>LU<span class="pink">CRETIA</span></span></a>
+    <a class="nav-link" href="index.html">Home</a>
+    <a class="nav-link" href="overview.html">Overview</a>
+    <a class="nav-link" href="setup.html">Setup</a>
+    <a class="nav-link" href="downloads.html">Downloads</a>
+    <a class="nav-link" href="examples.html">Examples</a>
+    <a class="nav-link active" href="function_index.html">Documentation</a>
+    <a class="nav-link" href="gui.html">GUI</a>
+    <a class="nav-link" href="whatsnew.html">What's New</a>
+  </div>
+</nav>
+
+<h1>Documentation</h1>
+<p>
+    A wide variety of scripts, functions and classes have been written for use
+    in Lucretia, organised here by category. Every function is also
+    self-documented &mdash; type <code>help <em>functionname</em></code> at the
+    Matlab prompt to see its description and call signature. For classes, type
+    <code>doc <em>classname</em></code> for full documentation of public
+    methods and properties.
+</p>
+
+<div class="docs-layout">
+
+    <aside class="docs-sidebar" aria-label="Categories">
+        <p class="sidebar-title">Categories</p>
+        <input class="sidebar-filter" type="search" placeholder="Filter functions&hellip;" aria-label="Filter functions">
+        <ul class="sidebar-nav" id="sidebar-nav">
+            <li><a href="#status">Function Status &amp; Messages</a></li>
+            <li><a href="#tracking">Tracking</a></li>
+            <li><a href="#rmat">R-matrix &amp; Operations</a></li>
+            <li><a href="#twiss">Twiss Parameter Calculation</a></li>
+            <li><a href="#lattice-generation">Lattice Generation</a></li>
+            <li><a href="#lattice-verification">Lattice Verification</a></li>
+            <li><a href="#beam-generation">Beam Generation</a></li>
+            <li><a href="#momentum-profile">Momentum Profile Management</a></li>
+            <li><a href="#errors">Errors &amp; Misalignments</a></li>
+            <li><a href="#tuning">Tuning &amp; Analysis</a></li>
+            <li><a href="#gui">Graphical User Interface</a></li>
+            <li><a href="#more">Distributed, Ground Motion &amp; Floodland</a></li>
+        </ul>
+    </aside>
+
+    <main class="docs-main" id="docs-main">
+
+        <section class="docs-section" id="status" data-cat="Function Status &amp; Messages">
+            <h2><a href="function_status.html">Function Status &amp; Error Messages</a> <a class="section-link" href="#status" title="Permalink">#</a></h2>
+            <p class="section-desc">Status / message-stack helpers used by the rest of the toolkit.</p>
+            <ul class="func-list">
+                <li><a href="function_status.html#InitializeMessageStack">InitializeMessageStack</a></li>
+                <li><a href="function_status.html#AddMessageToStack">AddMessageToStack</a></li>
+                <li><a href="function_status.html#AddStackToStack">AddStackToStack</a></li>
+                <li><a href="function_status.html#AddStackToMasterStack">AddStackToMasterStack</a></li>
+            </ul>
+        </section>
+
+        <section class="docs-section" id="tracking" data-cat="Tracking">
+            <h2><a href="tracking.html">Tracking</a> <a class="section-link" href="#tracking" title="Permalink">#</a></h2>
+            <p class="section-desc">Push beams through the lattice, single- or multi-bunch, serial or parallel.</p>
+            <ul class="func-list">
+                <li><a href="tracking.html#TrackThru">TrackThru</a></li>
+                <li><a href="tracking.html#Track">Track</a></li>
+            </ul>
+        </section>
+
+        <section class="docs-section" id="rmat" data-cat="R-matrix and Operations">
+            <h2><a href="rmat.html">R-matrix &amp; Operations</a> <a class="section-link" href="#rmat" title="Permalink">#</a></h2>
+            <p class="section-desc">First-order transfer matrix calculation between any two BEAMLINE elements.</p>
+            <ul class="func-list">
+                <li><a href="rmat.html#GetRmats">GetRmats</a></li>
+                <li><a href="rmat.html#RmatAtoB">RmatAtoB</a></li>
+            </ul>
+        </section>
+
+        <section class="docs-section" id="twiss" data-cat="Twiss Parameter Calculation">
+            <h2><a href="twiss.html">Twiss Parameter Calculation</a> <a class="section-link" href="#twiss" title="Permalink">#</a></h2>
+            <p class="section-desc">Propagate Twiss parameters and dispersions through the lattice.</p>
+            <ul class="func-list">
+                <li><a href="twiss.html#GetTwiss">GetTwiss</a></li>
+            </ul>
+        </section>
+
+        <section class="docs-section" id="lattice-generation" data-cat="Lattice Generation">
+            <h2><a href="lattice_generation.html">Lattice Generation</a> <a class="section-link" href="#lattice-generation" title="Permalink">#</a></h2>
+            <p class="section-desc">Build BEAMLINE arrays, element structures, and KLYSTRON / PS / GIRDER assignments.</p>
+            <ul class="func-list">
+                <li><a href="lattice_generation.html#AddBPMToLcav">AddBPMToLcav</a></li>
+                <li><a href="lattice_generation.html#AddMoverToGirder">AddMoverToGirder</a></li>
+                <li><a href="lattice_generation.html#AssignToGirder">AssignToGirder</a></li>
+                <li><a href="lattice_generation.html#AssignToKlystron">AssignToKlystron</a></li>
+                <li><a href="lattice_generation.html#AssignToPS">AssignToPS</a></li>
+                <li><a href="lattice_generation.html#BPMStruc">BPMStruc</a></li>
+                <li><a href="lattice_generation.html#CollStruc">CollStruc</a></li>
+                <li><a href="lattice_generation.html#ConvertGirderToLong">ConvertGirderToLong</a></li>
+                <li><a href="lattice_generation.html#CoordStruc">CoordStruc</a></li>
+                <li><a href="lattice_generation.html#CorrectorStruc">CorrectorStruc</a></li>
+                <li><a href="lattice_generation.html#DrifStruc">DrifStruc</a></li>
+                <li><a href="lattice_generation.html#DualPSGradientBend">DualPSGradientBend</a></li>
+                <li><a href="lattice_generation.html#findcells">findcells</a></li>
+                <li><a href="lattice_generation.html#GetIndicesBySPosition">GetIndicesBySPosition</a></li>
+                <li><a href="lattice_generation.html#GetKlystronsInRange">GetKlystronsInRange</a></li>
+                <li><a href="lattice_generation.html#GetPSInRange">GetPSInRange</a></li>
+                <li><a href="lattice_generation.html#GirderStruc">GirderStruc</a></li>
+                <li><a href="lattice_generation.html#InstStruc">InstStruc</a></li>
+                <li><a href="lattice_generation.html#MarkerStruc">MarkerStruc</a></li>
+                <li><a href="lattice_generation.html#MovePhysicsVarsToKlystron">MovePhysicsVarsToKlystron</a></li>
+                <li><a href="lattice_generation.html#MovePhysicsVarsToPS">MovePhysicsVarsToPS</a></li>
+                <li><a href="lattice_generation.html#MultStruc">MultStruc</a></li>
+                <li><a href="lattice_generation.html#OctuStruc">OctuStruc</a></li>
+                <li><a href="lattice_generation.html#ParseFrequencyDomainTLR">ParseFrequencyDomainTLR</a></li>
+                <li><a href="lattice_generation.html#ParseSRWF">ParseSRWF</a></li>
+                <li><a href="lattice_generation.html#QuadStruc">QuadStruc</a></li>
+                <li><a href="lattice_generation.html#RenormalizeKlystron">RenormalizeKlystron</a></li>
+                <li><a href="lattice_generation.html#RenormalizePS">RenormalizePS</a></li>
+                <li><a href="lattice_generation.html#RFStruc">RFStruc</a></li>
+                <li><a href="lattice_generation.html#SBendStruc">SBendStruc</a></li>
+                <li><a href="lattice_generation.html#SetElementBlocks">SetElementBlocks</a></li>
+                <li><a href="lattice_generation.html#SetElementSlices">SetElementSlices</a></li>
+                <li><a href="lattice_generation.html#SetFloorCoordinates">SetFloorCoordinates</a></li>
+                <li><a href="lattice_generation.html#SetGirderByBlock">SetGirderByBlock</a></li>
+                <li><a href="lattice_generation.html#SetGirderBySPos">SetGirderBySPos</a></li>
+                <li><a href="lattice_generation.html#SetIndependentPS">SetIndependentPS</a></li>
+                <li><a href="lattice_generation.html#SetKlystrons">SetKlystrons</a></li>
+                <li><a href="lattice_generation.html#SetSPositions">SetSPositions</a></li>
+                <li><a href="lattice_generation.html#SetTrackFlags">SetTrackFlags</a></li>
+                <li><a href="lattice_generation.html#SextStruc">SextStruc</a></li>
+                <li><a href="lattice_generation.html#SolenoidStruc">SolenoidStruc</a></li>
+                <li><a href="lattice_generation.html#XSIFToLucretia">XSIFToLucretia</a></li>
+            </ul>
+        </section>
+
+        <section class="docs-section" id="lattice-verification" data-cat="Lattice Verification">
+            <h2><a href="lattice_verification.html">Lattice Verification</a> <a class="section-link" href="#lattice-verification" title="Permalink">#</a></h2>
+            <p class="section-desc">Sanity-check the in-memory lattice for consistency and required fields.</p>
+            <ul class="func-list">
+                <li><a href="lattice_verification.html#VerifyLattice">VerifyLattice</a></li>
+            </ul>
+        </section>
+
+        <section class="docs-section" id="beam-generation" data-cat="Beam Generation">
+            <h2><a href="beam_generation.html">Beam Generation</a> <a class="section-link" href="#beam-generation" title="Permalink">#</a></h2>
+            <p class="section-desc">Construct beam structures with various 6D distributions.</p>
+            <ul class="func-list">
+                <li><a href="beam_generation.html#CheckBeamMomenta">CheckBeamMomenta</a></li>
+                <li><a href="beam_generation.html#CoupledTwissFromInitial">CoupledTwissFromInitial</a></li>
+                <li><a href="beam_generation.html#CreateBlankBeam">CreateBlankBeam</a></li>
+                <li><a href="beam_generation.html#InitCondStruc">InitCondStruc</a></li>
+                <li><a href="beam_generation.html#MakeBeam6DGauss">MakeBeam6DGauss</a></li>
+                <li><a href="beam_generation.html#MakeBeam6DSparse">MakeBeam6DSparse</a></li>
+                <li><a href="beam_generation.html#MakeBeamPZGauss">MakeBeamPZGauss</a></li>
+                <li><a href="beam_generation.html#MakeBeamPZGrid">MakeBeamPZGrid</a></li>
+            </ul>
+        </section>
+
+        <section class="docs-section" id="momentum-profile" data-cat="Momentum Profile Management">
+            <h2><a href="momentum_profile.html">Momentum Profile Management</a> <a class="section-link" href="#momentum-profile" title="Permalink">#</a></h2>
+            <p class="section-desc">Compute and update the design / actual momentum profile of the beamline.</p>
+            <ul class="func-list">
+                <li><a href="momentum_profile.html#CalculateSR">CalculateSR</a></li>
+                <li><a href="momentum_profile.html#ComputeMomentumProfile">ComputeMomentumProfile</a></li>
+                <li><a href="momentum_profile.html#SetDesignMomentumProfile">SetDesignMomentumProfile</a></li>
+                <li><a href="momentum_profile.html#UpdateKlystronStatus">UpdateKlystronStatus</a></li>
+                <li><a href="momentum_profile.html#UpdateMomentumProfile">UpdateMomentumProfile</a></li>
+            </ul>
+        </section>
+
+        <section class="docs-section" id="errors" data-cat="Errors and Misalignments">
+            <h2><a href="lattice_errors.html">Errors &amp; Misalignments</a> <a class="section-link" href="#errors" title="Permalink">#</a></h2>
+            <p class="section-desc">Apply Gaussian-distributed errors to groups of elements.</p>
+            <ul class="func-list">
+                <li><a href="lattice_errors.html#ErrorGroupGaussErrors">ErrorGroupGaussErrors</a></li>
+                <li><a href="lattice_errors.html#MakeErrorGroup">MakeErrorGroup</a></li>
+                <li><a href="lattice_errors.html#SetGaussianErrors">SetGaussianErrors</a></li>
+            </ul>
+        </section>
+
+        <section class="docs-section" id="tuning" data-cat="Tuning and Analysis">
+            <h2><a href="tuning_analysis.html">Tuning &amp; Analysis</a> <a class="section-link" href="#tuning" title="Permalink">#</a></h2>
+            <p class="section-desc">Plotting, knobs, matching, and emittance/orbit analysis tools.</p>
+            <ul class="func-list">
+                <li><a href="tuning_analysis.html#AddMagnetPlot">AddMagnetPlot</a></li>
+                <li><a href="tuning_analysis.html#BeamHistogram">BeamHistogram</a></li>
+                <li><a href="tuning_analysis.html#BPMZPlot">BPMZPlot</a></li>
+                <li><a href="tuning_analysis.html#ComputeSRIntegrals">ComputeSRIntegrals</a></li>
+                <li><a href="tuning_analysis.html#GetBeamPars">GetBeamPars</a></li>
+                <li><a href="tuning_analysis.html#GetBPMvsS">GetBPMvsS</a></li>
+                <li><a href="tuning_analysis.html#GetNEmitFromBeam">GetNEmitFromBeam</a></li>
+                <li><a href="tuning_analysis.html#GetNEmitFromBPMData">GetNEmitFromBPMData</a></li>
+                <li><a href="tuning_analysis.html#GetNEmitFromSigmaMatrix">GetNEmitFromSigmaMatrix</a></li>
+                <li><a href="tuning_analysis.html#GetTruePhase">GetTruePhase</a></li>
+                <li><a href="tuning_analysis.html#GetTrueStrength">GetTrueStrength</a></li>
+                <li><a href="tuning_analysis.html#GetTrueVoltage">GetTrueVoltage</a></li>
+                <li><a href="tuning_analysis.html#IncrementMultiKnob">IncrementMultiKnob</a></li>
+                <li><a href="tuning_analysis.html#KlystronTrim">KlystronTrim</a></li>
+                <li><a href="tuning_analysis.html#MakeMultiKnob">MakeMultiKnob</a></li>
+                <li><a href="tuning_analysis.html#Match">Match</a></li>
+                <li><a href="tuning_analysis.html#MoverTrim">MoverTrim</a></li>
+                <li><a href="tuning_analysis.html#PlotOrbit">PlotOrbit</a></li>
+                <li><a href="tuning_analysis.html#PlotTwiss">PlotTwiss</a></li>
+                <li><a href="tuning_analysis.html#PSTrim">PSTrim</a></li>
+                <li><a href="tuning_analysis.html#RestoreMultiKnob">RestoreMultiKnob</a></li>
+                <li><a href="tuning_analysis.html#ReturnMatchedTwiss">ReturnMatchedTwiss</a></li>
+                <li><a href="tuning_analysis.html#SetMultiKnob">SetMultiKnob</a></li>
+            </ul>
+        </section>
+
+        <section class="docs-section" id="gui" data-cat="Graphical User Interface">
+            <h2><a href="gui.html">Graphical User Interface</a> <a class="section-link" href="#gui" title="Permalink">#</a></h2>
+            <p class="section-desc">Interactive App Designer GUI for inspecting BEAMLINE arrays.</p>
+            <ul class="func-list">
+                <li><a href="gui.html#BeamlineViewer">BeamlineViewer</a></li>
+            </ul>
+        </section>
+
+        <section class="docs-section" id="more" data-cat="Distributed Ground Motion Floodland">
+            <h2>Distributed, Ground Motion &amp; Floodland <a class="section-link" href="#more" title="Permalink">#</a></h2>
+            <p class="section-desc">Companion modules with their own dedicated documentation pages.</p>
+            <ul class="func-list">
+                <li><a href="Distributed.htm">Distributed Lucretia</a></li>
+                <li><a href="GroundMotion.htm">Ground Motion</a></li>
+                <li><a href="Floodland.htm">Floodland</a></li>
+            </ul>
+        </section>
+
+    </main>
 </div>
-<span style="font-size: 24pt;"><br>
-<small>Script, Function and Class Documentation<br>
-<br>
-</small></span>
-<div style="text-align: left;">A wide variety of scripts, functions and classes
-have been written for use in Lucretia, in a number of categories.&nbsp;
-Note that all functions are somewhat self-documented, and the
-documentation can be seen via the Matlab help operation:&nbsp; type
-"help functionname" at the Matlab prompt. Additionally, classes have further 
-	documentation which can be accessed by typing &quot;doc classname&quot;. This gives 
-	more documentation on the public methods and properties of the class.<br>
-<br>
-<a href="function_status.html">Function Status and Error Messages:</a><br>
-&nbsp;&nbsp;&nbsp; &nbsp;&nbsp; <a
- href="function_status.html#InitializeMessageStack">InitializeMessageStack</a><br>
-&nbsp;&nbsp;&nbsp; &nbsp;&nbsp; <a
- href="function_status.html#AddMessageToStack">AddMessageToStack</a><br>
-&nbsp;&nbsp;&nbsp; &nbsp;&nbsp; <a
- href="function_status.html#AddStackToStack">AddStackToStack</a><br>
-&nbsp;&nbsp;&nbsp; &nbsp;&nbsp; <a
- href="function_status.html#AddStackToMasterStack">AddStackToMasterStack</a><br>
-<br>
-<a href="tracking.html">Tracking:</a><br>
-&nbsp;&nbsp;&nbsp; &nbsp;&nbsp;<a href="tracking.html#TrackThru">
-TrackThru</a><br>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; Track<br>
-<br>
-<a href="rmat.html">R-matrix and Operations:</a><br>
-&nbsp;&nbsp;&nbsp; &nbsp;&nbsp; <a href="rmat.html#GetRmats">GetRmats</a><br>
-&nbsp;&nbsp;&nbsp; &nbsp;&nbsp; <a href="rmat.html#RmatAtoB">RmatAtoB</a><br>
-<br>
-<a href="twiss.html">Twiss Parameter Calculation</a>:<br>
-&nbsp;&nbsp;&nbsp; &nbsp;&nbsp; <a href="twiss.html#GetTwiss">GetTwiss</a><br>
-<br>
-<a href="lattice_generation.html">Lattice Generation:</a><br>
-&nbsp;&nbsp;&nbsp; &nbsp;&nbsp; <a
- href="lattice_generation.html#AddBPMToLcav">AddBPMToLcav</a><br>
-&nbsp;&nbsp;&nbsp; &nbsp;&nbsp; <a
- href="lattice_generation.html#AddMoverToGirder">AddMoverToGirder</a><br>
-&nbsp;&nbsp;&nbsp; &nbsp;&nbsp; <a
- href="lattice_generation.html#AssignToGirder">AssignToGirder</a><br>
-&nbsp;&nbsp;&nbsp; &nbsp;&nbsp; <a
- href="lattice_generation.html#AssignToKlystron">AssignToKlystron</a><br>
-&nbsp;&nbsp;&nbsp; &nbsp;&nbsp; <a
- href="lattice_generation.html#AssignToPS">AssignToPS</a><br>
-&nbsp;&nbsp;&nbsp; &nbsp;&nbsp; <a
- href="lattice_generation.html#BPMStruc">BPMStruc</a><br>
-&nbsp;&nbsp;&nbsp; &nbsp;&nbsp; <a
- href="lattice_generation.html#CollStruc">CollStruc</a><br>
-&nbsp;&nbsp;&nbsp; &nbsp;&nbsp; <a
- href="lattice_generation.html#CoordStruc">CoordStruc</a><br>
-&nbsp;&nbsp;&nbsp; &nbsp;&nbsp; <a
- href="lattice_generation.html#ConvertGirderToLong">ConvertGirderToLong</a><br>
-&nbsp;&nbsp;&nbsp; &nbsp;&nbsp; <a
- href="lattice_generation.html#CorrectorStruc">CorrectorStruc</a><br>
-&nbsp;&nbsp;&nbsp; &nbsp;&nbsp; <a
- href="lattice_generation.html#DrifStruc">DrifStruc</a><br>
-&nbsp;&nbsp;&nbsp; &nbsp;&nbsp; <a
- href="lattice_generation.html#DualPSGradientBend">DualPSGradientBend</a><br>
-&nbsp;&nbsp;&nbsp; &nbsp;&nbsp; <a
- href="lattice_generation.html#findcells">findcells</a><br>
-&nbsp;&nbsp;&nbsp; &nbsp;&nbsp; <a
- href="lattice_generation.html#GetIndicesBySPosition">GetIndicesBySPosition</a><br>
-&nbsp;&nbsp;&nbsp; &nbsp;&nbsp; <a
- href="lattice_generation.html#GetKlystronsInRange">GetKlystronsInRange</a><br>
-&nbsp;&nbsp;&nbsp; &nbsp;&nbsp; <a
- href="lattice_generation.html#GetPSInRange">GetPSInRange</a><br>
-&nbsp;&nbsp;&nbsp; &nbsp;&nbsp; <a
- href="lattice_generation.html#GirderStruc">GirderStruc</a><br>
-&nbsp;&nbsp;&nbsp; &nbsp;&nbsp; <a
- href="lattice_generation.html#InstStruc">InstStruc</a><br>
-&nbsp;&nbsp;&nbsp; &nbsp;&nbsp; <a
- href="lattice_generation.html#MarkerStruc">MarkerStruc</a><br>
-&nbsp;&nbsp;&nbsp; &nbsp;&nbsp; <a
- href="lattice_generation.html#MovePhysicsVarsToKlystron">MovePhysicsVarsToKlystron</a><br>
-&nbsp;&nbsp;&nbsp; &nbsp;&nbsp; <a
- href="lattice_generation.html#MovePhysicsVarsToPS">MovePhysicsVarsToPS</a><br>
-&nbsp;&nbsp;&nbsp; &nbsp;&nbsp; <a
- href="lattice_generation.html#MultStruc">MultStruc</a><br>
-&nbsp;&nbsp;&nbsp; &nbsp;&nbsp; <a
- href="lattice_generation.html#OctuStruc">OctuStruc</a><br>
-&nbsp;&nbsp;&nbsp; &nbsp;&nbsp; <a
- href="lattice_generation.html#ParseFrequencyDomainTLR">ParseFrequencyDomainTLR</a><br>
-&nbsp;&nbsp;&nbsp; &nbsp;&nbsp; <a
- href="lattice_generation.html#ParseSRWF">ParseSRWF</a><br>
-&nbsp;&nbsp;&nbsp; &nbsp;&nbsp; <a
- href="lattice_generation.html#QuadStruc">QuadStruc</a><br>
-&nbsp;&nbsp;&nbsp; &nbsp;&nbsp; <a
- href="lattice_generation.html#RenormalizeKlystron">RenormalizeKlystron</a><br>
-&nbsp;&nbsp;&nbsp; &nbsp;&nbsp; <a
- href="lattice_generation.html#RenormalizePS">RenormalizePS</a><br>
-&nbsp;&nbsp;&nbsp; &nbsp;&nbsp; <a
- href="lattice_generation.html#RFStruc">RFStruc</a><br>
-&nbsp;&nbsp;&nbsp; &nbsp;&nbsp; <a
- href="lattice_generation.html#SBendStruc">SBendStruc</a><br>
-&nbsp;&nbsp;&nbsp; &nbsp;&nbsp; <a
- href="lattice_generation.html#SetElementBlocks">SetElementBlocks</a><br>
-&nbsp;&nbsp;&nbsp; &nbsp;&nbsp; <a
- href="lattice_generation.html#SetElementSlices">SetElementSlices</a><br>
-&nbsp;&nbsp;&nbsp; &nbsp;&nbsp; <a
- href="lattice_generation.html#SetFloorCoordinates">SetFloorCoordinates</a><br>
-&nbsp;&nbsp;&nbsp; &nbsp;&nbsp; <a
- href="lattice_generation.html#SetGirderByBlock">SetGirderByBlock</a><br>
-&nbsp;&nbsp;&nbsp; &nbsp;&nbsp; <a
- href="lattice_generation.html#SetGirderBySPos">SetGirderBySPos</a><br>
-&nbsp;&nbsp;&nbsp; &nbsp;&nbsp; <a
- href="lattice_generation.html#SetIndependentPS">SetIndependentPS</a><br>
-&nbsp;&nbsp;&nbsp; &nbsp;&nbsp; <a
- href="lattice_generation.html#SetKlystrons">SetKlystrons</a><br>
-&nbsp;&nbsp;&nbsp; &nbsp;&nbsp; <a
- href="lattice_generation.html#SetSPositions">SetSPositions</a><br>
-&nbsp;&nbsp;&nbsp; &nbsp;&nbsp; <a
- href="lattice_generation.html#SetTrackFlags">SetTrackFlags</a><br>
-&nbsp;&nbsp;&nbsp; &nbsp;&nbsp; <a
- href="lattice_generation.html#SextStruc">SextStruc</a><br>
-&nbsp;&nbsp;&nbsp; &nbsp;&nbsp; <a
- href="lattice_generation#SolenoidStruc">SolenoidStruc</a><br>
-&nbsp;&nbsp;&nbsp; &nbsp;&nbsp; <a
- href="lattice_generation.html#XSIFToLucretia">XSIFToLucretia</a><br>
-<br>
-<a href="lattice_verification.html">Lattice Verification:</a><br>
-&nbsp;&nbsp;&nbsp; &nbsp;&nbsp; <a
- href="lattice_verification.html#VerifyLattice">VerifyLattice</a><br>
-<br>
-<a href="beam_generation.html">Beam Generation</a><br>
-&nbsp;&nbsp;&nbsp; &nbsp;&nbsp; <a
- href="beam_generation.html#CheckBeamMomenta">CheckBeamMomenta</a><br>
-&nbsp;&nbsp;&nbsp; &nbsp;&nbsp; <a
- href="beam_generation.html#CoupledTwissFromInitial">CoupledTwissFromInitial</a><br>
-&nbsp;&nbsp;&nbsp; &nbsp;&nbsp; <a
- href="beam_generation.html#CreateBlankBeam">CreateBlankBeam</a><br>
-&nbsp;&nbsp;&nbsp; &nbsp;&nbsp; <a
- href="beam_generation.html#InitCondStruc">InitCondStruc</a><br>
-&nbsp;&nbsp;&nbsp; &nbsp;&nbsp; <a
- href="beam_generation.html#MakeBeam6DGauss">MakeBeam6DGauss</a><br>
-&nbsp;&nbsp;&nbsp; &nbsp;&nbsp; <a
- href="beam_generation.html#MakeBeam6DSparse">MakeBeam6DSparse</a><br>
-&nbsp;&nbsp;&nbsp; &nbsp;&nbsp; <a
- href="beam_generation.html#MakeBeamPZGauss">MakeBeamPZGauss</a><br>
-&nbsp;&nbsp;&nbsp; &nbsp;&nbsp; <a
- href="beam_generation.html#MakeBeamPZGrid">MakeBeamPZGrid</a><br>
-<br>
-<a href="momentum_profile.html">Momentum Profile Management:</a><br>
-&nbsp;&nbsp;&nbsp; &nbsp;&nbsp; <a
- href="momentum_profile.html#CalculateSR">CalculateSR</a><br>
-&nbsp;&nbsp;&nbsp; &nbsp;&nbsp; <a
- href="momentum_profile.html#ComputeMomentumProfile">ComputeMomentumProfile</a><br>
-&nbsp;&nbsp;&nbsp; &nbsp;&nbsp; <a
- href="momentum_profile.html#SetDesignMomentumProfile">SetDesignMomentumProfile</a><br>
-&nbsp;&nbsp;&nbsp; &nbsp;&nbsp; <a
- href="momentum_profile.html#UpdateKlystronStatus">UpdateKlystronStatus</a><br>
-&nbsp;&nbsp;&nbsp; &nbsp;&nbsp; <a
- href="momentum_profile.html#UpdateMomentumProfile">UpdateMomentumProfile</a><br>
-<br>
-<a href="lattice_errors.html">Errors and Misalignments:</a><br>
-&nbsp;&nbsp;&nbsp; &nbsp;&nbsp; <a
- href="lattice_errors.html#ErrorGroupGaussErrors">ErrorGroupGaussErrors</a><br>
-&nbsp;&nbsp;&nbsp; &nbsp;&nbsp; <a
- href="lattice_errors.html#MakeErrorGroup">MakeErrorGroup</a><br>
-&nbsp;&nbsp;&nbsp; &nbsp;&nbsp; <a
- href="lattice_errors.html#SetGaussianErrors">SetGaussianErrors</a><br>
-</div>
-<div style="text-align: left;">
-<div style="text-align: center;">
-<div style="text-align: left;">
-<div style="text-align: center;">
-<div style="text-align: left;"><br>
-<a href="tuning_analysis.html">Tuning and Analysis:</a><br>
-&nbsp;&nbsp;&nbsp; &nbsp;&nbsp; <a
- href="tuning_analysis.html#AddMagnetPlot">AddMagnetPlot</a><br>
-&nbsp;&nbsp;&nbsp; &nbsp;&nbsp; <a
- href="tuning_analysis.html#BeamHistogram">BeamHistogram</a><br>
-&nbsp;&nbsp;&nbsp; &nbsp;&nbsp; <a href="tuning_analysis.html#BPMZPlot">BPMZPlot</a><br>
-&nbsp;&nbsp;&nbsp; &nbsp;&nbsp; <a
- href="tuning_analysis.html#ComputeSRIntegrals">ComputeSRIntegrals</a><br>
-&nbsp;&nbsp;&nbsp; &nbsp;&nbsp; <a
- href="tuning_analysis.html#GetBeamPars">GetBeamPars</a><br>
-&nbsp;&nbsp;&nbsp; &nbsp;&nbsp; <a
- href="tuning_analysis.html#GetBPMvsS">GetBPMvsS</a><br>
-&nbsp;&nbsp;&nbsp; &nbsp;&nbsp; <a
- href="tuning_analysis.html#GetNEmitFromBeam">GetNEmitFromBeam</a><br>
-&nbsp;&nbsp;&nbsp; &nbsp;&nbsp; <a
- href="tuning_analysis.html#GetNEmitFromBPMData">GetNEmitFromBPMData</a><br>
-&nbsp;&nbsp;&nbsp; &nbsp;&nbsp; <a
- href="tuning_analysis.html#GetNEmitFromSigmaMatrix">GetNEmitFromSigmaMatrix</a><br>
-&nbsp;&nbsp;&nbsp; &nbsp;&nbsp; <a
- href="tuning_analysis.html#GetTruePhase">GetTruePhase</a><br>
-&nbsp;&nbsp;&nbsp; &nbsp;&nbsp; <a
- href="tuning_analysis.html#GetTrueStrength">GetTrueStrength</a><br>
-&nbsp;&nbsp;&nbsp; &nbsp;&nbsp; <a
- href="tuning_analysis.html#GetTrueVoltave">GetTrueVoltage</a><br>
-&nbsp;&nbsp;&nbsp; &nbsp;&nbsp; <a
- href="tuning_analysis.html#IncrementMultiKnob">IncrementMultiKnob</a><br>
-&nbsp;&nbsp;&nbsp; &nbsp;&nbsp; <a
- href="tuning_analysis.html#KlystronTrim">KlystronTrim</a><br>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; 
-	Match<br>
-&nbsp;&nbsp;&nbsp; &nbsp;&nbsp; <a
- href="tuning_analysis.html#MakeMultiKnob">MakeMultiKnob</a><br>
-&nbsp;&nbsp;&nbsp; &nbsp;&nbsp; <a
- href="tuning_analysis.html#MoverTrim">MoverTrim</a><br>
-&nbsp;&nbsp;&nbsp; &nbsp;&nbsp; <a
- href="tuning_analysis.html#PlotOrbit">PlotOrbit</a><br>
-&nbsp;&nbsp;&nbsp; &nbsp;&nbsp; <a
- href="tuning_analysis.html#PlotTwiss">PlotTwiss</a><br>
-&nbsp;&nbsp;&nbsp; &nbsp;&nbsp; <a href="tuning_analysis.html#PSTrim">PSTrim</a><br>
-&nbsp;&nbsp;&nbsp; &nbsp;&nbsp; <a
- href="tuning_analysis.html#RestoreMultiKnob">RestoreMultiKnob</a><br>
-&nbsp;&nbsp;&nbsp; &nbsp;&nbsp; <a
- href="tuning_analysis.html#ReturnMatchedTwiss">ReturnMatchedTwiss</a><br>
-&nbsp;&nbsp;&nbsp; &nbsp;&nbsp; <a
- href="tuning_analysis.html#SetMultiKnob">SetMultiKnob</a><br>
-<br>
-<a href="gui.html">Graphical User Interface:</a><br>
-&nbsp;&nbsp;&nbsp; &nbsp;&nbsp; <a href="gui.html#BeamlineViewer">BeamlineViewer</a><br>
-	<br>Distributed Lucretia<br><br>Ground Motion<br><br>Floodland<br>
-<br>
-<a href="http://www.slac.stanford.edu/owner/quarkpt">quarkpt</a>
-<a
- href="http://www.slac.stanford.edu/owner/whitegr">whitegr</a><br>
-	21-Sept-2011<br>
-<a href="http://www.slac.stanford.edu/detailed.html"><img
- src="SLAC_whitebkgd.jpg" title="Return to SLAC Detailed Home Page"
- alt="SLAC-logo" style="border: 0px solid ; width: 100px; height: 39px;"
- align="right"></a><br>
-</div>
-</div>
-</div>
-</div>
-</div>
-</div>
+
+<footer class="site-footer">
+    <p>
+        Maintained by
+        <a href="http://www.slac.stanford.edu/owner/quarkpt">quarkpt</a> &amp;
+        <a href="http://www.slac.stanford.edu/owner/whitegr">whitegr</a>
+        &nbsp;&middot;&nbsp;
+        Source on <a href="https://github.com/slaclab/Lucretia.git">GitHub</a>
+        &nbsp;&middot;&nbsp;
+        <a href="http://www.slac.stanford.edu/detailed.html">SLAC</a>
+    </p>
+</footer>
+
+<script>
+(function () {
+    var sidebarLinks = document.querySelectorAll('#sidebar-nav a');
+    var sections = document.querySelectorAll('.docs-section');
+    var filterInput = document.querySelector('.sidebar-filter');
+
+    // -- Highlight the sidebar link of the section currently in view ------
+    function setActive(id) {
+        sidebarLinks.forEach(function (a) {
+            if (a.getAttribute('href') === '#' + id) {
+                a.classList.add('active');
+            } else {
+                a.classList.remove('active');
+            }
+        });
+    }
+
+    if ('IntersectionObserver' in window) {
+        var observer = new IntersectionObserver(function (entries) {
+            // Pick the entry closest to the top of the viewport that is intersecting
+            var visible = entries.filter(function (e) { return e.isIntersecting; });
+            if (visible.length === 0) return;
+            visible.sort(function (a, b) { return a.boundingClientRect.top - b.boundingClientRect.top; });
+            setActive(visible[0].target.id);
+        }, {
+            rootMargin: '-80px 0px -60% 0px',
+            threshold: 0
+        });
+        sections.forEach(function (s) { observer.observe(s); });
+    }
+
+    // Set initial active link from hash, or first section
+    var initial = (location.hash || '#' + sections[0].id).slice(1);
+    setActive(initial);
+
+    // -- Filter functions live as the user types --------------------------
+    function applyFilter() {
+        var q = filterInput.value.trim().toLowerCase();
+        sections.forEach(function (section) {
+            var anyVisible = false;
+            var items = section.querySelectorAll('ul.func-list li');
+            items.forEach(function (li) {
+                var name = li.textContent.toLowerCase();
+                var match = q === '' || name.indexOf(q) !== -1;
+                li.classList.toggle('hidden', !match);
+                if (match) anyVisible = true;
+            });
+            // Also check section heading / category for matches
+            var cat = (section.getAttribute('data-cat') || '').toLowerCase();
+            if (q !== '' && cat.indexOf(q) !== -1) anyVisible = true;
+            section.classList.toggle('hidden', !anyVisible);
+        });
+    }
+    if (filterInput) {
+        filterInput.addEventListener('input', applyFilter);
+    }
+})();
+</script>
+
 </body>
 </html>

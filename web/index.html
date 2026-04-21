@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Lucretia &mdash; A Matlab toolkit for accelerator simulation</title>
+    <meta name="description" content="Lucretia is a Matlab-based toolkit for the modelling and simulation of single-pass electron transport lines: linacs, bunch compressors, FELs, and linear collider transport.">
+    <link rel="stylesheet" href="lucretia.css">
+</head>
+<body>
+
+<nav class="lucretia-nav">
+    <div class="nav-inner">
+        <a class="nav-brand" href="index.html">
+            <img src="LucretiaLogo.gif" alt="" style="width:24px;height:auto;">
+            <span>LU<span class="pink">CRETIA</span></span>
+        </a>
+        <a class="nav-link active" href="index.html">Home</a>
+        <a class="nav-link" href="overview.html">Overview</a>
+        <a class="nav-link" href="setup.html">Setup</a>
+        <a class="nav-link" href="downloads.html">Downloads</a>
+        <a class="nav-link" href="examples.html">Examples</a>
+        <a class="nav-link" href="function_index.html">Documentation</a>
+        <a class="nav-link" href="gui.html">GUI</a>
+        <a class="nav-link" href="whatsnew.html">What's New</a>
+    </div>
+</nav>
+
+<header class="hero">
+    <img class="logo" src="LucretiaLogo.gif" alt="Lucretia logo">
+    <h1>The <span class="pink">LUCRETIA</span> Project</h1>
+    <p class="tagline">A Matlab-based toolkit for the modelling and simulation of single-pass electron transport lines.</p>
+</header>
+
+<p>
+    Lucretia is oriented towards the simulation issues that matter for
+    <strong>linacs, bunch compressors, linac-driven FELs, and linear collider
+    Low Emittance Transport</strong> &mdash; including short-range and long-range
+    wakefields, bunch-train dynamics, and realistic representations of
+    klystron, power supply, and girder relationships. See the
+    <a href="overview.html">Overview</a> for the full picture, or jump straight
+    into the <a href="examples.html">Examples</a>.
+</p>
+
+<h2>Get started</h2>
+
+<div class="section-grid">
+    <div class="card">
+        <h3><a href="overview.html">Overview</a></h3>
+        <p>What Lucretia is, what it's for, and how it differs from other accelerator codes.</p>
+    </div>
+    <div class="card">
+        <h3><a href="setup.html">Setup</a></h3>
+        <p>Step-by-step instructions for installing Lucretia and configuring Matlab.</p>
+    </div>
+    <div class="card">
+        <h3><a href="downloads.html">Downloads</a></h3>
+        <p>Source code, mexfile binaries, and supported platforms.</p>
+    </div>
+    <div class="card">
+        <h3><a href="examples.html">Examples</a></h3>
+        <p>Worked tutorials &mdash; the fastest way to learn the toolkit.</p>
+    </div>
+    <div class="card">
+        <h3><a href="function_index.html">Function &amp; Class Index</a></h3>
+        <p>Complete index of scripts, functions, and classes, organised by topic.</p>
+    </div>
+    <div class="card">
+        <h3><a href="gui.html">Beamline Viewer GUI</a></h3>
+        <p>Interactive App Designer-based GUI for inspecting BEAMLINE arrays.</p>
+    </div>
+    <div class="card">
+        <h3><a href="whatsnew.html">What's New</a></h3>
+        <p>Release notes and recently added features.</p>
+    </div>
+    <div class="card">
+        <h3><a href="bugs.html">Known Bugs</a></h3>
+        <p>Open and previously corrected issues.</p>
+    </div>
+</div>
+
+<h2>Reference documentation</h2>
+
+<h3>Core simulation</h3>
+<ul class="toc-list">
+    <li><a href="tracking.html">Tracking</a> &mdash; <code>TrackThru</code>, <code>Track</code> class</li>
+    <li><a href="rmat.html">R-matrix operations</a></li>
+    <li><a href="twiss.html">Twiss parameter calculation</a></li>
+    <li><a href="momentum_profile.html">Momentum profile management</a></li>
+    <li><a href="lattice_verification.html">Lattice verification</a></li>
+    <li><a href="function_status.html">Function status &amp; messages</a></li>
+</ul>
+
+<h3>Lattice &amp; beam</h3>
+<ul class="toc-list">
+    <li><a href="data_elements.html">Data elements</a> &mdash; BEAMLINE, KLYSTRON, PS, GIRDER</li>
+    <li><a href="element_classes.html">Element classes</a> &mdash; QUAD, SBEN, LCAV, &hellip;</li>
+    <li><a href="lattice_generation.html">Lattice generation</a></li>
+    <li><a href="lattice_errors.html">Errors &amp; misalignments</a></li>
+    <li><a href="deck_parsing.html">Deck parsing (XSIF)</a></li>
+    <li><a href="beam.html">Beams</a></li>
+    <li><a href="beam_generation.html">Beam generation</a></li>
+    <li><a href="SlicesBlocks.html">Slices &amp; blocks</a></li>
+</ul>
+
+<h3>Physics models</h3>
+<ul class="toc-list">
+    <li><a href="wakefields.html">Wakefields</a></li>
+    <li><a href="SynRad.html">Synchrotron radiation &amp; CSR</a></li>
+    <li><a href="LSC.html">Longitudinal space charge</a></li>
+    <li><a href="fieldmap.html">Field maps</a></li>
+    <li><a href="extProcesses.html">External processes</a></li>
+    <li><a href="extProcess_geant4.html">GEANT4 interface</a></li>
+    <li><a href="GroundMotion.htm">Ground motion</a></li>
+</ul>
+
+<h3>Tuning &amp; analysis</h3>
+<ul class="toc-list">
+    <li><a href="tuning_analysis.html">Tuning &amp; analysis tools</a></li>
+    <li><a href="bpm_inst_readings.html">BPM &amp; instrument readings</a></li>
+    <li><a href="bmarking_example.html">Benchmarking example</a></li>
+    <li><a href="random_numbers.html">Random numbers</a></li>
+    <li><a href="Floodland.htm">Floodland (controls)</a></li>
+</ul>
+
+<h3>Parallel &amp; distributed</h3>
+<ul class="toc-list">
+    <li><a href="pLucretia.html">pLucretia overview</a></li>
+    <li><a href="pLucretia_compiler.html">pLucretia compiler</a></li>
+    <li><a href="pLucretia_dct.html">Distributed Computing Toolbox</a></li>
+    <li><a href="pLucretia_batch.html">Batch processing</a></li>
+    <li><a href="pLucretia_hints+tips.html">Hints &amp; tips</a></li>
+    <li><a href="Distributed.htm">Distributed Lucretia class</a></li>
+</ul>
+
+<h3>Build &amp; internals</h3>
+<ul class="toc-list">
+    <li><a href="mexfiles.html">Mex files</a></li>
+    <li><a href="platforms.html">Supported platforms</a></li>
+    <li><a href="documentation.html">About this documentation</a></li>
+    <li><a href="SourceBrowse.html">Source code browsing</a></li>
+</ul>
+
+<footer class="site-footer">
+    <p>
+        Maintained by <a href="http://www.slac.stanford.edu/owner/whitegr">whitegr</a>
+        &nbsp;&middot;&nbsp;
+        Source on <a href="https://github.com/slaclab/Lucretia.git">GitHub</a>
+        &nbsp;&middot;&nbsp;
+        <a href="http://www.slac.stanford.edu/detailed.html">SLAC</a>
+    </p>
+</footer>
+
+</body>
+</html>
