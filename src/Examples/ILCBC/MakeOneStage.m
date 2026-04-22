@@ -14,17 +14,18 @@
   
 % reset Gaussian random number generator  
   
-  randn('state',0) ;
+  rng(0) ;
   statall = InitializeMessageStack( ) ;
   
 % parse the deck and the SRWFs
 
   disp('...parsing the deck...') ;
-  [stat,Initial] = XSIFToLucretia('BUNCHCOMPRESSOR.XSIF','let') ;
+  % [stat,Initial] = XSIFToLucretia('BUNCHCOMPRESSOR.XSIF','let') ;
+  DT = DeckTool ;
+  Initial = DT.ReadDeck('BUNCHCOMPRESSOR.XSIF','let') ;
   Initial1sigy = Initial ;
   Initial1sigy.y.pos = -8.39e-6 ;
   Initial1sigy.y.ang = 0.583e-6 ;
-  statall = AddStackToMasterStack(statall,stat,'XSIFToLucretia') ;
   global BEAMLINE GIRDER PS KLYSTRON WF ;
   WF.TSR(1).BinWidth = 0.3 ;
   WF.ZSR(1).BinWidth = 0.3 ;

@@ -3,10 +3,11 @@
 %
   disp('...parsing the deck...')
   clear global BEAMLINE ;
-  randn('state',0) ;
+  rng(0) ;
   global BEAMLINE ;
-  [statall,Initial] = XSIFToLucretia(...
-    'elec_bdsh_250GeV_master.xsif','BDSH250') ;
+  % [statall,Initial] = XSIFToLucretia(...
+  %   'elec_bdsh_250GeV_master.xsif','BDSH250') ;
+  DT=DeckTool; Initial = DT.ReadDeck('elec_bdsh_250GeV_master.xsif','BDSH250') ;
   disp('...generating Twiss parameters...')
   [stat,T] = GetTwiss(1,length(BEAMLINE),Initial.x.Twiss,Initial.y.Twiss) ;
   statall{1} = [statall{1} stat{1}] ;
@@ -16,7 +17,7 @@
   ylabel('\beta_{x,y} [m]') ;
   xlabel('S, m')
   hold on
-  [ax,h1,h2] = plotyy(T.S,T.betax,T.S,T.etax) ;
+  [ax,~,~] = plotyy(T.S,T.betax,T.S,T.etax) ;
   set(get(ax(2),'Ylabel'),'String','\eta_x [m]') ;
   figure 
   plot(T.S,sqrt(T.betay),'r') ;
