@@ -299,7 +299,9 @@ The
             <a href="#Lcav">linear accelerator structure</a>, <a href="#TCAV">dipole mode RF structure</a>,&nbsp; <a href="#XYCor">dipole corrector</a>, <a href="#BPM">beam
               position monitor</a>, <a href="#Inst">beam instrument</a>,
             <a href="#Coll">collimator</a>, <a href="#coord">coordinate
-              change</a>, <a href="#TMAP">transport map</a>.<br>
+              change</a>, <a href="#TMAP">transport map</a>, <a href="#LSRMDLTR">laser-seeded
+              relativistic modulator</a>, <a href="#CWIGGLER">canonical
+              wiggler / undulator</a>.<br>
             <br>
             
 <h3><span style="font-size: 24pt;"><small><small><b><a name="Mark"></a></b><b>Marker</b> -- <small>zero-length
@@ -3043,11 +3045,557 @@ defines "RM(i,j,k)" for instance).<br>
                   </div>
                 </div>
                 <br>
+<h3><span style="font-size: 24pt;"><small><small><small><b><a name="LSRMDLTR"></a>Laser-Seeded
+                        Relativistic Modulator</b> -
+                        co-propagating laser interaction with a planar
+                        or helical undulator</small></small></small></span></h3>
+<h3><span style="font-size: 24pt;"></span></h3>
+<span style="font-size: 24pt;"><small><small><small>
+                        <br>
+                        &nbsp;&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;
+                        Class = "LSRMDLTR"<br>
+                        &nbsp;&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp; </small></small></small></span><span style="font-size: 24pt;"><small><small><small>Valid
+                        TrackFlag fields:&nbsp; ZMotion, LorentzDelay,
+                        Aper<br>
+                        <br>
+                      </small></small></small></span><br>
+                <div style="text-align: center;">
+                  <div align="left">
+                    <table style="width: 100%; text-align: left;" border="1" cellpadding="2" cellspacing="2">
+                      <tbody>
+                        <tr>
+                          <td style="vertical-align: top; font-weight: bold; text-align: center;">Field Name<br>
+                          </td>
+                          <td style="vertical-align: top; font-weight: bold; text-align: center;">Required?<br>
+                          </td>
+                          <td style="vertical-align: top; font-weight: bold; text-align: center;">Size<br>
+                          </td>
+                          <td style="vertical-align: top; font-weight: bold; text-align: center;">Units<br>
+                          </td>
+                          <td style="vertical-align: top; font-weight: bold;">Description<br>
+                          </td>
+                        </tr>
+                        <tr>
+                          <td align="center" valign="top">S<br></td>
+                          <td align="center" valign="top">Yes<br></td>
+                          <td align="center" valign="top">1 x 1<br></td>
+                          <td align="center" valign="top">m<br></td>
+                          <td valign="top">S position in BEAMLINE<br></td>
+                        </tr>
+                        <tr>
+                          <td align="center" valign="top">P<br></td>
+                          <td align="center" valign="top">Yes<br></td>
+                          <td align="center" valign="top">1 x 1<br></td>
+                          <td align="center" valign="top">GeV/c<br></td>
+                          <td valign="top">Design centroid momentum
+                            (set to 0 to use the bunch mean instead)<br></td>
+                        </tr>
+                        <tr>
+                          <td align="center" valign="top">L<br></td>
+                          <td align="center" valign="top">Yes<br></td>
+                          <td align="center" valign="top">1 x 1<br></td>
+                          <td align="center" valign="top">m<br></td>
+                          <td valign="top">Total undulator length<br></td>
+                        </tr>
+                        <tr>
+                          <td align="center" valign="top">Bu<br></td>
+                          <td align="center" valign="top">Yes<br></td>
+                          <td align="center" valign="top">1 x 1<br></td>
+                          <td align="center" valign="top">T<br></td>
+                          <td valign="top">Peak undulator magnetic
+                            field<br></td>
+                        </tr>
+                        <tr>
+                          <td align="center" valign="top">Periods<br></td>
+                          <td align="center" valign="top">Yes<br></td>
+                          <td align="center" valign="top">1 x 1<br></td>
+                          <td align="center" valign="top">-<br></td>
+                          <td valign="top">Number of undulator periods
+                            (integer); period = L / Periods<br></td>
+                        </tr>
+                        <tr>
+                          <td align="center" valign="top">LaserWavelength<br></td>
+                          <td align="center" valign="top">No<br></td>
+                          <td align="center" valign="top">1 x 1<br></td>
+                          <td align="center" valign="top">m<br></td>
+                          <td valign="top">Laser wavelength.&nbsp; Set
+                            to 0 to use the resonance condition
+                            &lambda;<sub>r</sub> = &lambda;<sub>u</sub>/(2&gamma;<sup>2</sup>)
+                            &middot; (1+K<sup>2</sup>/2).<br></td>
+                        </tr>
+                        <tr>
+                          <td align="center" valign="top">LaserPeakPower<br></td>
+                          <td align="center" valign="top">No<br></td>
+                          <td align="center" valign="top">1 x 1<br></td>
+                          <td align="center" valign="top">W<br></td>
+                          <td valign="top">Peak laser power.&nbsp;
+                            Setting to 0 disables the laser entirely
+                            (the element becomes a pure undulator).<br></td>
+                        </tr>
+                        <tr>
+                          <td align="center" valign="top">LaserW0<br></td>
+                          <td align="center" valign="top">No<br></td>
+                          <td align="center" valign="top">1 x 1<br></td>
+                          <td align="center" valign="top">m<br></td>
+                          <td valign="top">Gaussian beam waist (1/e<sup>2</sup>
+                            intensity radius).<br></td>
+                        </tr>
+                        <tr>
+                          <td align="center" valign="top">LaserPhase<br></td>
+                          <td align="center" valign="top">No<br></td>
+                          <td align="center" valign="top">1 x 1<br></td>
+                          <td align="center" valign="top">rad<br></td>
+                          <td valign="top">Laser phase offset.<br></td>
+                        </tr>
+                        <tr>
+                          <td align="center" valign="top">LaserX0,
+                            LaserY0, LaserZ0<br></td>
+                          <td align="center" valign="top">No<br></td>
+                          <td align="center" valign="top">1 x 1 each<br></td>
+                          <td align="center" valign="top">m<br></td>
+                          <td valign="top">Laser beam centre offsets
+                            from the undulator axis.<br></td>
+                        </tr>
+                        <tr>
+                          <td align="center" valign="top">LaserTilt<br></td>
+                          <td align="center" valign="top">No<br></td>
+                          <td align="center" valign="top">1 x 1<br></td>
+                          <td align="center" valign="top">rad<br></td>
+                          <td valign="top">Polarisation rotation in
+                            the xy plane.<br></td>
+                        </tr>
+                        <tr>
+                          <td align="center" valign="top">LaserM,
+                            LaserN<br></td>
+                          <td align="center" valign="top">No<br></td>
+                          <td align="center" valign="top">1 x 1 each<br></td>
+                          <td align="center" valign="top">-<br></td>
+                          <td valign="top">Hermite-Gauss transverse
+                            mode indices for the laser, in the range
+                            0..4.<br></td>
+                        </tr>
+                        <tr>
+                          <td align="center" valign="top">NSteps<br></td>
+                          <td align="center" valign="top">Yes<br></td>
+                          <td align="center" valign="top">1 x 1<br></td>
+                          <td align="center" valign="top">-<br></td>
+                          <td valign="top">Number of fixed-step RK4
+                            sub-steps through the element.&nbsp; A
+                            useful starting value is roughly 100 per
+                            undulator period.<br></td>
+                        </tr>
+                        <tr>
+                          <td align="center" valign="top">FieldExpansion<br></td>
+                          <td align="center" valign="top">No<br></td>
+                          <td align="center" valign="top">1 x 1<br></td>
+                          <td align="center" valign="top">-<br></td>
+                          <td valign="top">Undulator field expansion
+                            mode: 0 = ideal (sinusoidal on-axis), 1 =
+                            exact (cosh / sinh), 2 = leading off-axis
+                            terms (default).<br></td>
+                        </tr>
+                        <tr>
+                          <td align="center" valign="top">PoleFactor1,
+                            PoleFactor2, PoleFactor3<br></td>
+                          <td align="center" valign="top">No<br></td>
+                          <td align="center" valign="top">1 x 1 each<br></td>
+                          <td align="center" valign="top">-<br></td>
+                          <td valign="top">End-pole field tapering
+                            factors at the first / second / third
+                            half-period from each end.&nbsp; Defaults
+                            (0.156, 0.381, 0.803) match the Elegant
+                            LSRMDLTR conventions.<br></td>
+                        </tr>
+                        <tr>
+                          <td align="center" valign="top">Helical<br></td>
+                          <td align="center" valign="top">No<br></td>
+                          <td align="center" valign="top">1 x 1<br></td>
+                          <td align="center" valign="top">-<br></td>
+                          <td valign="top">0 = planar undulator
+                            (focusing in y only), 1 = helical (equal
+                            focusing in both planes).<br></td>
+                        </tr>
+                        <tr>
+                          <td align="center" valign="top">SynchRad<br></td>
+                          <td align="center" valign="top">No<br></td>
+                          <td align="center" valign="top">1 x 1<br></td>
+                          <td align="center" valign="top">-<br></td>
+                          <td valign="top">Apply classical synchrotron
+                            radiation energy loss after each RK4
+                            step.&nbsp; This is an
+                            <em>element-level</em> flag, NOT the
+                            standard SynRad TrackFlag.<br></td>
+                        </tr>
+                        <tr>
+                          <td align="center" valign="top">ISR<br></td>
+                          <td align="center" valign="top">No<br></td>
+                          <td align="center" valign="top">1 x 1<br></td>
+                          <td align="center" valign="top">-<br></td>
+                          <td valign="top">Apply incoherent (quantum)
+                            synchrotron radiation diffusion after each
+                            RK4 step.<br></td>
+                        </tr>
+                        <tr>
+                          <td align="center" valign="top">Offset<br></td>
+                          <td align="center" valign="top">No<br></td>
+                          <td align="center" valign="top">1 x 6<br></td>
+                          <td align="center" valign="top">[m rad m rad
+                            m rad]<br></td>
+                          <td valign="top">Static element offset
+                            (applied upstream and downstream like any
+                            other element).<br></td>
+                        </tr>
+                        <tr>
+                          <td align="center" valign="top">Girder<br></td>
+                          <td align="center" valign="top">No<br></td>
+                          <td align="center" valign="top">1 x 1<br></td>
+                          <td align="center" valign="top">-<br></td>
+                          <td valign="top">Index of supporting
+                            GIRDER, if any.<br></td>
+                        </tr>
+                        <tr>
+                          <td align="center" valign="top">aper<br></td>
+                          <td align="center" valign="top">No<br></td>
+                          <td align="center" valign="top">1 x 1<br></td>
+                          <td align="center" valign="top">m<br></td>
+                          <td valign="top">Circular half-aperture for
+                            the exit-face check (only consulted when
+                            the Aper TrackFlag is set).<br></td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+                  <div style="text-align: left;"> <br>
+                    The LSRMDLTR element models the Elegant
+                    laser-seeded relativistic modulator: a planar or
+                    helical undulator with a co-propagating
+                    Hermite-Gauss laser beam.&nbsp; Particle motion
+                    is integrated through the combined undulator and
+                    laser fields by fixed-step 4<sup>th</sup>-order
+                    Runge-Kutta in Elegant's scaled coordinate system
+                    (q<sub>i</sub> = k&middot;x<sub>i</sub>,
+                    P<sub>i</sub> = &beta;&gamma;<sub>i</sub>,
+                    &tau; = &omega;t), where k = 2&pi;/&lambda;<sub>r</sub>
+                    is the laser wavenumber.&nbsp; This approach
+                    naturally captures both the energy modulation from
+                    the resonant laser-electron interaction and the
+                    transverse focusing of the undulator magnetic
+                    field.<br>
+                    <br>
+                    Because the integration carries state through the
+                    entire element, LSRMDLTR is <span style="font-weight: bold;">non-splittable</span>
+                    -- the Split TrackFlag has no effect, and the
+                    tracker is intercepted in TrackThruMain before the
+                    standard split / CSR / LSC dispatch.&nbsp; Use
+                    NSteps to control integration accuracy and CPU
+                    cost.<br>
+                    <br>
+                    The element-level <span style="font-weight: bold;">SynchRad</span>
+                    and <span style="font-weight: bold;">ISR</span>
+                    fields are independent of the Lucretia SynRad
+                    TrackFlag and use the same per-step formulation as
+                    Elegant.&nbsp; The R-matrix returned by
+                    <a href="#Quad">GetRmats</a> / <a href="twiss.html">GetTwiss</a>
+                    captures only the natural undulator focusing
+                    (k<sub>y</sub><sup>2</sup> = K<sup>2</sup>k<sub>u</sub><sup>2</sup>/(2&gamma;<sup>2</sup>)
+                    in the focused plane); the laser interaction does
+                    not contribute to the linear map.<br>
+                    <br>
+                    Create LSRMDLTR elements with the
+                    <a href="lattice_generation.html#LSRMDLTRStruc">LSRMDLTRStruc</a>
+                    function.&nbsp; The GPU build of TrackThru does
+                    not yet implement LSRMDLTR; on GPU the element is
+                    silently treated as a drift (with a one-time
+                    warning).<br>
+                  </div>
+                </div>
+                <br>
+<h3><span style="font-size: 24pt;"><small><small><small><b><a name="CWIGGLER"></a>Canonical
+                        Wiggler / Undulator</b> -- ported from Elegant's
+                        CWIGGLER element (canonical integration code of
+                        Y. Wu, Duke University)</small></small></small></span></h3>
+<h3><span style="font-size: 24pt;"></span></h3>
+<span style="font-size: 24pt;"><small><small><small>
+                        <br>
+                        &nbsp;&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;
+                        Class = "CWIGGLER"<br>
+                        &nbsp;&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp; </small></small></small></span><span style="font-size: 24pt;"><small><small><small>Valid
+                        TrackFlag fields:&nbsp; ZMotion, LorentzDelay,
+                        Aper<br>
+                        <br>
+                      </small></small></small></span><br>
+                <div style="text-align: center;">
+                  <div align="left">
+                    <table style="width: 100%; text-align: left;" border="1" cellpadding="2" cellspacing="2">
+                      <tbody>
+                        <tr>
+                          <td style="vertical-align: top; font-weight: bold; text-align: center;">Field Name<br>
+                          </td>
+                          <td style="vertical-align: top; font-weight: bold; text-align: center;">Required?<br>
+                          </td>
+                          <td style="vertical-align: top; font-weight: bold; text-align: center;">Size<br>
+                          </td>
+                          <td style="vertical-align: top; font-weight: bold; text-align: center;">Units<br>
+                          </td>
+                          <td style="vertical-align: top; font-weight: bold;">Description<br>
+                          </td>
+                        </tr>
+                        <tr>
+                          <td align="center" valign="top">S<br></td>
+                          <td align="center" valign="top">Yes<br></td>
+                          <td align="center" valign="top">1 x 1<br></td>
+                          <td align="center" valign="top">m<br></td>
+                          <td valign="top">S position in BEAMLINE<br></td>
+                        </tr>
+                        <tr>
+                          <td align="center" valign="top">P<br></td>
+                          <td align="center" valign="top">Yes<br></td>
+                          <td align="center" valign="top">1 x 1<br></td>
+                          <td align="center" valign="top">GeV/c<br></td>
+                          <td valign="top">Design centroid momentum (set
+                            to 0 to use the bunch mean instead)<br></td>
+                        </tr>
+                        <tr>
+                          <td align="center" valign="top">L<br></td>
+                          <td align="center" valign="top">Yes<br></td>
+                          <td align="center" valign="top">1 x 1<br></td>
+                          <td align="center" valign="top">m<br></td>
+                          <td valign="top">Total wiggler length<br></td>
+                        </tr>
+                        <tr>
+                          <td align="center" valign="top">BMax<br></td>
+                          <td align="center" valign="top">Yes<br></td>
+                          <td align="center" valign="top">1 x 1<br></td>
+                          <td align="center" valign="top">T<br></td>
+                          <td valign="top">Peak on-axis magnetic field<br></td>
+                        </tr>
+                        <tr>
+                          <td align="center" valign="top">Periods<br></td>
+                          <td align="center" valign="top">Yes<br></td>
+                          <td align="center" valign="top">1 x 1<br></td>
+                          <td align="center" valign="top">-<br></td>
+                          <td valign="top">Number of full wiggler
+                            periods (integer); period &lambda;<sub>u</sub>
+                            = L / Periods<br></td>
+                        </tr>
+                        <tr>
+                          <td align="center" valign="top">Helical<br></td>
+                          <td align="center" valign="top">No<br></td>
+                          <td align="center" valign="top">1 x 1<br></td>
+                          <td align="center" valign="top">-<br></td>
+                          <td valign="top">0 = planar, 1 = helical
+                            (adds a hardcoded second component
+                            90&deg; out of phase, giving the standard
+                            rotating-field undulator)<br></td>
+                        </tr>
+                        <tr>
+                          <td align="center" valign="top">Vertical<br></td>
+                          <td align="center" valign="top">No<br></td>
+                          <td align="center" valign="top">1 x 1<br></td>
+                          <td align="center" valign="top">-<br></td>
+                          <td valign="top">If 1 (planar mode only),
+                            wiggle in y instead of x.&nbsp; Implemented
+                            via Tilt = &pi;/2 in the element offsets,
+                            so it is mutually exclusive with Helical=1.<br></td>
+                        </tr>
+                        <tr>
+                          <td align="center" valign="top">StepsPerPeriod<br></td>
+                          <td align="center" valign="top">Yes<br></td>
+                          <td align="center" valign="top">1 x 1<br></td>
+                          <td align="center" valign="top">-<br></td>
+                          <td valign="top">Symplectic-integrator
+                            sub-steps per wiggler period.&nbsp; MUST be
+                            a multiple of 4 (matching the constraint
+                            Elegant imposes; default 12).<br></td>
+                        </tr>
+                        <tr>
+                          <td align="center" valign="top">IntegrationOrder<br></td>
+                          <td align="center" valign="top">No<br></td>
+                          <td align="center" valign="top">1 x 1<br></td>
+                          <td align="center" valign="top">-<br></td>
+                          <td valign="top">2 = leapfrog, 4 = Yoshida
+                            (default).&nbsp; Yoshida 4th-order is
+                            recommended for ring-tracking applications;
+                            leapfrog is faster but accumulates more
+                            phase error per period.<br></td>
+                        </tr>
+                        <tr>
+                          <td align="center" valign="top">Harmonics<br></td>
+                          <td align="center" valign="top">No<br></td>
+                          <td align="center" valign="top">N x 5<br></td>
+                          <td align="center" valign="top">-<br></td>
+                          <td valign="top">Optional matrix of field
+                            harmonics, with rows
+                            <em>[C<sub>mn</sub> K<sub>x</sub>/k<sub>w</sub>
+                            K<sub>y</sub>/k<sub>w</sub> K<sub>z</sub>/k<sub>w</sub>
+                            Phase]</em> matching Elegant's
+                            BX_FILE/BY_FILE SDDS column names.&nbsp;
+                            Empty (default) gives the ideal sinusoidal
+                            field.&nbsp; Each row must satisfy the
+                            Maxwell constraint
+                            k<sub>y</sub><sup>2</sup> = k<sub>x</sub><sup>2</sup>
+                            + k<sub>z</sub><sup>2</sup> (the
+                            constructor enforces this).<br></td>
+                        </tr>
+                        <tr>
+                          <td align="center" valign="top">PoleFactor1,
+                            PoleFactor2, PoleFactor3<br></td>
+                          <td align="center" valign="top">No<br></td>
+                          <td align="center" valign="top">1 x 1 each<br></td>
+                          <td align="center" valign="top">-<br></td>
+                          <td valign="top">End-pole strength taper for
+                            poles 1/2/3 from each end (Elegant's
+                            POLE1_FACTOR / POLE2_FACTOR /
+                            POLE3_FACTOR; default 1.0 each).<br></td>
+                        </tr>
+                        <tr>
+                          <td align="center" valign="top">SynchRad<br></td>
+                          <td align="center" valign="top">No<br></td>
+                          <td align="center" valign="top">1 x 1<br></td>
+                          <td align="center" valign="top">-<br></td>
+                          <td valign="top">Apply classical synchrotron
+                            radiation energy loss after each
+                            integration step.&nbsp; This is an
+                            <em>element-level</em> flag, NOT the
+                            standard SynRad TrackFlag (matching
+                            LSRMDLTR and Elegant CWIGGLER).<br></td>
+                        </tr>
+                        <tr>
+                          <td align="center" valign="top">ISR<br></td>
+                          <td align="center" valign="top">No<br></td>
+                          <td align="center" valign="top">1 x 1<br></td>
+                          <td align="center" valign="top">-<br></td>
+                          <td valign="top">Apply incoherent (quantum)
+                            synchrotron radiation diffusion after each
+                            step.<br></td>
+                        </tr>
+                        <tr>
+                          <td align="center" valign="top">Offset<br></td>
+                          <td align="center" valign="top">No<br></td>
+                          <td align="center" valign="top">1 x 6<br></td>
+                          <td align="center" valign="top">[m rad m rad
+                            m rad]<br></td>
+                          <td valign="top">Static element offset.<br></td>
+                        </tr>
+                        <tr>
+                          <td align="center" valign="top">Tilt<br></td>
+                          <td align="center" valign="top">No<br></td>
+                          <td align="center" valign="top">1 x 1<br></td>
+                          <td align="center" valign="top">rad<br></td>
+                          <td valign="top">Magnet roll about the beam
+                            axis.&nbsp; Set to &pi;/2 by the
+                            constructor when Vertical = 1.<br></td>
+                        </tr>
+                        <tr>
+                          <td align="center" valign="top">Girder<br></td>
+                          <td align="center" valign="top">No<br></td>
+                          <td align="center" valign="top">1 x 1<br></td>
+                          <td align="center" valign="top">-<br></td>
+                          <td valign="top">Index of supporting
+                            GIRDER, if any.<br></td>
+                        </tr>
+                        <tr>
+                          <td align="center" valign="top">aper<br></td>
+                          <td align="center" valign="top">No<br></td>
+                          <td align="center" valign="top">1 x 1<br></td>
+                          <td align="center" valign="top">m<br></td>
+                          <td valign="top">Circular half-aperture for
+                            the exit-face check (only consulted when
+                            the Aper TrackFlag is set).<br></td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+                  <div style="text-align: left;"> <br>
+                    The CWIGGLER element models a canonical wiggler /
+                    undulator following Elegant's CWIGGLER
+                    specification.&nbsp; Particle motion is integrated
+                    through the wiggler magnetic field by a fixed-step
+                    4<sup>th</sup>-order Yoshida symplectic
+                    integrator (IntegrationOrder = 4) or 2nd-order
+                    leapfrog (IntegrationOrder = 2), in the Elegant
+                    scaled coordinate system
+                    (q<sub>i</sub> = k<sub>u</sub>&middot;x<sub>i</sub>,
+                    P<sub>i</sub> = &beta;&gamma;<sub>i</sub>,
+                    &tau; = &omega;t with &omega; = k<sub>u</sub>c).&nbsp;
+                    The drift step is exact for a free relativistic
+                    particle; the kick step uses the Lorentz force from
+                    the magnetic field at the frozen position with
+                    &gamma; frozen at the start of the kick.&nbsp; This
+                    makes the kick approximately symplectic with
+                    leapfrog-order residual error, so Yoshida
+                    coefficients still deliver true 4<sup>th</sup>-order
+                    accuracy in the integrator.<br>
+                    <br>
+                    Because the integration carries state through the
+                    entire device, CWIGGLER is <span style="font-weight: bold;">non-splittable</span>
+                    -- the Split TrackFlag has no effect, and the
+                    tracker is intercepted in TrackThruMain before the
+                    standard split / CSR / LSC dispatch.&nbsp; Use
+                    StepsPerPeriod (multiple of 4) to control
+                    integration accuracy and CPU cost.<br>
+                    <br>
+                    The default field model (Harmonics empty) is the
+                    ideal sinusoidal:<br>
+                    &nbsp;&nbsp; B<sub>y</sub> = -B<sub>max</sub>
+                    &middot; pf(z) &middot; cos(k<sub>u</sub>z) &middot;
+                    cosh(k<sub>u</sub>y)<br>
+                    &nbsp;&nbsp; B<sub>z</sub> =&nbsp; B<sub>max</sub>
+                    &middot; pf(z) &middot; sinh(k<sub>u</sub>y) &middot;
+                    sin(k<sub>u</sub>z)<br>
+                    where pf(z) is the end-pole taper from
+                    PoleFactor1/2/3.&nbsp; For Helical=1 a hardcoded
+                    second component (90&deg; rotated, B<sub>x</sub>
+                    and B<sub>z</sub> in the orthogonal plane) is
+                    superposed.&nbsp; For multi-harmonic fields the
+                    Elegant horizontal-wiggler normal-pole expansion is
+                    summed over rows of the Harmonics matrix; B<sub>z</sub>
+                    is derived from the Maxwell equations and the
+                    constraint k<sub>y</sub><sup>2</sup>
+                    = k<sub>x</sub><sup>2</sup> + k<sub>z</sub><sup>2</sup>.<br>
+                    <br>
+                    The element-level <span style="font-weight: bold;">SynchRad</span>
+                    and <span style="font-weight: bold;">ISR</span>
+                    fields are independent of the Lucretia SynRad
+                    TrackFlag and use the same per-step formulation as
+                    Elegant.&nbsp; ISR Gaussians are pre-allocated
+                    serially before the parallel tracking loop, then
+                    indexed deterministically per (ray, step) so the
+                    samples are bit-reproducible across OpenMP thread
+                    counts.<br>
+                    <br>
+                    The R-matrix returned by
+                    <a href="#Quad">GetRmats</a> / <a href="twiss.html">GetTwiss</a>
+                    captures the natural undulator focusing
+                    (drift in x for planar; equal focusing in both
+                    planes for helical) using the K-parameter of the
+                    dominant harmonic.&nbsp; Multi-harmonic devices
+                    that need a tracking-derived linear map for tight
+                    Twiss matching can use the existing
+                    <a href="#TMAP">TMAP</a> element.<br>
+                    <br>
+                    Create CWIGGLER elements with the
+                    <a href="lattice_generation.html#CWIGGLERStruc">CWIGGLERStruc</a>
+                    function.&nbsp; The GPU build of TrackThru does
+                    not yet implement CWIGGLER; on GPU the element is
+                    silently treated as a drift (with a one-time
+                    warning), the same way LSRMDLTR is handled.<br>
+                    <br>
+                    <span style="font-style: italic;">Out of scope vs
+                    Elegant's CWIGGLER:</span> file-based BX_FILE /
+                    BY_FILE (SDDS) field maps, the transverse-gradient
+                    undulator (TGU) variant, GAP-based magnetic field
+                    models (Halbach, NdFeB, SCU, etc.), and the
+                    FORCE_MATCHED matched-dispersion correction beyond
+                    the manual PoleFactor1/2/3 controls.<br>
+                  </div>
+                </div>
+                <br>
 </div>
             </div>
           </div>
         </div>
       </div>
     </div>
-  
+
 </body></html>

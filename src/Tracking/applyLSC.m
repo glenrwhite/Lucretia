@@ -133,8 +133,10 @@ elseif smoothFactor==1
 end
 I(I<0)=0;
 
-% Calculate fourier transform of current histogram
-nfft=2^nextpow2(nbins);
+% Calculate fourier transform of current histogram.
+% nbins is already a power of 2 (= 2^npowbins) so nextpow2(nbins)==npowbins
+% trivially -- dropped the nextpow2 round-trip.
+nfft=nbins;
 Y=fft(I,nfft);
 Fs=1/dt;
 f=Fs/2*linspace(0,1,nfft/2+1);

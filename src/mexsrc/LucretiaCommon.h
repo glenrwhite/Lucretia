@@ -347,7 +347,9 @@ int TrackBunchThruCorrector( int, int, struct TrackArgsStruc*, int*, int, double
 int TrackBunchThruCollimator( int, int, struct TrackArgsStruc*, int*, double, double ) ;
 int TrackBunchThruCoord( int, int, struct TrackArgsStruc*, int* ) ;
 int TrackBunchThruTMap( int, int,  struct TrackArgsStruc*, int* ) ;
-#ifdef __CUDACC__        
+int TrackBunchThruLsrmdltr( int, int, struct TrackArgsStruc*, int* ) ;
+int TrackBunchThruCwiggler( int, int, struct TrackArgsStruc*, int* ) ;
+#ifdef __CUDACC__
 int ElemTracker(char* ElemClass,int* ElemLoop,int* BunchLoop,int* TFlag_gpu, int* TFlag,struct TrackArgsStruc* TrackArgs) ;
 #else
 int ElemTracker(char* ElemClass,int* ElemLoop,int* BunchLoop, int* TFlag, struct TrackArgsStruc* TrackArgs) ;

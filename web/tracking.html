@@ -333,5 +333,200 @@ worker node (with potentially different beamline descriptions).<br><br>
 	end<br><br>% See also:<br>% TrackThru distributedLucretia
 <p style="height: 63px"><strong><br><br><br></strong><br>
 </p>
+
+<strong><a name="ProfileTrack"></a>ProfileTrack:<br><br></strong>
+A diagnostic helper for measuring where a tracking call spends its
+time when running on the OpenMP build of Lucretia.&nbsp; Lives in
+<code>src/Benchmarking/ProfileTrack.m</code>.&nbsp; It runs both the
+MATLAB profiler and a C-level sampler around your tracking call, so
+you get a complete picture across the MATLAB / mex boundary.<br><br>
+&nbsp;&nbsp; out = <strong>ProfileTrack</strong>( testFcn )<br>
+&nbsp;&nbsp; out = <strong>ProfileTrack</strong>( testFcn, 'name', value, ... )<br><br>
+<code>testFcn</code> is a no-argument function handle that wraps the
+work to be profiled, e.g.<br>
+&nbsp;&nbsp; <code>out = ProfileTrack(@() I.track(1,1));</code>&nbsp; (using a Track object), or<br>
+&nbsp;&nbsp; <code>out = ProfileTrack(@() TrackThru(1, length(BEAMLINE), beamin, 1, 1));</code><br><br>
+ProfileTrack returns a struct with paths to the generated reports
+and the wall time of the run.<br><br>
+
+<strong>What gets captured</strong><br>
+ProfileTrack runs two profilers concurrently and writes them to a
+fresh temp directory (override with <code>'outputDir'</code>):<br>
+<ul>
+  <li><strong>MATLAB profiler</strong> --
+    <code>profile on -timer real</code> (real-clock; <code>cpu</code>
+    would only count the main thread and miss OMP workers).&nbsp;
+    HTML report saved via <code>profsave</code>; open with
+    <code>web(out.matlabReportIndex)</code>.&nbsp; Shows time per
+    MATLAB function, treating each mex call as a single block.</li>
+  <li><strong>C-level sampler</strong> -- launches the macOS
+    <code>sample(1)</code> tool against the matlab process for
+    <code>cSampleSeconds</code> (default 60), with
+    <code>cSampleDelaySec</code> (default 5) of warm-up.&nbsp; Writes
+    a text call-tree report; open with
+    <code>edit(out.cSampleReportPath)</code> or any text editor.&nbsp;
+    Shows time inside the mex (which Lucretia C function, what it
+    called).</li>
+</ul>
+The first time <code>sample</code> attaches to the matlab process,
+macOS may prompt to allow Developer Tools / Accessibility access.&nbsp;
+Allow it once and the prompt stays gone.<br><br>
+
+<strong>Optional name/value pairs</strong> (defaults shown):<br>
+<table style="text-align: left; width: 100%;" border="1" cellpadding="3" cellspacing="2">
+  <tbody>
+    <tr>
+      <td style="font-weight: bold; text-align: center;">Name</td>
+      <td style="font-weight: bold; text-align: center;">Default</td>
+      <td style="font-weight: bold;">Effect</td>
+    </tr>
+    <tr>
+      <td valign="top" align="center"><code>cSampleSeconds</code></td>
+      <td valign="top" align="center">60</td>
+      <td valign="top">Duration of the C-level sampler.&nbsp; 60 s
+        captures ~6000 stack snapshots which is plenty for finding
+        hot spots.&nbsp; If your test is shorter than this, set to
+        slightly less than the expected runtime.&nbsp; If you want
+        the full run profiled, set to a value larger than the
+        expected wall time.</td>
+    </tr>
+    <tr>
+      <td valign="top" align="center"><code>cSampleDelaySec</code></td>
+      <td valign="top" align="center">5</td>
+      <td valign="top">Delay before the sampler starts, to skip
+        MATLAB-side prep (lattice load, beam construction, etc).
+        Increase if your test does heavy MATLAB-only work before
+        tracking begins.</td>
+    </tr>
+    <tr>
+      <td valign="top" align="center"><code>outputDir</code></td>
+      <td valign="top" align="center">temp</td>
+      <td valign="top">Directory to save the reports.&nbsp; Default
+        is a fresh subdirectory under <code>tempdir</code> named
+        <code>lucretia_profile_YYYYMMDD_HHMMSS</code>.</td>
+    </tr>
+    <tr>
+      <td valign="top" align="center"><code>matlabReport</code></td>
+      <td valign="top" align="center">true</td>
+      <td valign="top">If false, skip writing the HTML report (the
+        in-memory profile is still available via
+        <code>profile('info')</code>).</td>
+    </tr>
+    <tr>
+      <td valign="top" align="center"><code>skipCSample</code></td>
+      <td valign="top" align="center">false</td>
+      <td valign="top">Skip the C-level sampler entirely.&nbsp;
+        Useful on non-macOS systems or when you only want the
+        MATLAB-side profile.&nbsp; On Linux you can substitute
+        <code>perf record -g -p $PID sleep 60</code> after fetching
+        MATLAB's PID via <code>feature('getpid')</code>.</td>
+    </tr>
+  </tbody>
+</table>
+<br>
+
+<strong>What to look for in the C-level report</strong><br>
+The <code>sample</code> output is a hierarchical call tree where
+sample counts at each level are proportional to the wall time spent
+in that function (across all threads, since real-time sampling).&nbsp;
+A quick triage from the shell:<br>
+<blockquote><code>grep -E "TrackBunchThru|ProcLSC|BinRays|ConvolveSRWF|GetDatabaseParameters" \<br>
+&nbsp;&nbsp; out.cSampleReportPath | sort -k1 -n -r | head -30</code></blockquote>
+Functions to look for and what they tell you:<br>
+<table style="text-align: left; width: 100%;" border="1" cellpadding="3" cellspacing="2">
+  <tbody>
+    <tr>
+      <td style="font-weight: bold;">Function in the C report</td>
+      <td style="font-weight: bold;">High sample count means</td>
+    </tr>
+    <tr>
+      <td valign="top"><code>TrackBunchThru&lt;X&gt;</code></td>
+      <td valign="top">Which tracker class dominates (Drift, QSOS,
+        Mult, SBend, RF, BPM, INST, LSRMDLTR, CWIGGLER).&nbsp;
+        Compare across to see where the bulk of your lattice's
+        tracking budget actually goes.</td>
+    </tr>
+    <tr>
+      <td valign="top"><code>cwiggler_field</code>,
+        <code>lsrmdltr_*</code></td>
+      <td valign="top">Field evaluation and integration loops in
+        undulator-heavy lattices.</td>
+    </tr>
+    <tr>
+      <td valign="top"><code>ProcLSC</code>,
+        <code>BinRays</code>,
+        <code>ConvolveSRWFWithBeam</code></td>
+      <td valign="top"><strong>Serial collective stages</strong> --
+        the main ceiling on OMP scaling.&nbsp; If these dominate,
+        further per-ray parallelism won't help; the next target is
+        either parallelising the binning kernel or amortising the
+        fixed cost over more particles per call.</td>
+    </tr>
+    <tr>
+      <td valign="top"><code>GetDatabaseParameters</code>,
+        <code>GetElemNumericPar</code></td>
+      <td valign="top">MATLAB&lt;-&gt;C dispatch overhead.&nbsp;
+        High counts mean the per-element wrappers are too chatty
+        for the size of the work being done.&nbsp; Common when
+        many short elements (markers, drifts) are present.</td>
+    </tr>
+    <tr>
+      <td valign="top"><code>__kmp_*</code>,
+        <code>kmp_wait_template</code></td>
+      <td valign="top">Pure OpenMP runtime -- threads waiting at
+        barriers / sync points.&nbsp; High counts mean threads
+        spend significant time idle between parallel-fors, which
+        signals either small per-element work or significant serial
+        sections between them.</td>
+    </tr>
+    <tr>
+      <td valign="top"><code>RanGaussVecPtrC</code>,
+        <code>LucretiaRandFlat</code>,
+        <code>SRSpectrumHB</code></td>
+      <td valign="top">SR / ISR sampling.&nbsp; High in
+        radiation-dominated lattices (SR-on wigglers, damping rings,
+        etc.).</td>
+    </tr>
+  </tbody>
+</table>
+<br>
+
+<strong>What to look for in the MATLAB report</strong><br>
+<ul>
+  <li>Compare <code>out.wallSeconds</code> (the real elapsed time)
+    to the time spent inside <code>TrackThru</code> in the
+    profile.&nbsp; The difference is MATLAB-side overhead --
+    lattice loops, struct repacking, distributed orchestration.&nbsp;
+    For a hot loop calling TrackThru many times, the loop overhead
+    is sometimes more than the tracking itself.</li>
+  <li>For a lot of small TrackThru calls (e.g. element-by-element
+    debugging or interactive scans), the dispatch overhead per call
+    can dominate.&nbsp; A bigger batch per call -- broadening
+    <code>elem1..elem2</code> or running multiple bunches per call
+    -- is the usual fix.</li>
+</ul>
+
+<strong>Iteration tip</strong><br>
+For tuning, use a small representative subset of your real workload
+(e.g. 1/10 the bunch, or a shorter span of the lattice) so a profile
+run takes ~one minute instead of ~ten.&nbsp; Confirm you still see
+the same hot-spot ordering, then validate the final optimisation
+against the full workload.<br><br>
+
+<strong>Requirements</strong><br>
+<ul>
+  <li>macOS for the C-level sampler (<code>sample</code> is part of
+    macOS Developer Tools, on the default PATH).</li>
+  <li>Lucretia mex files built with debug symbols are not required
+    for function-name level resolution -- exported symbols
+    suffice.&nbsp; For file/line numbers in the C report, rebuild
+    with <code>-g</code> in <code>CFLAGS</code> (no runtime cost).</li>
+  <li>For richer interactive analysis, point Instruments at the
+    matlab process: open <code>Instruments.app</code>, choose the
+    <em>Time Profiler</em> template, target <code>matlab</code>,
+    record.&nbsp; Same data as <code>sample</code> with a UI for
+    drill-down.</li>
+</ul>
+
 </body>
 </html>

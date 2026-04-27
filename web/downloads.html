@@ -189,6 +189,181 @@ href="http://www.slac.stanford.edu/accel/ilc/codes/Lucretia/package/G4Data.tar-b
     windows or DYLD_LIBRARY_PATH for Mac) before starting Matlab to
     successfully run all mexfiles.<br>
     <br>
+    <div class="auto-style2"><strong>Build options
+        (build.m)</strong></div>
+    <br>
+    The build script <code>src/mexsrc/build.m</code> accepts the
+    following arguments, which can be combined as space-separated tokens
+    (for example <code>build cpu omp fast install</code>).&nbsp; Any
+    argument not listed below is ignored.<br>
+    <br>
+    <table style="width: 100%; text-align: left;" border="1"
+      cellpadding="3" cellspacing="2">
+      <tbody>
+        <tr>
+          <td style="vertical-align: top; font-weight: bold; text-align: center;">Argument</td>
+          <td style="vertical-align: top; font-weight: bold; text-align: center;">Category</td>
+          <td style="vertical-align: top; font-weight: bold;">Effect / requirement</td>
+        </tr>
+        <tr>
+          <td valign="top" align="center"><code>cpu</code></td>
+          <td valign="top" align="center">Target</td>
+          <td valign="top">Default CPU build (no GEANT4, no GPU).
+            Compiles all mex entry points: GetRmats, GetTwiss,
+            RmatAtoB, TrackThru, VerifyLattice, SeedLucretiaRng.&nbsp;
+            Requires only a working Matlab mex compiler.</td>
+        </tr>
+        <tr>
+          <td valign="top" align="center"><code>cpu-g4</code></td>
+          <td valign="top" align="center">Target</td>
+          <td valign="top">CPU build with GEANT4 secondary-particle
+            tracking enabled in TrackThru.&nbsp; Requires GEANT4 v10+
+            installed with the
+            <code>geant4-config</code> script on the system PATH, and
+            the static library
+            <code>src/mexsrc/g4track/libg4track.a</code> built
+            previously (see the GEANT4 section above).&nbsp; Linux
+            only at present.</td>
+        </tr>
+        <tr>
+          <td valign="top" align="center"><code>gpu</code></td>
+          <td valign="top" align="center">Target</td>
+          <td valign="top">CUDA build of TrackThru via
+            <code>mexcuda</code>.&nbsp; Requires:
+            <ul>
+              <li>NVIDIA GPU with CUDA compute capability 2.0+ and
+                current CUDA drivers,</li>
+              <li>Matlab Parallel Computing Toolbox,</li>
+              <li>matching CUDA Toolkit (Mathworks publishes the
+                supported version per Matlab release).</li>
+            </ul>
+            Some elements (currently LSRMDLTR and CWIGGLER) are
+            not yet ported to CUDA and silently fall back to drift
+            on the GPU build with a one-time warning.</td>
+        </tr>
+        <tr>
+          <td valign="top" align="center"><code>omp</code></td>
+          <td valign="top" align="center">Modifier</td>
+          <td valign="top">Enable OpenMP parallelisation of the
+            per-ray tracking loops in the compiled mex files (Drift,
+            QSOS, Mult, SBend, RF, BPM, INST, LSRMDLTR, CWIGGLER).&nbsp;
+            <span style="font-weight: bold;">Does NOT require the
+            Parallel Computing Toolbox at runtime.</span>&nbsp; Compiler
+            requirements:
+            <ul>
+              <li><span style="font-weight: bold;">Linux</span>:
+                <code>-fopenmp</code> (gcc / clang shipped with the
+                distribution).</li>
+              <li><span style="font-weight: bold;">macOS</span>:
+                <strong>prefers MATLAB's bundled libomp</strong>
+                (R2024b+, at
+                <code>matlabroot/bin/&lt;arch&gt;/libomp.dylib</code>).&nbsp;
+                Linking against MATLAB's own copy avoids the
+                duplicate-runtime conflict that triggers
+                <code>OMP: Error #179: pthread_mutex_init failed:
+                EINVAL</code> on the first parallel region.&nbsp; The
+                <code>omp.h</code> header is read from MATLAB Coder's
+                bundle when present, else from Homebrew
+                (<code>brew install libomp</code>).&nbsp; If MATLAB
+                does not ship libomp at all, the build falls back to
+                Homebrew libomp with a warning.</li>
+              <li><span style="font-weight: bold;">Windows</span>:
+                <code>/openmp</code> via MSVC.</li>
+            </ul>
+            Set <code>OMP_NUM_THREADS</code> in the environment
+            <em>before</em> starting Matlab to tune the worker count
+            (default: hyperthread count).&nbsp; Mutually exclusive with
+            <code>gpu</code>.<br>
+            For bit-reproducible synchrotron-radiation samples across
+            different thread counts, call
+            <a href="lattice_generation.html#SeedLucretiaRng">SeedLucretiaRng</a>
+            in serial context before each TrackThru.</td>
+        </tr>
+        <tr>
+          <td valign="top" align="center"><code>fast</code></td>
+          <td valign="top" align="center">Modifier</td>
+          <td valign="top">Aggressive compiler optimisations:
+            <code>-O3 -march=native -ffast-math -funroll-loops
+            -flto</code> on Linux/macOS, <code>/O2 /Oi /Ot /fp:fast
+            /GL</code> on Windows MSVC.&nbsp; Combines safely with
+            <code>omp</code>.&nbsp; Adds compile time but typically
+            buys 1.5-3x runtime in tracking-heavy workloads.&nbsp; The
+            fast-math flags allow associative re-ordering of
+            floating-point sums, so reductions (BPM moments, etc.) may
+            differ at the last few bits from the standard build.</td>
+        </tr>
+        <tr>
+          <td valign="top" align="center"><code>mlrand</code></td>
+          <td valign="top" align="center">Modifier</td>
+          <td valign="top">Use Matlab's <code>rand</code> /
+            <code>randn</code> for tracking-side random numbers (e.g.
+            synchrotron radiation) instead of the built-in C-side
+            xoshiro256** RNG.&nbsp;
+            <span style="font-weight: bold;">MUCH slower</span> -- only
+            useful for cross-checking with very-old runs or when MATLAB
+            seed control via <code>rng()</code> is required to match
+            both random streams.</td>
+        </tr>
+        <tr>
+          <td valign="top" align="center"><code>verbose</code></td>
+          <td valign="top" align="center">Modifier</td>
+          <td valign="top">Pass <code>-v</code> to the mex compiler so
+            every command line is echoed.&nbsp; Useful when
+            diagnosing build problems.</td>
+        </tr>
+        <tr>
+          <td valign="top" align="center"><code>install</code></td>
+          <td valign="top" align="center">Action</td>
+          <td valign="top">After a successful build, move the
+            compiled mex binaries from
+            <code>src/mexsrc</code> to their installed locations
+            (<code>src/RMatrix</code>, <code>src/Twiss</code>,
+            <code>src/Tracking</code>,
+            <code>src/LatticeVerification</code>).&nbsp; The CPU build
+            also leaves a <code>*_cpu.mex*</code> copy alongside the
+            installed file for cross-checking against a GEANT4 or GPU
+            build of the same name.</td>
+        </tr>
+        <tr>
+          <td valign="top" align="center"><code>clean</code></td>
+          <td valign="top" align="center">Action</td>
+          <td valign="top">Delete the local <code>.o</code> /
+            <code>.obj</code> object files and the <code>.mex*</code>
+            binaries before (or instead of) building.&nbsp; Use this
+            when changing targets, e.g. between <code>cpu</code> and
+            <code>gpu</code>.</td>
+        </tr>
+        <tr>
+          <td valign="top" align="center"><code>cleanall</code></td>
+          <td valign="top" align="center">Action</td>
+          <td valign="top">As <code>clean</code>, plus also remove the
+            <code>g4track</code> static library so a subsequent
+            <code>cpu-g4</code> build forces a full rebuild.</td>
+        </tr>
+      </tbody>
+    </table>
+    <br>
+    <span style="font-weight: bold;">Recommended production build
+      (CPU):</span><br>
+    <blockquote>
+      <code>cd src/mexsrc</code><br>
+      <code>build clean</code><br>
+      <code>build cpu omp fast install</code>
+    </blockquote>
+    <span style="font-weight: bold;">Recommended GPU build:</span><br>
+    <blockquote>
+      <code>cd src/mexsrc</code><br>
+      <code>build clean</code><br>
+      <code>build gpu install</code><br>
+      <em>(GPU is mutually exclusive with <code>omp</code> /
+      <code>fast</code>.)</em>
+    </blockquote>
+    <span style="font-weight: bold;">First-time macOS OpenMP setup:</span><br>
+    <blockquote>
+      <code>brew install libomp</code><br>
+      <em>(One-time, before the first <code>build cpu omp</code>.)</em>
+    </blockquote>
+    <br>
 https://github.com/slaclab/Lucretia.git<br>
   </body>
 </html>

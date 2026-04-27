@@ -1240,8 +1240,14 @@ double* RanGaussVecPtrC( int nRandom )
   lastNum = nRandom ;
   
   
+  /* Uniform source comes from the per-thread xoshiro256** RNG (seeded
+     via SeedLucretiaRng); Beasley-Springer-Moro inverse-CDF transform
+     to a Gaussian unchanged from the original implementation, so the
+     statistical properties are preserved.  This means LSRMDLTR's ISR
+     pre-allocation now responds to SeedLucretiaRng like every other
+     C-side random consumer. */
   for (i=0; i<nRandom; i++) {
-    p=(double) rand() / (double) RAND_MAX;
+    p = LucretiaRandFlat() ;
     if (p < 0 || p > 1)
     {
       retval[i] = 0.0;
@@ -1301,14 +1307,14 @@ double* RanFlatVecPtrC( int nRandom )
   int i ;
   static double *retval = NULL ;
   static int lastNum = 0 ;
-  
+
   /* If requested by sending 0 then clear memory and return NULL */
   if (nRandom==0) {
     if (retval != NULL)
       free(retval) ;
     return NULL ;
   }
-  
+
   /* Assign memory for number of requested random numbers */
   if (retval!=NULL && nRandom!=lastNum) {
     free(retval) ;
@@ -1317,12 +1323,15 @@ double* RanFlatVecPtrC( int nRandom )
   else if (retval==NULL)
     retval = (double*) malloc(sizeof(double)*nRandom) ;
   lastNum = nRandom ;
-  
+
+  /* Sourced from the per-thread xoshiro256** RNG (seeded via
+     SeedLucretiaRng), so all C-side random numbers in Lucretia share
+     a single seedable stream. */
   for (i=0; i<nRandom; i++)
-    retval[i] = (double) rand() / (double) RAND_MAX ;
-  
+    retval[i] = LucretiaRandFlat() ;
+
   return retval ;
-  
+
 }
 
 /*==================================================================*/
@@ -1376,8 +1385,246 @@ double* RanFlatVecPtr( int nRandom )
   double* retvec ;
   retvec = RanFlatVecPtrC( nRandom ) ;
   return retvec ;
-#endif  
+#endif
 }
+
+/*==================================================================*/
+
+/* Thread-safe per-thread scalar RNG (xoshiro256**, Box-Muller for the
+   Gaussian variant).  This exists so that synchrotron-radiation
+   sampling -- which calls RanFlatVecPtr(1) deep inside per-ray
+   tracking kernels -- can be safely invoked from inside an OpenMP
+   parallel-for over rays.  The legacy RanFlatVecPtr / RanGaussVecPtr
+   functions return pointers into a shared static buffer and are NOT
+   thread-safe; do not use them from inside parallel regions.
+
+   GPU builds skip all of this and continue to use cuRand. */
+
+#ifndef __CUDACC__
+
+#include <stdint.h>
+#include <time.h>
+#ifndef _WIN32
+#include <unistd.h>
+#endif
+
+/* portable thread-local storage */
+#if defined(_MSC_VER)
+  #define LUCRETIA_TLS __declspec(thread)
+#elif defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L && !defined(__STDC_NO_THREADS__)
+  #define LUCRETIA_TLS _Thread_local
+#elif defined(__GNUC__) || defined(__clang__)
+  #define LUCRETIA_TLS __thread
+#else
+  #define LUCRETIA_TLS
+#endif
+
+#ifdef _OPENMP
+#include <omp.h>
+#endif
+
+/* xoshiro256** state, 256 bits of state per thread. */
+typedef struct {
+  uint64_t s[4] ;
+  int      seeded ;
+  int      seed_generation ;     /* matches lucretia_seed_generation */
+  int      gauss_has_cached ;
+  double   gauss_cached ;
+} LucretiaThreadRng ;
+
+static LUCRETIA_TLS LucretiaThreadRng tls_rng = {{0,0,0,0}, 0, -1, 0, 0.0} ;
+
+/* Master seed shared across threads; combined with the thread index to
+   give each thread a distinct starting point.  The default value is
+   set on first use from the wall clock + PID. */
+static uint64_t lucretia_master_seed = 0 ;
+static int      lucretia_master_seed_set = 0 ;
+
+/* Bumped by LucretiaSeedThreadRng so that every thread (not just the
+   caller) re-seeds on its next call.  Read serially before parallel
+   regions so the racy plain-int compare/load below is safe. */
+static int      lucretia_seed_generation = 0 ;
+
+/* Bumped once per call to LucretiaNextRaySeedBase by an SR-bearing
+   tracker wrapper so that successive wrapper invocations (e.g.
+   different elements, or split segments of the same element) produce
+   independent SR samples for the same ray index.  Reset to zero by
+   LucretiaSeedThreadRng so that re-seeding gives complete bit-exact
+   reproducibility across re-runs of the same TrackThru call. */
+static int      lucretia_invocation_counter = 0 ;
+
+/* SplitMix64 -- used to bootstrap xoshiro256** state from a single
+   64-bit seed (recommended in the xoshiro author's notes). */
+static inline uint64_t splitmix64( uint64_t *x )
+{
+  uint64_t z = ( *x += 0x9e3779b97f4a7c15ULL ) ;
+  z = ( z ^ ( z >> 30 ) ) * 0xbf58476d1ce4e5b9ULL ;
+  z = ( z ^ ( z >> 27 ) ) * 0x94d049bb133111ebULL ;
+  return z ^ ( z >> 31 ) ;
+}
+
+static inline uint64_t rotl64( uint64_t x, int k )
+{
+  return ( x << k ) | ( x >> ( 64 - k ) ) ;
+}
+
+static inline uint64_t xoshiro_next( LucretiaThreadRng *r )
+{
+  const uint64_t result = rotl64( r->s[1] * 5ULL, 7 ) * 9ULL ;
+  const uint64_t t = r->s[1] << 17 ;
+  r->s[2] ^= r->s[0] ;
+  r->s[3] ^= r->s[1] ;
+  r->s[1] ^= r->s[2] ;
+  r->s[0] ^= r->s[3] ;
+  r->s[2] ^= t ;
+  r->s[3] = rotl64( r->s[3], 45 ) ;
+  return result ;
+}
+
+/* Lazily seed the calling thread's state.  Combines the master seed
+   with the OpenMP thread index so that distinct threads get distinct
+   streams; if OpenMP is not active (or this is the only thread),
+   thread index 0 is used. */
+static void seed_tls_rng( void )
+{
+  uint64_t seed ;
+  int tid = 0 ;
+#ifdef _OPENMP
+  tid = omp_get_thread_num() ;
+#endif
+  if ( !lucretia_master_seed_set ) {
+    /* race-tolerant: multiple threads may hit this concurrently;
+       the value written is deterministic per-process so the result
+       is the same regardless of who wins.  Wall clock + PID gives
+       a different stream every time MATLAB is restarted. */
+    uint64_t s = (uint64_t) time( NULL ) ;
+#ifndef _WIN32
+    s ^= ( (uint64_t) getpid() ) << 32 ;
+#endif
+    if ( s == 0 ) s = 0x9e3779b97f4a7c15ULL ;
+    lucretia_master_seed = s ;
+    lucretia_master_seed_set = 1 ;
+  }
+  seed = lucretia_master_seed ^ ( ( (uint64_t) tid + 1 )
+                                  * 0x6a5d39eae116586dULL ) ;
+  /* SplitMix64 to expand the 64-bit seed into the 256-bit state */
+  tls_rng.s[0] = splitmix64( &seed ) ;
+  tls_rng.s[1] = splitmix64( &seed ) ;
+  tls_rng.s[2] = splitmix64( &seed ) ;
+  tls_rng.s[3] = splitmix64( &seed ) ;
+  if ( ( tls_rng.s[0] | tls_rng.s[1]
+       | tls_rng.s[2] | tls_rng.s[3] ) == 0 )
+    tls_rng.s[0] = 0x9e3779b97f4a7c15ULL ;
+  tls_rng.seeded = 1 ;
+  tls_rng.seed_generation = lucretia_seed_generation ;
+  tls_rng.gauss_has_cached = 0 ;
+}
+
+/* Test whether this thread's TLS state is current.  A change in
+   lucretia_seed_generation (caused by LucretiaSeedThreadRng) forces
+   re-seeding even if the thread had already initialised its state. */
+static inline int tls_rng_needs_seed( void )
+{
+  return ( !tls_rng.seeded )
+      || ( tls_rng.seed_generation != lucretia_seed_generation ) ;
+}
+
+double LucretiaRandFlat( void )
+{
+  uint64_t bits ;
+  if ( tls_rng_needs_seed() )
+    seed_tls_rng() ;
+  bits = xoshiro_next( &tls_rng ) ;
+  /* upper 53 bits to a double in [0, 1) */
+  return (double) ( bits >> 11 )
+         * ( 1.0 / (double) ( (uint64_t) 1ULL << 53 ) ) ;
+}
+
+double LucretiaRandGauss( void )
+{
+  /* polar Box-Muller, with caching of the second variate */
+  double u1, u2, mag ;
+  if ( tls_rng_needs_seed() )
+    seed_tls_rng() ;
+  if ( tls_rng.gauss_has_cached ) {
+    tls_rng.gauss_has_cached = 0 ;
+    return tls_rng.gauss_cached ;
+  }
+  do {
+    u1 = LucretiaRandFlat() ;
+  } while ( u1 < 1e-300 ) ;
+  u2 = LucretiaRandFlat() ;
+  mag = sqrt( -2.0 * log( u1 ) ) ;
+  tls_rng.gauss_cached = mag * sin( 2.0 * 3.14159265358979 * u2 ) ;
+  tls_rng.gauss_has_cached = 1 ;
+  return mag * cos( 2.0 * 3.14159265358979 * u2 ) ;
+}
+
+void LucretiaSeedThreadRng( unsigned long long master_seed )
+{
+  lucretia_master_seed = (uint64_t) master_seed ;
+  lucretia_master_seed_set = 1 ;
+  /* Bumping the generation counter is the broadcast mechanism: every
+     thread checks generation against its TLS copy on the next RNG
+     call and re-seeds if they do not match.  This works as long as
+     SeedLucretiaRng is called from a serial context (typically the
+     main thread, before entering a parallel tracking call). */
+  lucretia_seed_generation++ ;
+  /* Reset the wrapper invocation counter so the next TrackThru call
+     produces bit-exact same SR samples as the previous re-seeded run. */
+  lucretia_invocation_counter = 0 ;
+}
+
+/* Returns a base seed hash for the calling tracker wrapper invocation.
+   Combines elemno, bunchno, and a process-wide invocation counter so
+   each wrapper call gets a distinct stream even for the same element
+   (e.g. when split tracking calls a wrapper multiple times for the
+   same element).  Called serially BEFORE the parallel-for. */
+unsigned long long LucretiaNextRaySeedBase( int elemno, int bunchno )
+{
+  uint64_t base ;
+  lucretia_invocation_counter++ ;
+  base = ( (uint64_t) elemno   * 0x100000001B3ULL )
+       ^ ( (uint64_t) bunchno  * 0xCBF29CE484222325ULL )
+       ^ ( (uint64_t) lucretia_invocation_counter
+                                * 0xA3B195354A39B70DULL ) ;
+  return (unsigned long long) base ;
+}
+
+/* Re-seed the calling thread's TLS xoshiro state from
+   master_seed XOR ray_hash.  Called inside an OpenMP parallel-for
+   over rays, with ray_hash = base ^ (uint64_t)ray; this makes every
+   ray's SR sampling stream a deterministic function of its ray index
+   and the wrapper invocation, independent of which thread runs it.
+   Box-Muller cache is reset so partial Gaussian state does not leak
+   between rays. */
+void LucretiaSeedRayRng( unsigned long long ray_hash )
+{
+  uint64_t seed ;
+  if ( !lucretia_master_seed_set ) {
+    /* Inherit the same lazy default the per-thread path uses. */
+    uint64_t s = (uint64_t) time( NULL ) ;
+#ifndef _WIN32
+    s ^= ( (uint64_t) getpid() ) << 32 ;
+#endif
+    if ( s == 0 ) s = 0x9e3779b97f4a7c15ULL ;
+    lucretia_master_seed = s ;
+    lucretia_master_seed_set = 1 ;
+  }
+  seed = lucretia_master_seed ^ (uint64_t) ray_hash ;
+  tls_rng.s[0] = splitmix64( &seed ) ;
+  tls_rng.s[1] = splitmix64( &seed ) ;
+  tls_rng.s[2] = splitmix64( &seed ) ;
+  tls_rng.s[3] = splitmix64( &seed ) ;
+  if ( ( tls_rng.s[0] | tls_rng.s[1]
+       | tls_rng.s[2] | tls_rng.s[3] ) == 0 )
+    tls_rng.s[0] = 0x9e3779b97f4a7c15ULL ;
+  tls_rng.seeded = 1 ;
+  tls_rng.seed_generation = lucretia_seed_generation ;
+  tls_rng.gauss_has_cached = 0 ;
+}
+
+#endif  /* !__CUDACC__ */
 
 /*==================================================================*/
 

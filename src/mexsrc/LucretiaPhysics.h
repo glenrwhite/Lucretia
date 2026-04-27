@@ -202,6 +202,19 @@ double SynRadC( double ) ;
 
 int GetCoordMap( double[6], double[6], Rmat ) ;
 
+/* natural-focusing R-matrix for an LSRMDLTR (laser modulator) element.
+   Returns 1 on success, 0 if required parameters (L, P, Bu, Periods) are
+   missing. */
+
+int GetLsrmdltrMap( int elemno, Rmat R ) ;
+
+/* natural-focusing R-matrix for a CWIGGLER (canonical wiggler) element.
+   Same form as GetLsrmdltrMap (planar = drift x + focus y; helical =
+   focus both); reads BMax + Periods + Helical from the element struct.
+   Returns 1 on success, 0 if required parameters are missing. */
+
+int GetCwigglerMap( int elemno, Rmat R ) ;
+
 /* RMS of beam dimension */
 double GetRMSCoord( struct Bunch*, int ) ;
 

@@ -147,8 +147,14 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
-#include <stdio.h>  
+#include <stdio.h>
 #include "matrix.h"
+#ifdef _OPENMP
+/* Optional OpenMP parallelisation of per-ray tracking loops; activated
+   by the "omp" build flag in build.m.  When _OPENMP is undefined all
+   #pragma omp directives are silently ignored by the compiler. */
+#include <omp.h>
+#endif
 /* File-scoped variables: */
 
 #ifdef __CUDACC__
@@ -893,7 +899,30 @@ void* RmatCalculate( struct RmatArgStruc* Args )
         goto HandleStat1 ;
       }
     }
-    
+
+    /* Laser modulator -> natural undulator focusing R-matrix.  The laser
+       interaction is tracked by RK4 in TrackBunchThruLsrmdltr but does
+       not contribute to the linear map. */
+    else if (strcmp(ElemClass,"LSRMDLTR")==0)
+    {
+      stat1 = GetLsrmdltrMap( count, Relem ) ;
+      if (stat1 == 0) {
+        BadElementMessage( count+1 ) ;
+        goto HandleStat1 ;
+      }
+    }
+
+    /* CWIGGLER -> natural undulator focusing R-matrix.  Same form as
+       LSRMDLTR; multi-harmonic field uses dominant-harmonic K. */
+    else if (strcmp(ElemClass,"CWIGGLER")==0)
+    {
+      stat1 = GetCwigglerMap( count, Relem ) ;
+      if (stat1 == 0) {
+        BadElementMessage( count+1 ) ;
+        goto HandleStat1 ;
+      }
+    }
+
     /* if we made it this far it's something other than a marker or a quad,
      * so we can treat it as a drift element for now... */
     
@@ -1491,7 +1520,23 @@ void TrackThruMain( struct TrackArgsStruc* TrackArgs )
       else if ( strcmp(ElemClass,"TMAP")==0 )
       {
         TrackStatus = TrackBunchThruTMap( *ElemLoop, *BunchLoop, TrackArgs, TFLAG ) ;
-        if (TrackStatus == 1) 
+        if (TrackStatus == 1)
+          postEleTrack( TrackArgs->TheBeam, BunchLoop, ElemLoop, 0, *GetElemNumericPar( *ElemLoop, "S", NULL ), TFlag) ;
+      }
+      else if ( strcmp(ElemClass,"LSRMDLTR")==0 )
+      {
+        /* LSRMDLTR is non-splittable: the RK4 integration carries state
+           through the entire element so it must be tracked in one shot. */
+        TrackStatus = TrackBunchThruLsrmdltr( *ElemLoop, *BunchLoop, TrackArgs, TFLAG ) ;
+        if (TrackStatus == 1)
+          postEleTrack( TrackArgs->TheBeam, BunchLoop, ElemLoop, 0, *GetElemNumericPar( *ElemLoop, "S", NULL ), TFlag) ;
+      }
+      else if ( strcmp(ElemClass,"CWIGGLER")==0 )
+      {
+        /* CWIGGLER is non-splittable: the symplectic integration
+           accumulates state across the whole device. */
+        TrackStatus = TrackBunchThruCwiggler( *ElemLoop, *BunchLoop, TrackArgs, TFLAG ) ;
+        if (TrackStatus == 1)
           postEleTrack( TrackArgs->TheBeam, BunchLoop, ElemLoop, 0, *GetElemNumericPar( *ElemLoop, "S", NULL ), TFlag) ;
       }
       else if ( strcmp(ElemClass,"MARK")==0 ) {
@@ -1826,6 +1871,1188 @@ void TrackBunchThruTMap_kernel(double *L, double* dZmod, double* xb, double* yb,
 
 /*=====================================================================*/
 
+/* Tracking through a Laser-Seeded Relativistic Modulator (LSRMDLTR).
+ *
+ * Ports the pLucretia LSRMdltr / Elegant LSRMDLTR physics: a planar or
+ * helical undulator with a co-propagating Hermite-Gauss laser beam,
+ * integrated by fixed-step RK4 in Elegant's scaled coordinate system
+ *   (qx = k*x, qy = k*y, qz = k*z,  Px = beta*gamma_x, Py = beta*gamma_y,
+ *    Pz = beta*gamma_z)
+ * with tau = omega*t as the independent variable, where k = 2*pi/lambda
+ * is the laser wavenumber and omega = k*c.
+ *
+ * On entry / exit we convert between Lucretia coordinates
+ *   (x[m], px[GeV/c], y[m], py[GeV/c], z[m], p[GeV/c])
+ * and the integrator's scaled coordinates.  px/py here are CANONICAL
+ * (= P0 * x'), so the slope is xp = px / p, yp = py / p.
+ *
+ * The element is non-splittable (intercepted in TrackThruMain before
+ * ElemTracker), so the function signature has no splitScale argument.
+ *
+ * Note on z handling: pLucretia accumulates tau from
+ *     tau_in = z_in * k * gamma_c / P_norm
+ * and recovers z at the exit via
+ *     z_out = tau_out * P_total / (k * gamma_final) - L * beta_central
+ * which already includes both the input z and the design transit time.
+ * No additional Lorentz-delay correction is needed (and the LorentzDelay
+ * track flag is therefore ignored by this tracker, even though it is
+ * permitted in the dictionary).
+ *
+ * GPU path: the full RK4 has not been ported to a CUDA kernel.  When
+ * compiled for GPU we issue a one-time warning and fall back to drift
+ * tracking.  CPU performance is the priority for now.
+ */
+
+#ifndef __CUDACC__
+
+/* Local SI constants needed by the laser field computation; all of the
+   GeV-flavoured constants (PI, CLIGHT, ME2C2_GEV) come from
+   LucretiaPhysics.h. */
+
+#define LSR_ECHARGE   1.602176462e-19
+#define LSR_ME_KG     9.1093837015e-31
+#define LSR_EPSILON0  8.854187817e-12
+#define LSR_RE        2.8179403262e-15
+#define LSR_ALPHA_INV 137.0359895   /* 1/fine-structure constant */
+
+#define LSR_FIELD_IDEAL   0
+#define LSR_FIELD_EXACT   1
+#define LSR_FIELD_LEADING 2
+
+/* Hermite polynomials H_n(x), n = 0..4 (physicist convention,
+   matching pLucretia / Elegant). */
+static double lsrmdltr_hermite( double x, int n )
+{
+  double x2 ;
+  switch (n) {
+    case 0: return 1.0 ;
+    case 1: return 2.0 * x ;
+    case 2: return 4.0 * x * x - 2.0 ;
+    case 3: return 8.0 * x * x * x - 12.0 * x ;
+    default:
+      x2 = x * x ;
+      return 16.0 * x2 * x2 - 48.0 * x2 + 12.0 ;
+  }
+}
+static double lsrmdltr_hermite_d( double x, int n )
+{
+  switch (n) {
+    case 0: return 0.0 ;
+    case 1: return 2.0 ;
+    case 2: return 8.0 * x ;
+    case 3: return 24.0 * x * x - 12.0 ;
+    default: return 64.0 * x * x * x - 96.0 * x ;
+  }
+}
+static double lsrmdltr_hermite_dd( double x, int n )
+{
+  if ( n <= 1 ) return 0.0 ;
+  switch (n) {
+    case 2: return 8.0 ;
+    case 3: return 48.0 * x ;
+    default: return 192.0 * x * x - 96.0 ;
+  }
+}
+
+/* End-pole field tapering at undulator entrance/exit. */
+static double lsrmdltr_pole_factor( double z, double L, int periods,
+        double pf1, double pf2, double pf3 )
+{
+  double half_period = L / ( 2.0 * (double) periods ) ;
+  int n_poles = 2 * periods ;
+  int pn = (int) ( z / half_period + 0.5 ) ;
+  if (pn < 0) pn = 0 ;
+  if (pn > n_poles) pn = n_poles ;
+  if (pn == 0 || pn == n_poles)         return pf1 ;
+  if (pn == 1 || pn == n_poles - 1)     return pf2 ;
+  if (pn == 2 || pn == n_poles - 2)     return pf3 ;
+  return 1.0 ;
+}
+
+/* Undulator B-field [T], three expansion modes, planar or helical. */
+static void lsrmdltr_und_field( double Bfactor,
+        double kux, double kuy, double kuz,
+        int field_code, int helical,
+        double *Bx, double *By, double *Bz )
+{
+  double cos_kuz, sin_kuz ;
+  *Bx = 0.0 ; *By = 0.0 ; *Bz = 0.0 ;
+  cos_kuz = cos( kuz ) ;
+  if ( !helical ) {
+    if ( field_code == LSR_FIELD_IDEAL ) {
+      *By = Bfactor * cos_kuz ;
+    } else if ( field_code == LSR_FIELD_EXACT ) {
+      *By = Bfactor * cos_kuz * cosh( kuy ) ;
+      *Bz = -Bfactor * sin( kuz ) * sinh( kuy ) ;
+    } else { /* leading */
+      *By = Bfactor * cos_kuz * ( 1.0 + 0.5 * kuy * kuy ) ;
+      *Bz = -Bfactor * sin( kuz ) * kuy ;
+    }
+  } else {
+    sin_kuz = sin( kuz ) ;
+    if ( field_code == LSR_FIELD_IDEAL ) {
+      *Bx = -Bfactor * sin_kuz ;
+      *By =  Bfactor * cos_kuz ;
+    } else if ( field_code == LSR_FIELD_EXACT ) {
+      *Bx = -Bfactor * sin_kuz * cosh( kux ) ;
+      *By =  Bfactor * cos_kuz * cosh( kuy ) ;
+      *Bz = -Bfactor * sin_kuz * sinh( kuy )
+            -Bfactor * cos_kuz * sinh( kux ) ;
+    } else { /* leading */
+      *Bx = -Bfactor * sin_kuz * ( 1.0 + 0.5 * kux * kux ) ;
+      *By =  Bfactor * cos_kuz * ( 1.0 + 0.5 * kuy * kuy ) ;
+      *Bz = -Bfactor * sin_kuz * kuy
+            -Bfactor * cos_kuz * kux ;
+    }
+  }
+}
+
+/* Hermite-Gauss TEM-mn laser fields (E in V/m, B in T) at scaled-real
+   transverse coordinates (x, y) [m] and longitudinal offset dz [m] from
+   the laser focus.  Polarisation along x; if tilt != 0 the field is
+   rotated in the xy plane. */
+static void lsrmdltr_laser_field(
+        double phase, double Ef0, double ZR, double k, double w0,
+        double x, double y, double dz, int m_mode, int n_mode,
+        double tilt,
+        double *Ex_out, double *Ey_out, double *Ez_out,
+        double *Bx_out, double *By_out, double *Bz_out )
+{
+  double ct, st, xr, yr ;
+  double Q_denom, Q_re, Q_im, Q2_re, Q2_im ;
+  double dz_ZR, w, kw, kw2, gouy, r2 ;
+  double exp_re, exp_im, env_amp, expmag ;
+  double Ec_re, Ec_im ;
+  double sqrt2_kw, sqrt2 = sqrt( 2.0 ) ;
+  double sx, sy, Hm, Hn, Hmp, Hnp, Hmpp ;
+  double tmp_re, tmp_im, prod_re ;
+  double Ex_v, Ey_v, Ez_v, Bx_v, By_v, Bz_v ;
+  double Ex_r, Bx_r ;
+
+  if ( tilt != 0.0 ) {
+    ct = cos( tilt ) ; st = sin( tilt ) ;
+    xr =  x * ct + y * st ;
+    yr = -x * st + y * ct ;
+  } else {
+    ct = 1.0 ; st = 0.0 ; xr = x ; yr = y ;
+  }
+
+  /* Q = 1 / (dz - i*ZR) = (dz + i*ZR) / (dz^2 + ZR^2) */
+  Q_denom = dz * dz + ZR * ZR ;
+  Q_re = dz / Q_denom ;
+  Q_im = ZR / Q_denom ;
+  /* Q^2 */
+  Q2_re = Q_re * Q_re - Q_im * Q_im ;
+  Q2_im = 2.0 * Q_re * Q_im ;
+
+  dz_ZR = dz / ZR ;
+  w  = w0 * sqrt( 1.0 + dz_ZR * dz_ZR ) ;
+  kw = k * w ;
+  kw2 = kw * kw ;
+
+  gouy = (double)( m_mode + n_mode + 1 ) * atan( dz_ZR ) ;
+  r2 = xr * xr + yr * yr ;
+
+  /* exp_arg = i*phase - i*gouy + i * k * Q * r2 / 2
+              = i*(phase - gouy) + i * k/2 * r2 * Q
+     Real part: -k/2 * r2 * Q_im
+     Imag part:  (phase - gouy) + k/2 * r2 * Q_re                    */
+  exp_re = -0.5 * k * r2 * Q_im ;
+  exp_im =  ( phase - gouy ) + 0.5 * k * r2 * Q_re ;
+  expmag = exp( exp_re ) ;
+  env_amp = Ef0 * w0 / w ;
+  Ec_re = env_amp * expmag * cos( exp_im ) ;
+  Ec_im = env_amp * expmag * sin( exp_im ) ;
+
+  sx = sqrt2 * xr / w ;
+  sy = sqrt2 * yr / w ;
+  Hm   = lsrmdltr_hermite( sx, m_mode ) ;
+  Hn   = lsrmdltr_hermite( sy, n_mode ) ;
+  Hmp  = lsrmdltr_hermite_d( sx, m_mode ) ;
+  Hnp  = lsrmdltr_hermite_d( sy, n_mode ) ;
+  Hmpp = lsrmdltr_hermite_dd( sx, m_mode ) ;
+
+  sqrt2_kw = sqrt2 / kw ;
+
+  /* Ex = Re( Hm * Hn * Ec )  (real scalar times complex Ec) */
+  Ex_v = Hm * Hn * Ec_re ;
+  Ey_v = 0.0 ;
+
+  /* Ez = Re( Ec * (i * sqrt2_kw * Hmp * Hn - Q * xr * Hm * Hn) )
+        = Re( Ec * ( (-Q_re*xr*Hm*Hn) + i*(sqrt2_kw*Hmp*Hn - Q_im*xr*Hm*Hn) ) ) */
+  tmp_re = -Q_re * xr * Hm * Hn ;
+  tmp_im =  sqrt2_kw * Hmp * Hn - Q_im * xr * Hm * Hn ;
+  Ez_v = Ec_re * tmp_re - Ec_im * tmp_im ;
+
+  /* Bx = Re( Ec * (
+            2/kw^2 * Hmp * Hnp
+          + i * sqrt2 * Q/kw * (xr*Hm*Hnp + yr*Hmp*Hn)
+          - xr*yr * Q^2 * Hm * Hn
+       )) / CLIGHT
+     The bracketed expression's real and imaginary parts: */
+  {
+    double a = 2.0 / kw2 * Hmp * Hnp ;
+    double b = sqrt2 / kw * ( xr * Hm * Hnp + yr * Hmp * Hn ) ;
+    /* i*b*Q has real = -b*Q_im, imag = b*Q_re; -xr*yr*Q^2 is complex */
+    double c_re = -xr * yr * Q2_re * Hm * Hn ;
+    double c_im = -xr * yr * Q2_im * Hm * Hn ;
+    tmp_re = a + ( -b * Q_im ) + c_re ;
+    tmp_im = ( b * Q_re ) + c_im ;
+    prod_re = Ec_re * tmp_re - Ec_im * tmp_im ;
+    Bx_v = prod_re / CLIGHT ;
+  }
+
+  /* By = Re( Ec * (
+           -2/kw^2 * Hmpp * Hn
+           - 2*sqrt2 * i * Q/kw * xr * Hmp * Hn
+           + (Q^2 * xr^2 - i*Q/k + 1) * Hm * Hn
+         )) / CLIGHT                                                  */
+  {
+    double a = -2.0 / kw2 * Hmpp * Hn ;
+    double b = -2.0 * sqrt2 / kw * xr * Hmp * Hn ;
+    double xr2 = xr * xr ;
+    /* (Q^2*xr^2 + 1) is complex; -i*Q/k = (Q_im - i*Q_re)/k */
+    double d_re = ( Q2_re * xr2 + Q_im / k + 1.0 ) * Hm * Hn ;
+    double d_im = ( Q2_im * xr2 - Q_re / k ) * Hm * Hn ;
+    tmp_re = a + ( -b * Q_im ) + d_re ;
+    tmp_im = ( b * Q_re ) + d_im ;
+    prod_re = Ec_re * tmp_re - Ec_im * tmp_im ;
+    By_v = prod_re / CLIGHT ;
+  }
+
+  /* Bz = Re( Ec * (i*sqrt2_kw * Hm * Hnp - Q * yr * Hm * Hn) ) / CLIGHT */
+  tmp_re = -Q_re * yr * Hm * Hn ;
+  tmp_im =  sqrt2_kw * Hm * Hnp - Q_im * yr * Hm * Hn ;
+  prod_re = Ec_re * tmp_re - Ec_im * tmp_im ;
+  Bz_v = prod_re / CLIGHT ;
+
+  if ( tilt != 0.0 ) {
+    Ex_r = Ex_v * ct - Ey_v * st ;
+    Ey_v = Ex_v * st + Ey_v * ct ;
+    Ex_v = Ex_r ;
+    Bx_r = Bx_v * ct - By_v * st ;
+    By_v = Bx_v * st + By_v * ct ;
+    Bx_v = Bx_r ;
+  }
+
+  *Ex_out = Ex_v ; *Ey_out = Ey_v ; *Ez_out = Ez_v ;
+  *Bx_out = Bx_v ; *By_out = By_v ; *Bz_out = Bz_v ;
+}
+
+/* RHS of the equations of motion in scaled coordinates (Lorentz force,
+   tau = omega*t as independent variable). */
+static void lsrmdltr_deriv(
+        double qx, double qy, double qz,
+        double Px, double Py, double Pz, double tau,
+        double k, double L, int periods, double Bu, double ku,
+        int field_code, int helical,
+        double pf1, double pf2, double pf3, double Bscale,
+        int has_laser, double Ef0, double ZR, double w0,
+        int m_mode, int n_mode, double laser_tilt,
+        double laser_phase, double laser_x0, double laser_y0,
+        double laser_z0, double Escale, double Z_center,
+        double *dqx, double *dqy, double *dqz,
+        double *dPx, double *dPy, double *dPz )
+{
+  double gamma  = sqrt( Px*Px + Py*Py + Pz*Pz + 1.0 ) ;
+  double inv_g  = 1.0 / gamma ;
+  double x_m, y_m, z_m, pf, Bfactor ;
+  double Bxu, Byu, Bzu, BxG, ByG, BzG, bsg ;
+  double lEx, lEy, lEz, lBx, lBy, lBz, phase ;
+
+  *dqx = Px * inv_g ;
+  *dqy = Py * inv_g ;
+  *dqz = Pz * inv_g ;
+
+  x_m = qx / k ;
+  y_m = qy / k ;
+  z_m = qz / k ;
+
+  pf = lsrmdltr_pole_factor( z_m, L, periods, pf1, pf2, pf3 ) ;
+  Bfactor = pf * Bu ;
+  lsrmdltr_und_field( Bfactor, ku*x_m, ku*y_m, ku*z_m,
+                      field_code, helical, &Bxu, &Byu, &Bzu ) ;
+
+  bsg = Bscale * inv_g ;
+  BxG = Bxu * bsg ;
+  ByG = Byu * bsg ;
+  BzG = Bzu * bsg ;
+
+  if ( has_laser ) {
+    phase = -tau + qz - Z_center + laser_phase ;
+    lsrmdltr_laser_field( phase, Ef0, ZR, k, w0,
+            x_m - laser_x0, y_m - laser_y0,
+            z_m - laser_z0 - 0.5 * L,
+            m_mode, n_mode, laser_tilt,
+            &lEx, &lEy, &lEz, &lBx, &lBy, &lBz ) ;
+    BxG += lBx * bsg ;
+    ByG += lBy * bsg ;
+    BzG += lBz * bsg ;
+    *dPx = -( lEx * Escale + Py * BzG - Pz * ByG ) ;
+    *dPy = -( lEy * Escale + Pz * BxG - Px * BzG ) ;
+    *dPz = -( lEz * Escale + Px * ByG - Py * BxG ) ;
+  } else {
+    *dPx = -( Py * BzG - Pz * ByG ) ;
+    *dPy = -( Pz * BxG - Px * BzG ) ;
+    *dPz = -( Px * ByG - Py * BxG ) ;
+  }
+}
+
+#endif /* !__CUDACC__ */
+
+int TrackBunchThruLsrmdltr( int elemno, int bunchno,
+        struct TrackArgsStruc* ArgStruc, int* TrackFlag )
+{
+#ifdef __CUDACC__
+  /* GPU build: full physics not yet ported.  Warn once per session,
+     then track as a drift. */
+  static int lsrmdltr_warned = 0 ;
+  if ( !lsrmdltr_warned ) {
+    AddMessage("LSRMDLTR is not yet supported on the GPU build; "
+               "treating as a drift.", 0) ;
+    lsrmdltr_warned = 1 ;
+  }
+  return TrackBunchThruDrift( elemno, bunchno, ArgStruc, TrackFlag, 0 ) ;
+#else
+  int stat = 1, ray, step, c, m_mode, n_mode, periods, helical ;
+  int field_code, do_sr, do_isr, has_laser, n_steps ;
+  struct Bunch* ThisBunch ;
+  double L, Bu, P_design, P_central, gamma_central, beta_central ;
+  double lambda_u, ku, Ku, laser_wl, k, omega ;
+  double Escale, Bscale, w0, ZR, Ef0 ;
+  double laser_phase, laser_x0, laser_y0, laser_z0, laser_tilt ;
+  double pf1, pf2, pf3 ;
+  double Z_end, Z_center, h, h2, h6 ;
+  double radCoef = 0.0, isrCoef = 0.0 ;
+  double aper2, *aper_ptr ;
+  double Xfrms[6][2] ;
+  double *x_p, *px_p, *y_p, *py_p, *z_p, *p_p ;
+  double *gauss_buf = NULL ;
+  int n_gauss = 0 ;
+  long n_factm, n_factn, ifact ;
+
+  /* 1. Read all element parameters via the dictionary. */
+  stat = GetDatabaseParameters( elemno, nLsrmdltrPar, LsrmdltrPar,
+                                TrackPars, ElementTable ) ;
+  if ( stat == 0 ) {
+    BadElementMessage( elemno + 1 ) ;
+    return 0 ;
+  }
+
+  L            = GetDBValue( LsrmdltrPar + LsrL ) ;
+  Bu           = GetDBValue( LsrmdltrPar + LsrBu ) ;
+  periods      = (int) GetDBValue( LsrmdltrPar + LsrPeriods ) ;
+  P_design     = GetDBValue( LsrmdltrPar + LsrP ) ;
+  laser_wl     = GetDBValue( LsrmdltrPar + LsrLambda ) ;
+  w0           = GetDBValue( LsrmdltrPar + LsrW0 ) ;
+  laser_phase  = GetDBValue( LsrmdltrPar + LsrPhase ) ;
+  laser_x0     = GetDBValue( LsrmdltrPar + LsrX0 ) ;
+  laser_y0     = GetDBValue( LsrmdltrPar + LsrY0 ) ;
+  laser_z0     = GetDBValue( LsrmdltrPar + LsrZ0 ) ;
+  laser_tilt   = GetDBValue( LsrmdltrPar + LsrTilt ) ;
+  m_mode       = (int) GetDBValue( LsrmdltrPar + LsrM ) ;
+  n_mode       = (int) GetDBValue( LsrmdltrPar + LsrN ) ;
+  n_steps      = (int) GetDBValue( LsrmdltrPar + LsrNSteps ) ;
+  field_code   = (int) GetDBValue( LsrmdltrPar + LsrFieldExpansion ) ;
+  pf1          = GetDBValue( LsrmdltrPar + LsrPF1 ) ;
+  pf2          = GetDBValue( LsrmdltrPar + LsrPF2 ) ;
+  pf3          = GetDBValue( LsrmdltrPar + LsrPF3 ) ;
+  helical      = (int) GetDBValue( LsrmdltrPar + LsrHelical ) ;
+  do_sr        = (int) GetDBValue( LsrmdltrPar + LsrSynchRad ) ;
+  do_isr       = (int) GetDBValue( LsrmdltrPar + LsrISR ) ;
+
+  /* Sanity checks (silent no-op if insufficient physics is configured,
+     matching pLucretia). */
+  if ( L <= 0.0 || periods <= 0 || Bu == 0.0 || n_steps <= 0 )
+    return 1 ;
+  if ( m_mode > 4 || n_mode > 4 ) {
+    char msg[200] ;
+    sprintf( msg, "LSRMDLTR element %d: LaserM/LaserN must be <= 4 "
+             "(got %d, %d)", elemno + 1, m_mode, n_mode ) ;
+    AddMessage( msg, 1 ) ;
+    return 0 ;
+  }
+  if ( field_code != LSR_FIELD_IDEAL && field_code != LSR_FIELD_EXACT &&
+       field_code != LSR_FIELD_LEADING )
+    field_code = LSR_FIELD_LEADING ;
+
+  /* 2. Reference particle quantities (P_design = 0 -> use bunch mean). */
+  ThisBunch = ArgStruc->TheBeam->bunches[bunchno] ;
+  if ( P_design <= 0.0 ) {
+    int npart = 0 ; double psum = 0.0 ;
+    for ( ray = 0 ; ray < ThisBunch->nray ; ray++ ) {
+      if ( ThisBunch->stop[ray] == 0 ) {
+        psum += ThisBunch->x[6*ray + 5] ; npart++ ;
+      }
+    }
+    P_design = ( npart > 0 ) ? psum / (double) npart : 0.0 ;
+  }
+  if ( P_design <= 0.0 ) {
+    BadElementMessage( elemno + 1 ) ; return 0 ;
+  }
+  P_central     = P_design / ME2C2_GEV ;
+  gamma_central = sqrt( 1.0 + P_central * P_central ) ;
+  beta_central  = P_central / gamma_central ;
+
+  /* 3. Undulator K and (optional) resonance laser wavelength. */
+  lambda_u = L / (double) periods ;
+  ku       = 2.0 * PI / lambda_u ;
+  Ku       = Bu * LSR_ECHARGE
+             / ( LSR_ME_KG * CLIGHT * beta_central * ku ) ;
+  if ( laser_wl <= 0.0 )
+    laser_wl = lambda_u / ( 2.0 * gamma_central * gamma_central )
+               * ( 1.0 + 0.5 * Ku * Ku ) ;
+  k     = 2.0 * PI / laser_wl ;
+  omega = k * CLIGHT ;
+
+  /* 4. Field-to-acceleration scaling factors (dimensionless). */
+  Escale = LSR_ECHARGE / ( LSR_ME_KG * omega * CLIGHT ) ;
+  Bscale = LSR_ECHARGE / ( LSR_ME_KG * omega ) ;
+
+  /* 5. Laser amplitude and Rayleigh range. */
+  if ( w0 > 0.0 ) {
+    ZR = 0.5 * k * w0 * w0 ;
+  } else {
+    ZR = 0.0 ;
+  }
+  if ( GetDBValue( LsrmdltrPar + LsrPower ) > 0.0 && w0 > 0.0 ) {
+    n_factm = 1 ; for ( ifact = 1 ; ifact <= m_mode ; ifact++ ) n_factm *= ifact ;
+    n_factn = 1 ; for ( ifact = 1 ; ifact <= n_mode ; ifact++ ) n_factn *= ifact ;
+    Ef0 = ( 2.0 / w0 ) * sqrt(
+            GetDBValue( LsrmdltrPar + LsrPower ) /
+            ( pow( 2.0, (double)( m_mode + n_mode ) ) * PI
+              * (double) n_factm * (double) n_factn
+              * LSR_EPSILON0 * CLIGHT ) ) ;
+    has_laser = 1 ;
+  } else {
+    Ef0 = 0.0 ;
+    has_laser = 0 ;
+  }
+
+  /* 6. Integration step size (in scaled tau units). */
+  Z_end    = L * k ;
+  Z_center = 0.5 * Z_end ;
+  h        = Z_end / (double) n_steps ;
+  h2       = 0.5 * h ;
+  h6       = h / 6.0 ;
+
+  /* 7. SR / ISR coefficients (matching pLucretia / Elegant exactly). */
+  if ( do_sr || do_isr ) {
+    radCoef = LSR_ECHARGE * LSR_ECHARGE
+              * P_central * P_central * P_central
+              / ( 6.0 * PI * LSR_EPSILON0 * CLIGHT * CLIGHT * LSR_ME_KG ) ;
+    isrCoef = LSR_RE * sqrt(
+                55.0 / ( 24.0 * sqrt( 3.0 ) )
+                * pow( P_central, 5.0 )
+                * LSR_ALPHA_INV ) ;
+  }
+
+  /* 8. Element offsets (Girder + per-element). */
+  stat = GetTotalOffsetXfrms( LsrmdltrPar[LsrGirder].ValuePtr,
+                              &L, LsrmdltrPar[LsrS].ValuePtr,
+                              LsrmdltrPar[LsrOffset].ValuePtr,
+                              Xfrms ) ;
+  if ( stat == 0 ) {
+    BadOffsetMessage( elemno + 1 ) ; return 0 ;
+  }
+
+  /* 9. Aperture (single check at element exit). */
+  aper_ptr = LsrmdltrPar[Lsraper].ValuePtr ;
+  if ( aper_ptr != NULL && TrackFlag[Aper] ) {
+    aper2 = (*aper_ptr) * (*aper_ptr) ;
+  } else {
+    aper2 = 0.0 ;
+  }
+
+  /* 10. Pre-allocate Gaussian random numbers for ISR (one per
+         step per ray; cached internally by RanGaussVecPtr). */
+  if ( do_isr ) {
+    n_gauss = n_steps * ThisBunch->nray ;
+    if ( n_gauss > 0 ) {
+      gauss_buf = RanGaussVecPtr( n_gauss ) ;
+      if ( gauss_buf == NULL ) {
+        AddMessage("LSRMDLTR: failed to allocate ISR random numbers", 1) ;
+        return 0 ;
+      }
+    }
+  }
+
+  /* Swap input/output pointers so that y[] becomes the output buffer. */
+  XYExchange( ThisBunch ) ;
+
+
+  /* 11. Per-ray loop: convert to scaled coords, RK4 through, convert
+         back, apply aperture.
+
+     OpenMP parallelisation: each ray's RK4 trajectory is independent.
+     The pre-allocated 'gauss_buf' is read with deterministic per-ray
+     indexing (ray * n_steps + step) so concurrent reads from different
+     threads do not race.  The Check helper called for the aperture
+     test routes ngoodray decrements through an atomic; the two
+     direct ngoodray decrements below for P0 / Pz failures are
+     similarly guarded.  All per-ray scratch (coordinate pointers,
+     loop indices) needs to be thread-private. */
+#ifdef _OPENMP
+  #pragma omp parallel for \
+              private(step, c, x_p, px_p, y_p, py_p, z_p, p_p)
+#endif
+  for ( ray = 0 ; ray < ThisBunch->nray ; ray++ ) {
+    double xp_in, yp_in, P_norm, Pz_init ;
+    double qx, qy, qz, Px, Py, Pz, tau ;
+    double P_total, gamma_final, xp_out, yp_out, p_out ;
+    int stp = 0 ;
+
+    if ( ThisBunch->stop[ray] != 0 ) {
+      /* Stopped ray: copy through unchanged. */
+      for ( c = 0 ; c < 6 ; c++ )
+        ThisBunch->y[6*ray + c] = ThisBunch->x[6*ray + c] ;
+      continue ;
+    }
+
+    /* Pull pointers into the *input* coordinates so we can apply the
+       upstream xfrm in-place. */
+    GetLocalCoordPtrs( ThisBunch->x, 6*ray,
+                       &x_p, &px_p, &y_p, &py_p, &z_p, &p_p ) ;
+    ApplyTotalXfrm( Xfrms, UPSTREAM, TrackFlag, 0,
+                    x_p, px_p, y_p, py_p, z_p, p_p ) ;
+
+    /* Convert (x, px, y, py, z, p) -> (qx, qy, qz, Px, Py, Pz, tau).
+       px/py are canonical (= P0 * x'); the slope is xp = px / p.   */
+    if ( *p_p <= 0.0 ) {
+      /* Stop ray: no momentum to integrate. */
+      ThisBunch->stop[ray] = (double) (elemno + 1) ;
+#ifdef _OPENMP
+      #pragma omp atomic
+#endif
+      ThisBunch->ngoodray-- ;
+      for ( c = 0 ; c < 6 ; c++ )
+        ThisBunch->y[6*ray + c] = ThisBunch->x[6*ray + c] ;
+      continue ;
+    }
+    xp_in = *px_p / *p_p ;
+    yp_in = *py_p / *p_p ;
+    P_norm = *p_p / ME2C2_GEV ;
+    Pz_init = P_norm / sqrt( 1.0 + xp_in*xp_in + yp_in*yp_in ) ;
+
+    qx  = (*x_p) * k ;
+    qy  = (*y_p) * k ;
+    qz  = 0.0 ;                                /* z relative to entrance */
+    Px  = xp_in * Pz_init ;
+    Py  = yp_in * Pz_init ;
+    Pz  = Pz_init ;
+    tau = (*z_p) * k * gamma_central / P_norm ; /* matches pLucretia */
+
+    /* RK4 integration loop. */
+    for ( step = 0 ; step < n_steps ; step++ ) {
+      double k1x, k1y, k1z, k1Px, k1Py, k1Pz ;
+      double k2x, k2y, k2z, k2Px, k2Py, k2Pz ;
+      double k3x, k3y, k3z, k3Px, k3Py, k3Pz ;
+      double k4x, k4y, k4z, k4Px, k4Py, k4Pz ;
+
+      lsrmdltr_deriv( qx, qy, qz, Px, Py, Pz, tau,
+              k, L, periods, Bu, ku, field_code, helical,
+              pf1, pf2, pf3, Bscale,
+              has_laser, Ef0, ZR, w0, m_mode, n_mode, laser_tilt,
+              laser_phase, laser_x0, laser_y0, laser_z0, Escale,
+              Z_center,
+              &k1x, &k1y, &k1z, &k1Px, &k1Py, &k1Pz ) ;
+      lsrmdltr_deriv( qx + h2*k1x, qy + h2*k1y, qz + h2*k1z,
+              Px + h2*k1Px, Py + h2*k1Py, Pz + h2*k1Pz, tau + h2,
+              k, L, periods, Bu, ku, field_code, helical,
+              pf1, pf2, pf3, Bscale,
+              has_laser, Ef0, ZR, w0, m_mode, n_mode, laser_tilt,
+              laser_phase, laser_x0, laser_y0, laser_z0, Escale,
+              Z_center,
+              &k2x, &k2y, &k2z, &k2Px, &k2Py, &k2Pz ) ;
+      lsrmdltr_deriv( qx + h2*k2x, qy + h2*k2y, qz + h2*k2z,
+              Px + h2*k2Px, Py + h2*k2Py, Pz + h2*k2Pz, tau + h2,
+              k, L, periods, Bu, ku, field_code, helical,
+              pf1, pf2, pf3, Bscale,
+              has_laser, Ef0, ZR, w0, m_mode, n_mode, laser_tilt,
+              laser_phase, laser_x0, laser_y0, laser_z0, Escale,
+              Z_center,
+              &k3x, &k3y, &k3z, &k3Px, &k3Py, &k3Pz ) ;
+      lsrmdltr_deriv( qx + h*k3x, qy + h*k3y, qz + h*k3z,
+              Px + h*k3Px, Py + h*k3Py, Pz + h*k3Pz, tau + h,
+              k, L, periods, Bu, ku, field_code, helical,
+              pf1, pf2, pf3, Bscale,
+              has_laser, Ef0, ZR, w0, m_mode, n_mode, laser_tilt,
+              laser_phase, laser_x0, laser_y0, laser_z0, Escale,
+              Z_center,
+              &k4x, &k4y, &k4z, &k4Px, &k4Py, &k4Pz ) ;
+
+      qx  += h6 * ( k1x  + 2.0*k2x  + 2.0*k3x  + k4x  ) ;
+      qy  += h6 * ( k1y  + 2.0*k2y  + 2.0*k3y  + k4y  ) ;
+      qz  += h6 * ( k1z  + 2.0*k2z  + 2.0*k3z  + k4z  ) ;
+      Px  += h6 * ( k1Px + 2.0*k2Px + 2.0*k3Px + k4Px ) ;
+      Py  += h6 * ( k1Py + 2.0*k2Py + 2.0*k3Py + k4Py ) ;
+      Pz  += h6 * ( k1Pz + 2.0*k2Pz + 2.0*k3Pz + k4Pz ) ;
+      tau += h ;
+
+      /* Optional SR / ISR after each step (matching Elegant). */
+      if ( do_sr || do_isr ) {
+        double p2  = Px*Px + Py*Py + Pz*Pz ;
+        double gam = sqrt( p2 + 1.0 ) ;
+        double pab = sqrt( p2 ) ;
+        double x_m = qx / k, y_m = qy / k, z_m = qz / k ;
+        double h_phys = h / k ;
+        double pf, Bf, Bxr, Byr, Bzr, B2, Brho, irho2 ;
+        double delta0, delta1, scale, gv ;
+
+        pf = lsrmdltr_pole_factor( z_m, L, periods, pf1, pf2, pf3 ) ;
+        Bf = pf * Bu ;
+        lsrmdltr_und_field( Bf, ku*x_m, ku*y_m, ku*z_m,
+                            field_code, helical, &Bxr, &Byr, &Bzr ) ;
+        B2 = Bxr*Bxr + Byr*Byr + Bzr*Bzr ;
+        Brho = gam * LSR_ME_KG * CLIGHT / LSR_ECHARGE ;
+        irho2 = B2 / ( Brho * Brho ) ;
+
+        delta0 = ( pab - P_central ) / P_central ;
+        delta1 = delta0 ;
+        if ( do_sr )
+          delta1 -= radCoef * ( 1.0 + delta0 ) * irho2 * h_phys ;
+        if ( do_isr ) {
+          /* Deterministic per-ray indexing into the pre-allocated
+             buffer keeps OpenMP per-ray parallelism race-free.   */
+          gv = gauss_buf[ray * n_steps + step] ;
+          if ( gv >  3.0 ) gv =  3.0 ;
+          if ( gv < -3.0 ) gv = -3.0 ;
+          delta1 += isrCoef * ( 1.0 + delta0 ) * ( 1.0 + delta0 )
+                    * pow( irho2, 0.75 )
+                    * sqrt( h_phys ) * gv ;
+        }
+        scale = ( 1.0 + delta1 ) / ( 1.0 + delta0 ) ;
+        Px *= scale ;
+        Py *= scale ;
+        Pz *= scale ;
+      }
+    }
+
+    /* Convert back to Lucretia coordinates. */
+    P_total = sqrt( Px*Px + Py*Py + Pz*Pz ) ;
+    gamma_final = sqrt( P_total*P_total + 1.0 ) ;
+    if ( Pz <= 0.0 ) {
+      ThisBunch->stop[ray] = (double) (elemno + 1) ;
+#ifdef _OPENMP
+      #pragma omp atomic
+#endif
+      ThisBunch->ngoodray-- ;
+      for ( c = 0 ; c < 6 ; c++ )
+        ThisBunch->y[6*ray + c] = ThisBunch->x[6*ray + c] ;
+      continue ;
+    }
+    xp_out = Px / Pz ;
+    yp_out = Py / Pz ;
+    p_out  = P_total * ME2C2_GEV ;
+
+    /* Write the *output* coords; ApplyTotalXfrm DOWNSTREAM operates
+       in-place on the provided pointers. */
+    ThisBunch->y[6*ray + 0] = qx / k ;
+    ThisBunch->y[6*ray + 1] = xp_out * p_out ;        /* canonical px */
+    ThisBunch->y[6*ray + 2] = qy / k ;
+    ThisBunch->y[6*ray + 3] = yp_out * p_out ;
+    ThisBunch->y[6*ray + 4] = tau * P_total / ( k * gamma_final )
+                              - L * beta_central ;
+    ThisBunch->y[6*ray + 5] = p_out ;
+
+    GetLocalCoordPtrs( ThisBunch->y, 6*ray,
+                       &x_p, &px_p, &y_p, &py_p, &z_p, &p_p ) ;
+    ApplyTotalXfrm( Xfrms, DOWNSTREAM, TrackFlag, 0,
+                    x_p, px_p, y_p, py_p, z_p, p_p ) ;
+
+    /* Aperture check at element exit (circular aperture, like the
+       other trackers). */
+    if ( aper2 > 0.0 ) {
+      CheckAperStopPart( ThisBunch->x, ThisBunch->y, ThisBunch->stop,
+                         &ThisBunch->ngoodray, elemno, &aper2,
+                         ray, DOWNSTREAM, NULL, 0.0, &stp, 0 ) ;
+    }
+  }
+
+  return 1 ;
+#endif /* !__CUDACC__ */
+}
+
+/*=====================================================================*/
+
+/* Tracking through a Canonical Wiggler / Undulator (CWIGGLER), modelled
+ * after Elegant's CWIGGLER element (Y. Wu, Duke University).
+ *
+ * Integrator: 4th-order Yoshida symplectic (drift-kick splitting) over
+ * `StepsPerPeriod * Periods` steps, with each step decomposed as a
+ * 7-substep DKDKDKD Yoshida composition (or a single DKD leapfrog when
+ * IntegrationOrder == 2).  The drift step is exact for the free
+ * relativistic particle in the LSRMDLTR-style scaled coordinates
+ * (qx = ku*x, qy = ku*y, qz = ku*z, Px = beta*gamma_x, Py = beta*gamma_y,
+ * Pz = beta*gamma_z, tau = omega*t with omega = ku*c).  The kick step
+ * uses the Lorentz force from the wiggler magnetic field at the frozen
+ * position, with gamma frozen at the start of the kick.  This makes the
+ * kick approximately symplectic; the residual error scales like leapfrog
+ * and is absorbed into the Yoshida 4th-order coefficients.  Adequate for
+ * single-pass and long-lattice ring-tracking applications; not exactly
+ * symplectic in the rigorous Hamiltonian sense (the Lorentz force has
+ * implicit gamma dependence that we treat as constant during each kick).
+ *
+ * Field model: ideal sinusoidal by default; arbitrary harmonic
+ * decomposition via the Harmonics Nx5 matrix
+ *   row = [Cmn  KxOverKw  KyOverKw  KzOverKw  Phase]
+ * matching Elegant's BX_FILE/BY_FILE column names.  The constraint
+ *   ky^2 = kx^2 + kz^2
+ * is enforced by the MATLAB constructor.  For each harmonic (in the
+ * horizontal-wiggler normal-pole geometry):
+ *   Bx =  Bmax * pf * Cmn * (kx/ky) * sin(kx*x) * sinh(ky*y) * cos(kz*z + phi)
+ *   By = -Bmax * pf * Cmn          * cos(kx*x) * cosh(ky*y) * cos(kz*z + phi)
+ *   Bz =  Bmax * pf * Cmn * (kz/ky) * cos(kx*x) * sinh(ky*y) * sin(kz*z + phi)
+ * (the Bz form is derived from div B = 0).  pf is the end-pole taper
+ * (lsrmdltr_pole_factor reused).  For Helical=1 we superpose a
+ * hardcoded second component:
+ *   Bx_h = -Bmax * pf * sin(ku*z) * cosh(ku*x)
+ *   Bz_h = -Bmax * pf * cos(ku*z) * sinh(ku*x)
+ * giving the standard rotating-field helical undulator.  Vertical=1
+ * (planar only) is handled via Tilt = pi/2 in the Lucretia offsets.
+ *
+ * GPU path: not yet ported -- emits a one-time warning and falls back
+ * to drift, mirroring LSRMDLTR. */
+
+#ifndef __CUDACC__
+
+/* CWIGGLER field at scaled position (qx, qy, qz).  `pf` is the pole
+   taper, `ku` is the undulator wavenumber.  `harmonics` is a flat array
+   of 5*n_harm doubles (Cmn, kx_norm, ky_norm, kz_norm, phase per row);
+   pass NULL or n_harm=0 for ideal sinusoidal mode (single hardcoded
+   harmonic).  Helical=1 superposes a 90-degree rotated component. */
+static void cwiggler_field(
+        double qx, double qy, double qz,
+        double Bmax, double pf, double ku, int helical,
+        const double *harmonics, int n_harm,
+        double *Bx_out, double *By_out, double *Bz_out )
+{
+  double Bx = 0.0, By = 0.0, Bz = 0.0 ;
+  double x = qx / ku, y = qy / ku, z = qz / ku ;
+  double w = Bmax * pf ;
+
+  if ( n_harm <= 0 || harmonics == NULL ) {
+    /* Ideal sinusoidal default: kx=0, ky=ku, kz=ku, C=1, phi=0.
+       sin(0*x)=0 so Bx vanishes; cos(0*x)=1.  By and Bz reduce to:
+         By = -w * cos(ku*z) * cosh(ku*y)
+         Bz =  w * cos(0)    * sinh(ku*y) * sin(ku*z) = w * sinh(ku*y) * sin(ku*z)
+       (kz/ky = 1 for the default harmonic.) */
+    By = -w * cos( ku*z ) * cosh( ku*y ) ;
+    Bz =  w * sinh( ku*y ) * sin( ku*z ) ;
+  } else {
+    int h ;
+    for ( h = 0 ; h < n_harm ; h++ ) {
+      double Cmn   = harmonics[5*h + 0] ;
+      double kxn   = harmonics[5*h + 1] ;   /* kx / ku */
+      double kyn   = harmonics[5*h + 2] ;
+      double kzn   = harmonics[5*h + 3] ;
+      double phi   = harmonics[5*h + 4] ;
+      double kx    = ku * kxn ;
+      double ky    = ku * kyn ;
+      double kz    = ku * kzn ;
+      double cxz   = cos( kz*z + phi ) ;
+      double sxz   = sin( kz*z + phi ) ;
+      double cosx  = cos( kx*x ) ;
+      double sinx  = sin( kx*x ) ;
+      double coshy = cosh( ky*y ) ;
+      double sinhy = sinh( ky*y ) ;
+      double Bm    = w * Cmn ;
+      double inv_ky = ( ky != 0.0 ) ? ( 1.0 / ky ) : 0.0 ;
+
+      Bx +=  Bm * (kx * inv_ky) * sinx * sinhy * cxz ;
+      By += -Bm                  * cosx * coshy * cxz ;
+      Bz +=  Bm * (kz * inv_ky) * cosx * sinhy * sxz ;
+    }
+  }
+
+  if ( helical ) {
+    /* Hardcoded second component: rotated planar undulator with phase
+       offset of pi/2, giving the standard rotating helical field. */
+    double cosk = cos( ku*z ) ;
+    double sink = sin( ku*z ) ;
+    double coshx = cosh( ku*x ) ;
+    double sinhx = sinh( ku*x ) ;
+    Bx += -w * sink * coshx ;
+    Bz += -w * cosk * sinhx ;
+  }
+
+  *Bx_out = Bx ;
+  *By_out = By ;
+  *Bz_out = Bz ;
+}
+
+/* Apply a kick of parameter step h (in scaled tau units) to the momentum
+   triple (Px, Py, Pz), with positions and gamma frozen.  Reads the
+   field at (qx, qy, qz). */
+static inline void cwiggler_kick(
+        double *Px, double *Py, double *Pz,
+        double qx, double qy, double qz,
+        double h, double Bmax, double pf, double ku, int helical,
+        const double *harmonics, int n_harm, double Bscale )
+{
+  double Bx, By, Bz, gamma, bsg ;
+  double dPx, dPy, dPz ;
+  cwiggler_field( qx, qy, qz, Bmax, pf, ku, helical,
+                  harmonics, n_harm, &Bx, &By, &Bz ) ;
+  gamma = sqrt( (*Px)*(*Px) + (*Py)*(*Py) + (*Pz)*(*Pz) + 1.0 ) ;
+  bsg = Bscale / gamma ;
+  dPx = -( (*Py) * Bz - (*Pz) * By ) * bsg ;
+  dPy = -( (*Pz) * Bx - (*Px) * Bz ) * bsg ;
+  dPz = -( (*Px) * By - (*Py) * Bx ) * bsg ;
+  *Px += h * dPx ;
+  *Py += h * dPy ;
+  *Pz += h * dPz ;
+}
+
+/* Free-particle drift over scaled tau interval h.  Position update is
+   exact since the momenta and hence gamma are constant.  Also advances
+   the time variable tau. */
+static inline void cwiggler_drift(
+        double *qx, double *qy, double *qz,
+        double Px, double Py, double Pz,
+        double *tau, double h )
+{
+  double inv_g = 1.0 / sqrt( Px*Px + Py*Py + Pz*Pz + 1.0 ) ;
+  *qx += h * Px * inv_g ;
+  *qy += h * Py * inv_g ;
+  *qz += h * Pz * inv_g ;
+  *tau += h ;
+}
+
+/* Yoshida 4th-order coefficients (Yoshida, Phys.Lett.A 150 (1990) 262):
+     w0 = -2^(1/3) / (2 - 2^(1/3))
+     w1 =  1       / (2 - 2^(1/3))
+   Drift weights: c1=c4=w1/2, c2=c3=(w0+w1)/2
+   Kick  weights: d1=d3=w1, d2=w0
+   One step: D(c1) K(d1) D(c2) K(d2) D(c3) K(d3) D(c4)
+*/
+#define CWIG_W0  (-1.7024143839193153)
+#define CWIG_W1  ( 1.3512071919596578)
+#define CWIG_C1  ( 0.5 * CWIG_W1)
+#define CWIG_C2  ( 0.5 * (CWIG_W0 + CWIG_W1))
+#define CWIG_C3  CWIG_C2
+#define CWIG_C4  CWIG_C1
+#define CWIG_D1  CWIG_W1
+#define CWIG_D2  CWIG_W0
+#define CWIG_D3  CWIG_W1
+
+#endif /* !__CUDACC__ */
+
+int TrackBunchThruCwiggler( int elemno, int bunchno,
+        struct TrackArgsStruc* ArgStruc, int* TrackFlag )
+{
+#ifdef __CUDACC__
+  /* GPU build: not yet ported.  Warn once per session, then drift. */
+  static int cwiggler_warned = 0 ;
+  if ( !cwiggler_warned ) {
+    AddMessage("CWIGGLER is not yet supported on the GPU build; "
+               "treating as a drift.", 0) ;
+    cwiggler_warned = 1 ;
+  }
+  return TrackBunchThruDrift( elemno, bunchno, ArgStruc, TrackFlag, 0 ) ;
+#else
+  int stat = 1, ray, step, c, periods, helical, n_steps, integ_order ;
+  int do_sr, do_isr, n_harm = 0 ;
+  struct Bunch* ThisBunch ;
+  double L, Bmax, P_design, P_central, gamma_central, beta_central ;
+  double lambda_u, ku, omega, Bscale ;
+  double pf1, pf2, pf3, h, h2 ;
+  double radCoef = 0.0, isrCoef = 0.0 ;
+  double aper2, *aper_ptr, *harmonics = NULL ;
+  double Xfrms[6][2] ;
+  double *x_p, *px_p, *y_p, *py_p, *z_p, *p_p ;
+  double *gauss_buf = NULL ;
+  int n_gauss = 0 ;
+  int sps ;
+  unsigned long long ray_seed_base = 0ULL ;
+  int sr_on ;
+
+  /* 1. Read element parameters via the dictionary. */
+  stat = GetDatabaseParameters( elemno, nCwigglerPar, CwigglerPar,
+                                TrackPars, ElementTable ) ;
+  if ( stat == 0 ) { BadElementMessage( elemno + 1 ) ; return 0 ; }
+
+  L           = GetDBValue( CwigglerPar + CwigL ) ;
+  Bmax        = GetDBValue( CwigglerPar + CwigBMax ) ;
+  periods     = (int) GetDBValue( CwigglerPar + CwigPeriods ) ;
+  P_design    = GetDBValue( CwigglerPar + CwigP ) ;
+  helical     = (int) GetDBValue( CwigglerPar + CwigHelical ) ;
+  sps         = (int) GetDBValue( CwigglerPar + CwigStepsPerPeriod ) ;
+  integ_order = (int) GetDBValue( CwigglerPar + CwigIntegrationOrder ) ;
+  pf1         = GetDBValue( CwigglerPar + CwigPF1 ) ;
+  pf2         = GetDBValue( CwigglerPar + CwigPF2 ) ;
+  pf3         = GetDBValue( CwigglerPar + CwigPF3 ) ;
+  do_sr       = (int) GetDBValue( CwigglerPar + CwigSynchRad ) ;
+  do_isr      = (int) GetDBValue( CwigglerPar + CwigISR ) ;
+
+  /* Defaults for optional fields.  GetDBValue returns 0 when missing,
+     so fold sensible defaults here rather than in the dictionary. */
+  if ( sps <= 0 ) sps = 12 ;
+  if ( integ_order != 2 && integ_order != 4 ) integ_order = 4 ;
+  if ( pf1 == 0.0 ) pf1 = 1.0 ;
+  if ( pf2 == 0.0 ) pf2 = 1.0 ;
+  if ( pf3 == 0.0 ) pf3 = 1.0 ;
+
+  if ( L <= 0.0 || periods <= 0 || Bmax == 0.0 )
+    return 1 ;
+  if ( sps % 4 != 0 ) {
+    char msg[200] ;
+    sprintf( msg, "CWIGGLER element %d: StepsPerPeriod (%d) must be "
+             "a multiple of 4", elemno + 1, sps ) ;
+    AddMessage( msg, 1 ) ;
+    return 0 ;
+  }
+
+  /* Harmonics matrix: dictionary marks length variable so just read it. */
+  harmonics = CwigglerPar[CwigHarmonics].ValuePtr ;
+  if ( harmonics != NULL ) {
+    int len = CwigglerPar[CwigHarmonics].Length ;
+    if ( len % 5 != 0 ) {
+      char msg[200] ;
+      sprintf( msg, "CWIGGLER element %d: Harmonics length (%d) must "
+               "be a multiple of 5 (rows of [Cmn KxN KyN KzN Phase])",
+               elemno + 1, len ) ;
+      AddMessage( msg, 1 ) ;
+      return 0 ;
+    }
+    n_harm = len / 5 ;
+  }
+
+  /* 2. Reference-particle quantities (P_design = 0 -> bunch mean). */
+  ThisBunch = ArgStruc->TheBeam->bunches[bunchno] ;
+  if ( P_design <= 0.0 ) {
+    int npart = 0 ; double psum = 0.0 ;
+    for ( ray = 0 ; ray < ThisBunch->nray ; ray++ ) {
+      if ( ThisBunch->stop[ray] == 0 ) {
+        psum += ThisBunch->x[6*ray + 5] ; npart++ ;
+      }
+    }
+    P_design = ( npart > 0 ) ? psum / (double) npart : 0.0 ;
+  }
+  if ( P_design <= 0.0 ) { BadElementMessage( elemno + 1 ) ; return 0 ; }
+  P_central     = P_design / ME2C2_GEV ;
+  gamma_central = sqrt( 1.0 + P_central * P_central ) ;
+  beta_central  = P_central / gamma_central ;
+
+  /* 3. Undulator wavenumber and field-to-acceleration scaling. */
+  lambda_u = L / (double) periods ;
+  ku       = 2.0 * PI / lambda_u ;
+  omega    = ku * CLIGHT ;
+  Bscale   = LSR_ECHARGE / ( LSR_ME_KG * omega ) ;
+
+  /* 4. Integration step size in scaled tau units. */
+  n_steps = sps * periods ;
+  /* Total tau spanned by the wiggler equals omega * (L / c) = ku * L.
+     Each step covers ku * L / n_steps. */
+  h  = ku * L / (double) n_steps ;
+  h2 = 0.5 * h ;
+
+  /* 5. SR / ISR coefficients (Elegant per-step formulas). */
+  if ( do_sr || do_isr ) {
+    radCoef = LSR_ECHARGE * LSR_ECHARGE
+              * P_central * P_central * P_central
+              / ( 6.0 * PI * LSR_EPSILON0 * CLIGHT * CLIGHT * LSR_ME_KG ) ;
+    isrCoef = LSR_RE * sqrt(
+                55.0 / ( 24.0 * sqrt( 3.0 ) )
+                * pow( P_central, 5.0 )
+                * 137.0359895 ) ;
+  }
+
+  /* 6. Element offsets. */
+  stat = GetTotalOffsetXfrms( CwigglerPar[CwigGirder].ValuePtr,
+                              &L, CwigglerPar[CwigS].ValuePtr,
+                              CwigglerPar[CwigOffset].ValuePtr,
+                              Xfrms ) ;
+  if ( stat == 0 ) { BadOffsetMessage( elemno + 1 ) ; return 0 ; }
+
+  /* Add per-element Tilt to the offset rotation (used by Vertical=1
+     planar wigglers, which set Tilt = pi/2 in the constructor). */
+  {
+    double tiltExtra = GetDBValue( CwigglerPar + CwigTilt ) ;
+    Xfrms[5][0] += tiltExtra ;
+    Xfrms[5][1] -= tiltExtra ;
+  }
+
+  /* 7. Aperture. */
+  aper_ptr = CwigglerPar[Cwigaper].ValuePtr ;
+  if ( aper_ptr != NULL && TrackFlag[Aper] ) {
+    aper2 = (*aper_ptr) * (*aper_ptr) ;
+  } else {
+    aper2 = 0.0 ;
+  }
+
+  /* 8. Pre-allocate ISR Gaussians (serial, before parallel region) so
+        per-ray indexing gives bit-reproducibility across thread counts. */
+  if ( do_isr ) {
+    n_gauss = n_steps * ThisBunch->nray ;
+    if ( n_gauss > 0 ) {
+      gauss_buf = RanGaussVecPtr( n_gauss ) ;
+      if ( gauss_buf == NULL ) {
+        AddMessage("CWIGGLER: failed to allocate ISR random numbers", 1) ;
+        return 0 ;
+      }
+    }
+  }
+
+  /* 9. Per-ray RNG seeding base for SR bit-reproducibility. */
+  sr_on = ( do_sr || do_isr ) ;
+  if ( sr_on )
+    ray_seed_base = LucretiaNextRaySeedBase( elemno, bunchno ) ;
+
+  XYExchange( ThisBunch ) ;
+
+  /* 10. Per-ray loop: convert to scaled coords, Yoshida-step through,
+         convert back, apply aperture. */
+#ifdef _OPENMP
+  #pragma omp parallel for \
+              private(step, c, x_p, px_p, y_p, py_p, z_p, p_p)
+#endif
+  for ( ray = 0 ; ray < ThisBunch->nray ; ray++ ) {
+    double xp_in, yp_in, P_norm, Pz_init ;
+    double qx, qy, qz, Px, Py, Pz, tau ;
+    double P_total, gamma_final, xp_out, yp_out, p_out ;
+    int stp = 0 ;
+
+    if ( ThisBunch->stop[ray] != 0 ) {
+      for ( c = 0 ; c < 6 ; c++ )
+        ThisBunch->y[6*ray + c] = ThisBunch->x[6*ray + c] ;
+      continue ;
+    }
+
+    if ( sr_on )
+      LucretiaSeedRayRng( ray_seed_base ^ (unsigned long long) ray ) ;
+
+    GetLocalCoordPtrs( ThisBunch->x, 6*ray,
+                       &x_p, &px_p, &y_p, &py_p, &z_p, &p_p ) ;
+    ApplyTotalXfrm( Xfrms, UPSTREAM, TrackFlag, 0,
+                    x_p, px_p, y_p, py_p, z_p, p_p ) ;
+
+    if ( *p_p <= 0.0 ) {
+      ThisBunch->stop[ray] = (double) (elemno + 1) ;
+#ifdef _OPENMP
+      #pragma omp atomic
+#endif
+      ThisBunch->ngoodray-- ;
+      for ( c = 0 ; c < 6 ; c++ )
+        ThisBunch->y[6*ray + c] = ThisBunch->x[6*ray + c] ;
+      continue ;
+    }
+    xp_in   = *px_p / *p_p ;
+    yp_in   = *py_p / *p_p ;
+    P_norm  = *p_p / ME2C2_GEV ;
+    Pz_init = P_norm / sqrt( 1.0 + xp_in*xp_in + yp_in*yp_in ) ;
+
+    qx  = (*x_p) * ku ;
+    qy  = (*y_p) * ku ;
+    qz  = 0.0 ;                          /* z relative to entrance face */
+    Px  = xp_in * Pz_init ;
+    Py  = yp_in * Pz_init ;
+    Pz  = Pz_init ;
+    tau = (*z_p) * ku * gamma_central / P_norm ;
+
+    for ( step = 0 ; step < n_steps ; step++ ) {
+      double pf, z_phys ;
+      /* End-pole taper: based on physical longitudinal position
+         z_phys = step * (L/n_steps), measured from the entrance. */
+      z_phys = (double)step * ( L / (double) n_steps ) ;
+      pf = lsrmdltr_pole_factor( z_phys, L, periods, pf1, pf2, pf3 ) ;
+
+      if ( integ_order == 4 ) {
+        /* Yoshida 4th-order: D(c1*h) K(d1*h) D(c2*h) K(d2*h)
+                              D(c3*h) K(d3*h) D(c4*h) */
+        cwiggler_drift( &qx, &qy, &qz, Px, Py, Pz, &tau, CWIG_C1 * h ) ;
+        cwiggler_kick ( &Px, &Py, &Pz, qx, qy, qz, CWIG_D1 * h,
+                        Bmax, pf, ku, helical, harmonics, n_harm, Bscale ) ;
+        cwiggler_drift( &qx, &qy, &qz, Px, Py, Pz, &tau, CWIG_C2 * h ) ;
+        cwiggler_kick ( &Px, &Py, &Pz, qx, qy, qz, CWIG_D2 * h,
+                        Bmax, pf, ku, helical, harmonics, n_harm, Bscale ) ;
+        cwiggler_drift( &qx, &qy, &qz, Px, Py, Pz, &tau, CWIG_C3 * h ) ;
+        cwiggler_kick ( &Px, &Py, &Pz, qx, qy, qz, CWIG_D3 * h,
+                        Bmax, pf, ku, helical, harmonics, n_harm, Bscale ) ;
+        cwiggler_drift( &qx, &qy, &qz, Px, Py, Pz, &tau, CWIG_C4 * h ) ;
+      } else {
+        /* 2nd-order leapfrog: D(h/2) K(h) D(h/2) */
+        cwiggler_drift( &qx, &qy, &qz, Px, Py, Pz, &tau, h2 ) ;
+        cwiggler_kick ( &Px, &Py, &Pz, qx, qy, qz, h,
+                        Bmax, pf, ku, helical, harmonics, n_harm, Bscale ) ;
+        cwiggler_drift( &qx, &qy, &qz, Px, Py, Pz, &tau, h2 ) ;
+      }
+
+      /* Optional SR / ISR after each step. */
+      if ( do_sr || do_isr ) {
+        double p2  = Px*Px + Py*Py + Pz*Pz ;
+        double gam = sqrt( p2 + 1.0 ) ;
+        double pab = sqrt( p2 ) ;
+        double Bx, By, Bz, B2, Brho, irho2, h_phys ;
+        double delta0, delta1, scale, gv ;
+
+        cwiggler_field( qx, qy, qz, Bmax, pf, ku, helical,
+                        harmonics, n_harm, &Bx, &By, &Bz ) ;
+        B2 = Bx*Bx + By*By + Bz*Bz ;
+        Brho = gam * LSR_ME_KG * CLIGHT / LSR_ECHARGE ;
+        irho2 = B2 / ( Brho * Brho ) ;
+        h_phys = h / ku ;
+
+        delta0 = ( pab - P_central ) / P_central ;
+        delta1 = delta0 ;
+        if ( do_sr )
+          delta1 -= radCoef * ( 1.0 + delta0 ) * irho2 * h_phys ;
+        if ( do_isr ) {
+          gv = gauss_buf[ray * n_steps + step] ;
+          if ( gv >  3.0 ) gv =  3.0 ;
+          if ( gv < -3.0 ) gv = -3.0 ;
+          delta1 += isrCoef * ( 1.0 + delta0 ) * ( 1.0 + delta0 )
+                    * pow( irho2, 0.75 )
+                    * sqrt( h_phys ) * gv ;
+        }
+        scale = ( 1.0 + delta1 ) / ( 1.0 + delta0 ) ;
+        Px *= scale ; Py *= scale ; Pz *= scale ;
+      }
+    }
+
+    /* Convert back to Lucretia coordinates. */
+    P_total = sqrt( Px*Px + Py*Py + Pz*Pz ) ;
+    gamma_final = sqrt( P_total*P_total + 1.0 ) ;
+    if ( Pz <= 0.0 ) {
+      ThisBunch->stop[ray] = (double) (elemno + 1) ;
+#ifdef _OPENMP
+      #pragma omp atomic
+#endif
+      ThisBunch->ngoodray-- ;
+      for ( c = 0 ; c < 6 ; c++ )
+        ThisBunch->y[6*ray + c] = ThisBunch->x[6*ray + c] ;
+      continue ;
+    }
+    xp_out = Px / Pz ;
+    yp_out = Py / Pz ;
+    p_out  = P_total * ME2C2_GEV ;
+
+    ThisBunch->y[6*ray + 0] = qx / ku ;
+    ThisBunch->y[6*ray + 1] = xp_out * p_out ;
+    ThisBunch->y[6*ray + 2] = qy / ku ;
+    ThisBunch->y[6*ray + 3] = yp_out * p_out ;
+    ThisBunch->y[6*ray + 4] = tau * P_total / ( ku * gamma_final )
+                              - L * beta_central ;
+    ThisBunch->y[6*ray + 5] = p_out ;
+
+    GetLocalCoordPtrs( ThisBunch->y, 6*ray,
+                       &x_p, &px_p, &y_p, &py_p, &z_p, &p_p ) ;
+    ApplyTotalXfrm( Xfrms, DOWNSTREAM, TrackFlag, 0,
+                    x_p, px_p, y_p, py_p, z_p, p_p ) ;
+
+    if ( aper2 > 0.0 ) {
+      CheckAperStopPart( ThisBunch->x, ThisBunch->y, ThisBunch->stop,
+                         &ThisBunch->ngoodray, elemno, &aper2,
+                         ray, DOWNSTREAM, NULL, 0.0, &stp, 0 ) ;
+    }
+  }
+
+  return 1 ;
+#endif /* !__CUDACC__ */
+}
+
+/*=====================================================================*/
+
 /* perform tracking of one bunch through one drift matrix.  This
  * procedure also acts as a default tracker, tracking through any
  * elements with unrecognized class names.  If the element has no
@@ -1887,12 +3114,17 @@ int TrackBunchThruDrift( int elemno, int bunchno,
   gpuErrchk( cudaGetLastError() ) ;
   gpuErrchk( cudaFree(Lfull_gpu) ); gpuErrchk( cudaFree(dZmod_gpu) );
 #else
+  /* Per-ray drift kernel writes only into yb[6*ray+...] for one ray and
+     reads/writes nothing shared, so the loop is trivially parallel. */
+#ifdef _OPENMP
+  #pragma omp parallel for
+#endif
   for ( rayloop=0 ; rayloop<ThisBunch->nray ; rayloop++ )
     TrackBunchThruDrift_kernel(&Lfull, &dZmod, ThisBunch->y, ThisBunch->stop, TrackFlag, rayloop);
 #endif
-  
+
   return 1;
-  
+
 }
 
 
@@ -2112,12 +3344,31 @@ int TrackBunchThruQSOS( int elemno, int bunchno,
   gpuErrchk( cudaPeekAtLastError() );
   gpuErrchk( cudaFree(Xfrms_gpu) );
 #else
-  for (ray=0 ;ray<ThisBunch->nray ; ray++)
-    TrackBunchThruQSOS_kernel(ray, ThisBunch->stop, ThisBunch->y, ThisBunch->x, TrackFlag, &ThisBunch->ngoodray, elemno, aper2, nPoleFlag,
-            B, L, Tilt, skew, Xfrms, dZmod, StoppedParticles, ThisBunch->ptype) ;
+  /* OpenMP parallelisation: each ray's kernel call writes only into its
+     own slot of yb[]/stop[], reads xb[] independently, routes any
+     ngoodray decrement through atomic-guarded CheckAperStopPart /
+     CheckP0StopPart / CheckPperpStopPart, and consumes synchrotron-
+     radiation random numbers from the per-thread xoshiro256** RNG
+     (LucretiaRandFlat in LucretiaMatlab.c).  When SR is enabled we
+     re-seed each ray's RNG state before its kernel call so the SR
+     samples are bit-reproducible across thread counts. */
+  {
+    int sr_on = (TrackFlag[SynRad] != SR_None) ;
+    unsigned long long ray_seed_base =
+        sr_on ? LucretiaNextRaySeedBase(elemno, bunchno) : 0ULL ;
+#ifdef _OPENMP
+    #pragma omp parallel for
+#endif
+    for (ray=0 ;ray<ThisBunch->nray ; ray++) {
+      if (sr_on)
+        LucretiaSeedRayRng(ray_seed_base ^ (unsigned long long)ray) ;
+      TrackBunchThruQSOS_kernel(ray, ThisBunch->stop, ThisBunch->y, ThisBunch->x, TrackFlag, &ThisBunch->ngoodray, elemno, aper2, nPoleFlag,
+              B, L, Tilt, skew, Xfrms, dZmod, StoppedParticles, ThisBunch->ptype) ;
+    }
+  }
 #endif
   egress:
-    
+
     return stat;
     
 }
@@ -2590,16 +3841,31 @@ int TrackBunchThruMult( int elemno, int bunchno,
   gpuErrchk( cudaFree(MultTiltValue) );
   gpuErrchk( cudaFree(MultPoleIndexValue) );
 #else
-  for (ray=0 ;ray<ThisBunch->nray ; ray++)
-    TrackBunchThruMult_kernel( MultPar[MultAngle].ValuePtr, MultPar[MultB].ValuePtr, MultPar[MultTilt].ValuePtr, MultPar[MultPoleIndex].ValuePtr,
-          MultPar[MultPoleIndex].Length, ray, ThisBunch->stop, ThisBunch->x, ThisBunch->y, TrackFlag, &ThisBunch->ngoodray, elemno, aper2, L,
-          dB, Tilt, Lrad, Xfrms, dZmod, splitScale, StoppedParticles, ThisBunch->ptype) ;
+  /* OpenMP parallelisation: per-ray multipole kicks are independent;
+     SR uses thread-safe LucretiaRandFlat() inside ComputeSRMomentumLoss
+     and the stop helpers route ngoodray decrements through atomics.
+     When SR is enabled we re-seed per ray for bit-reproducibility. */
+  {
+    int sr_on = (TrackFlag[SynRad] != SR_None) ;
+    unsigned long long ray_seed_base =
+        sr_on ? LucretiaNextRaySeedBase(elemno, bunchno) : 0ULL ;
+#ifdef _OPENMP
+    #pragma omp parallel for
 #endif
-  
+    for (ray=0 ;ray<ThisBunch->nray ; ray++) {
+      if (sr_on)
+        LucretiaSeedRayRng(ray_seed_base ^ (unsigned long long)ray) ;
+      TrackBunchThruMult_kernel( MultPar[MultAngle].ValuePtr, MultPar[MultB].ValuePtr, MultPar[MultTilt].ValuePtr, MultPar[MultPoleIndex].ValuePtr,
+            MultPar[MultPoleIndex].Length, ray, ThisBunch->stop, ThisBunch->x, ThisBunch->y, TrackFlag, &ThisBunch->ngoodray, elemno, aper2, L,
+            dB, Tilt, Lrad, Xfrms, dZmod, splitScale, StoppedParticles, ThisBunch->ptype) ;
+    }
+  }
+#endif
+
   egress:
-    
+
     return stat;
-    
+
 }
 #ifdef __CUDACC__
 __global__ void TrackBunchThruMult_kernel(double* MultAngleValue, double* MultBValue, double* MultTiltValue, double* MultPoleIndexValue,
@@ -2949,10 +4215,25 @@ int TrackBunchThruSBend( int elemno, int bunchno,
   gpuErrchk( cudaGetLastError() );
   gpuErrchk( cudaFree(Xfrms_gpu) );
 #else
-  for (ray=0 ;ray<ThisBunch->nray ; ray++)
-    TrackBunchThruSBend_kernel(ray, ThisBunch->x, ThisBunch->y, ThisBunch->stop, TrackFlag, Xfrms, cTT, sTT, Tx, Ty,
-            OffsetFromTiltError, AngleFromTiltError, &ThisBunch->ngoodray, hgap2, intB, intG, L, elemno, E1, H1, hgap, fint, Theta,
-            E2, H2, hgapx, fintx, hgapx2, StoppedParticles, ThisBunch->ptype) ;
+  /* OpenMP parallelisation: SBend per-ray kernels are independent;
+     SR uses thread-safe LucretiaRandFlat() and stop helpers route
+     ngoodray decrements through atomics.  Per-ray re-seed when SR
+     is on for bit-reproducibility across thread counts. */
+  {
+    int sr_on = (TrackFlag[SynRad] != SR_None) ;
+    unsigned long long ray_seed_base =
+        sr_on ? LucretiaNextRaySeedBase(elemno, bunchno) : 0ULL ;
+#ifdef _OPENMP
+    #pragma omp parallel for
+#endif
+    for (ray=0 ;ray<ThisBunch->nray ; ray++) {
+      if (sr_on)
+        LucretiaSeedRayRng(ray_seed_base ^ (unsigned long long)ray) ;
+      TrackBunchThruSBend_kernel(ray, ThisBunch->x, ThisBunch->y, ThisBunch->stop, TrackFlag, Xfrms, cTT, sTT, Tx, Ty,
+              OffsetFromTiltError, AngleFromTiltError, &ThisBunch->ngoodray, hgap2, intB, intG, L, elemno, E1, H1, hgap, fint, Theta,
+              E2, H2, hgapx, fintx, hgapx2, StoppedParticles, ThisBunch->ptype) ;
+    }
+  }
 #endif
   
   egress:
@@ -3547,11 +4828,31 @@ int TrackBunchThruRF( int elemno, int bunchno,
       }
     }
     
-    /* loop over rays in the bunch */
-    
+    /* loop over rays in the bunch.
+       OpenMP parallelisation: each ray's kicks, coordinate writes,
+       and stop checks operate independently on its own slot of
+       ThisBunch->x/y/stop.  The Rcav linear map (and its LastRayP /
+       LastRaydP cache) is firstprivate so each thread carries its
+       own copy initialised from the slice-scope state.  SBPM and
+       wakefield bin scatter-adds are guarded by OMP atomics in
+       AccumulateWFBinPositions and the SBPM accumulators above.
+       SR random numbers come from the per-thread xoshiro256** RNG
+       (LucretiaRandFlat); when SR is on we re-seed each ray's RNG
+       state for bit-reproducibility across thread counts. */
+    {
+      int sr_on = (TrackFlag[SynRad] != SR_None) ;
+      unsigned long long ray_seed_base =
+          sr_on ? LucretiaNextRaySeedBase(elemno, bunchno) : 0ULL ;
+#ifdef _OPENMP
+    #pragma omp parallel for firstprivate(LastRayP, LastRaydP, Rcav) \
+                             private(raystart, coord, Stop, Q, xout, yout, \
+                                     dP, dPKick, x, px, y, py, z, p0)
+#endif
     for (ray=0 ;ray<ThisBunch->nray ; ray++)
     {
-      
+      if (sr_on)
+        LucretiaSeedRayRng(ray_seed_base ^ (unsigned long long)ray) ;
+
       raystart = 6*ray ;
       
       /* if the ray was previously stopped copy it over */
@@ -3594,8 +4895,19 @@ int TrackBunchThruRF( int elemno, int bunchno,
       
       if (doSBPM[slicecount] > 0)
       {
+        /* SBPM accumulators are shared across the per-ray loop;
+           atomics for thread safety under OpenMP. */
+#ifdef _OPENMP
+        #pragma omp atomic
+#endif
         ArgStruc->sbpmdata[SBPMCounter]->Q[SBPMcount2] += (*Q) ;
+#ifdef _OPENMP
+        #pragma omp atomic
+#endif
         ArgStruc->sbpmdata[SBPMCounter]->x[SBPMcount2] += (*x) * (*Q) ;
+#ifdef _OPENMP
+        #pragma omp atomic
+#endif
         ArgStruc->sbpmdata[SBPMCounter]->y[SBPMcount2] += (*y) * (*Q);
       }
       
@@ -3720,8 +5032,17 @@ int TrackBunchThruRF( int elemno, int bunchno,
         
         if (doSBPM[nslice] > 0)
         {
+#ifdef _OPENMP
+          #pragma omp atomic
+#endif
           ArgStruc->sbpmdata[SBPMCounter]->Q[NSBPM-1] += (*Q) ;
+#ifdef _OPENMP
+          #pragma omp atomic
+#endif
           ArgStruc->sbpmdata[SBPMCounter]->x[NSBPM-1] += (*xout)*(*Q) ;
+#ifdef _OPENMP
+          #pragma omp atomic
+#endif
           ArgStruc->sbpmdata[SBPMCounter]->y[NSBPM-1] += (*yout)*(*Q);
         }
         
@@ -3742,13 +5063,14 @@ int TrackBunchThruRF( int elemno, int bunchno,
         ApplyTotalXfrm( Xfrms, DOWNSTREAM, TrackFlag, 0 ,x,px,y,py,z,p0) ;
         
         /* check amplitude of outgoing angular momentum */
-        
+
         Stop = CheckPperpStopPart( ThisBunch->stop, &ThisBunch->ngoodray, elemno, ray,
                 px, py, StoppedParticles ) ;
       }
-      
+
     } /* end of coord loop */
-    
+    } /* end of sr_on / per-ray-seed scope */
+
     /* Apply longitudinal space charge if requested */
     if ( TrackFlag[LSC] > 0 )
       ProcLSC(ThisBunch,elemno,dL,(bunchno+1) * TrackFlag[LSC_storeData]) ;
@@ -4057,9 +5379,49 @@ int TrackBunchThruBPM( int elemno, int bunchno,
   gpuErrchk( cudaFree(z_gpu) );
   gpuErrchk( cudaFree(sigma_gpu) );
 #else
+  /* OpenMP parallelisation: BPM kernel accumulates into 7 scalar
+     counters and a 36-element sigma matrix.  We use one heap-allocated
+     buffer of per-thread accumulators (laid out as
+     [t0_xread, t0_yread, t0_Q, t0_P, t0_pxq, t0_pyq, t0_z, t0_sigma[36],
+      t1_..., ...]) and reduce after the parallel region.  Falls back
+     to direct accumulation if OpenMP is disabled or the allocation
+     fails. */
+#ifdef _OPENMP
+  {
+    int nt = omp_get_max_threads() ;
+    const int per_thread = 7 + 36 ;
+    double *acc = (double*) calloc( (size_t)nt * per_thread, sizeof(double) ) ;
+    if (acc != NULL) {
+      #pragma omp parallel for
+      for (i=0 ; i<ThisBunch->nray ; i++) {
+        int tid = omp_get_thread_num() ;
+        double *a = acc + (size_t)tid * per_thread ;
+        TrackBunchThruBPM_kernel(i, Xfrms, TFlag, ThisBunch->Q, ThisBunch->y, ThisBunch->stop, sintilt, costilt,
+                &a[0], &a[1], &a[2], &a[3], &a[4], &a[5], &a[6], &a[7] ) ;
+      }
+      for (int t=0 ; t<nt ; t++) {
+        double *a = acc + (size_t)t * per_thread ;
+        xread_cnt += a[0] ;
+        yread_cnt += a[1] ;
+        Q_cnt     += a[2] ;
+        P_cnt     += a[3] ;
+        pxq_cnt   += a[4] ;
+        pyq_cnt   += a[5] ;
+        z_cnt     += a[6] ;
+        for (int s=0 ; s<36 ; s++) sigma_cnt[s] += a[7+s] ;
+      }
+      free(acc) ;
+    } else {
+      for (i=0 ;i<ThisBunch->nray ; i++)
+        TrackBunchThruBPM_kernel(i, Xfrms, TFlag, ThisBunch->Q, ThisBunch->y, ThisBunch->stop, sintilt, costilt,
+               &xread_cnt, &yread_cnt, &Q_cnt, &P_cnt, &pxq_cnt, &pyq_cnt, &z_cnt, sigma_cnt ) ;
+    }
+  }
+#else
   for (i=0 ;i<ThisBunch->nray ; i++)
     TrackBunchThruBPM_kernel(i, Xfrms, TFlag, ThisBunch->Q, ThisBunch->y, ThisBunch->stop, sintilt, costilt,
            &xread_cnt, &yread_cnt, &Q_cnt, &P_cnt, &pxq_cnt, &pyq_cnt, &z_cnt, sigma_cnt ) ;
+#endif
 #endif
 
   /* put accumulated data into necessary data structure slots */
@@ -4553,10 +5915,46 @@ int TrackBunchThruInst( int elemno, int bunchno,
   gpuErrchk( cudaFree(sigma_gpu) );
 #else
   int i ;
+  /* OpenMP parallelisation: same per-thread accumulator + reduction
+     pattern as the BPM kernel above; sigma_cnt is 4-wide for INST
+     (only the [0,0]/[2,2]/[4,4] beam-size diagonal). */
+#ifdef _OPENMP
+  {
+    int nt = omp_get_max_threads() ;
+    const int per_thread = 7 + 4 ;
+    double *acc = (double*) calloc( (size_t)nt * per_thread, sizeof(double) ) ;
+    if (acc != NULL) {
+      #pragma omp parallel for
+      for (i=0 ; i<ThisBunch->nray ; i++) {
+        int tid = omp_get_thread_num() ;
+        double *a = acc + (size_t)tid * per_thread ;
+        TrackBunchThruInst_kernel(i, Xfrms, TFlag, ThisBunch->Q, ThisBunch->y, ThisBunch->stop, sintilt, costilt,
+                &a[0], &a[1], &a[2], &a[3], &a[4], &a[5], &a[6], &a[7] ) ;
+      }
+      for (int t=0 ; t<nt ; t++) {
+        double *a = acc + (size_t)t * per_thread ;
+        xread_cnt += a[0] ;
+        yread_cnt += a[1] ;
+        Q_cnt     += a[2] ;
+        P_cnt     += a[3] ;
+        pxq_cnt   += a[4] ;
+        pyq_cnt   += a[5] ;
+        z_cnt     += a[6] ;
+        for (int s=0 ; s<4 ; s++) sigma_cnt[s] += a[7+s] ;
+      }
+      free(acc) ;
+    } else {
+      for (i=0 ;i<ThisBunch->nray ; i++)
+        TrackBunchThruInst_kernel(i, Xfrms, TFlag, ThisBunch->Q, ThisBunch->y, ThisBunch->stop, sintilt, costilt,
+               &xread_cnt, &yread_cnt, &Q_cnt, &P_cnt, &pxq_cnt, &pyq_cnt, &z_cnt, sigma_cnt ) ;
+    }
+  }
+#else
   for (i=0 ;i<ThisBunch->nray ; i++)
     TrackBunchThruInst_kernel(i, Xfrms, TFlag, ThisBunch->Q, ThisBunch->y, ThisBunch->stop, sintilt, costilt,
            &xread_cnt, &yread_cnt, &Q_cnt, &P_cnt, &pxq_cnt, &pyq_cnt, &z_cnt, sigma_cnt ) ;
-#endif  
+#endif
+#endif
 
   /* put accumulated data into necessary data structure slots */
   instdata[instCounter]->x[BunchSlot] += xread_cnt ;
@@ -5533,10 +6931,15 @@ int CheckAperStopPart( double *x, double *y, double *stop, int *ngoodray,
   {
     
     /* set the stopping point in the ThisBunch->stop vector */
-    
+
     stop[ray] = (double)(elemno+1)  ; /* in Matlab indexing */
-    *ngoodray=*ngoodray-1 ;
-    
+    /* ngoodray is shared across rays under OpenMP parallel-for tracking;
+       the OMP atomic is a no-op when not built with -fopenmp. */
+#ifdef _OPENMP
+    #pragma omp atomic
+#endif
+    *ngoodray = *ngoodray - 1 ;
+
     /* set the global stopped-particle variable */
     *stp = 1 ;
     
@@ -5571,7 +6974,13 @@ int CheckP0StopPart( double *stop, int *ngoodray, double *x, double *y, int elem
   {
     stat = 1 ;
     stop[rayno] = (double)(elemno+1) ;
-    ngoodray-- ;
+    /* Was `ngoodray-- ;` which decremented the local pointer rather
+       than the underlying counter (no-op).  Atomic for thread safety
+       under OpenMP per-ray parallelism. */
+#ifdef _OPENMP
+    #pragma omp atomic
+#endif
+    (*ngoodray)-- ;
     *stp = 1 ;
     
     /* If the check is done on the upstream face, copy the
@@ -5610,7 +7019,11 @@ int CheckPperpStopPart( double* stop, int* ngoodray, int elemno,
   {
     stat = 1 ;
     stop[rayno] = (double)(elemno+1) ;
-    ngoodray-- ;
+    /* Was `ngoodray-- ;` (no-op pointer decrement); fixed + made atomic. */
+#ifdef _OPENMP
+    #pragma omp atomic
+#endif
+    (*ngoodray)-- ;
     *stp = 1 ;
   }
   return stat ;
@@ -7669,6 +9082,32 @@ void VerifyLattice( )
           KlysIndex = 0 ;
           WFIndex = 0 ;
         }
+        else if ( (strcmp(ElemClass,"LSRMDLTR") == 0) ) /* Laser modulator */
+        {
+          Dictionary = LsrmdltrPar ;
+          nPar = nLsrmdltrPar ;
+          PIndex = LsrP ;
+          LIndex = LsrL ;
+          aperindex = Lsraper ;
+          AllowedTrackFlag = LsrmdltrTrackFlag ;
+          GirderIndex = LsrGirder ;
+          PSIndex = 0 ;
+          KlysIndex = 0 ;
+          WFIndex = 0 ;
+        }
+        else if ( (strcmp(ElemClass,"CWIGGLER") == 0) ) /* Canonical wiggler */
+        {
+          Dictionary = CwigglerPar ;
+          nPar = nCwigglerPar ;
+          PIndex = CwigP ;
+          LIndex = CwigL ;
+          aperindex = Cwigaper ;
+          AllowedTrackFlag = CwigglerTrackFlag ;
+          GirderIndex = CwigGirder ;
+          PSIndex = 0 ;
+          KlysIndex = 0 ;
+          WFIndex = 0 ;
+        }
         else if ( (strcmp(ElemClass,"DRIF") == 0) ) /* Drift */
         {
           Dictionary = DrifPar ;
@@ -9044,12 +10483,21 @@ void ComputeTSRKicks( struct SRWF* ThisTSR, double L )
 void AccumulateWFBinPositions( double* binx, double* biny, int binno,
         double xpos, double ypos, double Q )
 {
-  
+  /* Multiple rays may map to the same wakefield bin (that's the
+     point of binning), so the scatter-add is a race under OpenMP
+     per-ray parallelism in the RF tracker.  The atomic pragmas are
+     no-ops without -fopenmp. */
+#ifdef _OPENMP
+  #pragma omp atomic
+#endif
   binx[binno] += Q * xpos ;
+#ifdef _OPENMP
+  #pragma omp atomic
+#endif
   biny[binno] += Q * ypos ;
-  
+
   return ;
-  
+
 }
 
 /*=====================================================================*/

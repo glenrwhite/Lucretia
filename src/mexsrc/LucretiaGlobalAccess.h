@@ -123,6 +123,32 @@ double* RanFlatVecPtr( int ) ;
 double* RanFlatVecPtrC( int ) ;
 #endif
 
+/* Thread-safe per-thread scalar RNG (xoshiro256**, Box-Muller for
+   Gaussian).  Uses C11 _Thread_local / __thread / __declspec(thread)
+   to maintain a separate xoshiro state per OpenMP thread; the state
+   is lazily seeded on first use from a master seed XORed with the
+   OpenMP thread number.  Calling LucretiaSeedThreadRng() resets the
+   master seed (defaults to a process-startup value derived from
+   time + PID).  These functions are CPU-only -- the GPU build keeps
+   using cuRand. */
+double LucretiaRandFlat( void ) ;
+double LucretiaRandGauss( void ) ;
+void   LucretiaSeedThreadRng( unsigned long long master_seed ) ;
+
+/* Per-ray re-seeding for bit-reproducible synchrotron-radiation
+   sampling under OpenMP per-ray parallelism.  LucretiaNextRaySeedBase
+   is called ONCE per tracker wrapper invocation (serial context); it
+   bumps a process-global invocation counter and returns a base hash
+   that uniquely identifies this wrapper call.  LucretiaSeedRayRng is
+   then called per-ray (inside the parallel-for) with `base ^ ray` to
+   give that ray a deterministic xoshiro256** stream regardless of
+   which thread executes it.
+
+   Cost: ~30 ns per ray on top of the SR sampling itself.  Skip when
+   SR is off to avoid the overhead. */
+unsigned long long LucretiaNextRaySeedBase( int elemno, int bunchno ) ;
+void   LucretiaSeedRayRng( unsigned long long ray_hash ) ;
+
 /* Use Matlab sort function to get a sortkey for the rays in  
    a bunch, along a given DOF */
 

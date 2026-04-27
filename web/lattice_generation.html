@@ -295,6 +295,49 @@ parameters are instantiated with value 0.<br>
 
 <br>
 
+<span style="font-weight: bold;"><a name="CWIGGLERStruc"></a>CWIGGLERStruc:</span><br>
+
+<br>
+
+Return the data structure for a canonical wiggler / undulator
+(<a href="element_classes.html#CWIGGLER">CWIGGLER</a>) -- a
+fixed-step Yoshida-symplectic-integrated wiggler with optional
+multi-harmonic field decomposition, modelled after Elegant's CWIGGLER
+element (canonical integration code of Y. Wu, Duke University).<br>
+
+<br>
+
+&nbsp;&nbsp;&nbsp; &nbsp;&nbsp; &nbsp;&nbsp; M = CWIGGLERStruc( L, P,
+BMax, Periods, Name, ...optional name/value pairs )<br>
+
+<br>
+
+returns the structure for a wiggler with the required parameters:<br>
+
+<br>
+
+&nbsp;&nbsp;&nbsp; L = total wiggler length [m]<br>
+&nbsp;&nbsp;&nbsp; P = reference momentum [GeV/c]<br>
+&nbsp;&nbsp;&nbsp; BMax = peak on-axis magnetic field [T]<br>
+&nbsp;&nbsp;&nbsp; Periods = number of full wiggler periods (integer)<br>
+&nbsp;&nbsp;&nbsp; Name = element name (char)<br>
+
+<br>
+
+Optional name/value pairs (defaults shown in parentheses): Helical (0),
+Vertical (0), StepsPerPeriod (12, must be a multiple of 4),
+IntegrationOrder (4, must be 2 or 4), Harmonics ([], an Nx5 matrix
+with rows
+[C<sub>mn</sub> K<sub>x</sub>/k<sub>w</sub> K<sub>y</sub>/k<sub>w</sub>
+K<sub>z</sub>/k<sub>w</sub> Phase] -- each row is checked against the
+Maxwell constraint k<sub>y</sub><sup>2</sup>
+= k<sub>x</sub><sup>2</sup> + k<sub>z</sub><sup>2</sup>),
+PoleFactor1/2/3 (1, 1, 1), SynchRad (0), ISR (0), aper ([]).&nbsp; See
+the <a href="element_classes.html#CWIGGLER">element class
+documentation</a> for the meaning of each field.<br>
+
+<br>
+
 <span style="font-weight: bold;"><a name="DrifStruc"></a>DrifStruc:<br>
 <br>
 </span>Return the structure for a drift space.<br>
@@ -530,6 +573,45 @@ following:&nbsp; 'INST', 'BLMO', 'PROF', 'WIRE', 'SLMO', 'IMON').&nbsp;
 All instruments behave identically regardless of which of the
 instrument classes they belong to.&nbsp; All other data values in the
 structure are instantiated to 0.<br>
+
+<br>
+
+<span style="font-weight: bold;"><a name="LSRMDLTRStruc"></a>LSRMDLTRStruc:</span><br>
+
+<br>
+
+Return the data structure for a laser-seeded relativistic modulator
+(<a href="element_classes.html#LSRMDLTR">LSRMDLTR</a>) -- a planar or
+helical undulator with a co-propagating Hermite-Gauss laser beam.<br>
+
+<br>
+
+&nbsp;&nbsp;&nbsp; &nbsp;&nbsp; &nbsp;&nbsp; M = LSRMDLTRStruc( L, P,
+Bu, Periods, Name, ...optional name/value pairs )<br>
+
+<br>
+
+returns the structure for a modulator with the required parameters:<br>
+
+<br>
+
+&nbsp;&nbsp;&nbsp; L = undulator length [m]<br>
+&nbsp;&nbsp;&nbsp; P = reference momentum [GeV/c]<br>
+&nbsp;&nbsp;&nbsp; Bu = peak undulator field [T]<br>
+&nbsp;&nbsp;&nbsp; Periods = number of undulator periods (integer)<br>
+&nbsp;&nbsp;&nbsp; Name = element name (char)<br>
+
+<br>
+
+All laser parameters are accepted as optional name/value pairs
+(defaults shown in parentheses): LaserWavelength (0 -&gt; resonance),
+LaserPeakPower (0), LaserW0 (1), LaserPhase (0), LaserX0/Y0/Z0 (0),
+LaserTilt (0), LaserM/N (0), NSteps (100), FieldExpansion ('leading'),
+PoleFactor1/2/3 (0.156/0.381/0.803), Helical (0), SynchRad (0), ISR
+(0), aper ([]).&nbsp; The FieldExpansion option accepts either a
+string ('ideal'/'exact'/'leading') or an integer (0/1/2).&nbsp; See
+the <a href="element_classes.html#LSRMDLTR">element class
+documentation</a> for the meaning of each field.<br>
 
 <br>
 
@@ -925,6 +1007,39 @@ scalar or a 1 x 2 vector as for E.</li>
 </ul>
 
 All other data values are instantiated to 0.<br>
+
+<br>
+
+<span style="font-weight: bold;"><a name="SeedLucretiaRng"></a>SeedLucretiaRng:</span><br>
+
+<br>
+
+Seed the per-thread C-side random number generator used for synchrotron
+radiation, ISR, BPM noise, and other stochastic tracking effects.&nbsp;
+Affects the C-side RNG only; MATLAB's <code>rng()</code> still controls
+randn / rand when Lucretia is built with the 'mlrand' option.<br>
+
+<br>
+
+&nbsp;&nbsp;&nbsp; &nbsp;&nbsp; &nbsp;&nbsp; SeedLucretiaRng( seed )<br>
+&nbsp;&nbsp;&nbsp; &nbsp;&nbsp; &nbsp;&nbsp; v = SeedLucretiaRng('version')<br>
+
+<br>
+
+Sets the master seed of the per-thread xoshiro256** RNG; every worker
+thread re-seeds from this master on its next RNG call (a generation
+counter is bumped, broadcasting the change).&nbsp; Also resets the
+per-call invocation counter used by SR per-ray re-seeding, so two
+SeedLucretiaRng / TrackThru pairs with the same seed give bit-exact
+identical SR samples regardless of OpenMP thread count.<br>
+
+<br>
+
+Call this in a serial context BEFORE any TrackThru that needs
+reproducible SR / ISR; do not call it from inside a parallel region or
+between bunches of a single TrackThru.&nbsp; The 'version' form
+returns the build-date string for the SeedLucretiaRng mex (useful
+when checking that an installation has the latest binaries).<br>
 
 <br>
 

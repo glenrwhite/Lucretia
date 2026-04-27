@@ -33,6 +33,7 @@
  * GetCoordMap
  * GetRMSCoord
  * GetMeanCoord
+ * GetLsrmdltrMap
  *
  * AUTH: PT, 03-aug-2004 */
 /* MOD:
@@ -70,6 +71,11 @@
 #include <stdio.h>
 #include "LucretiaVersionProto.h"
 #include "LucretiaGlobalAccess.h"
+#ifdef _OPENMP
+/* Used for the double-checked-locking guard around SRSpectrumHB's
+   one-time-init block. */
+#include <omp.h>
+#endif
 #ifndef mex_h
   #define mex_h
   #include <mex.h>
@@ -2682,17 +2688,17 @@ int poidev( double xm )
     em = -1. ;
     while (em < 0)
     {
-      y = tan(  PI * *( RanFlatVecPtr(1) )   ) ;
+      y = tan(  PI * LucretiaRandFlat()   ) ;
       em = sq*y+xm ;
     }
     em = floor(em) ;
     t = 0.9*(1+y*y)*exp(em*alxm-GammaLog(em+1)-g) ;
-    if (*RanFlatVecPtr(1) <= t)
+    if (LucretiaRandFlat() <= t)
       success = 1 ;
   }
-  
+
   return (int)em ;
-  
+
 }
 
 /*==================================================================*/
@@ -2708,7 +2714,7 @@ __device__ double SRSpectrumAW_gpu( curandState_t *rState )
 #endif
 double SRSpectrumAW( )
 {
-  double r = *RanFlatVecPtr(1) ;
+  double r = LucretiaRandFlat() ;
   return 0.57 * pow(r,-1./3) * pow((1-r),PI) ;
 }
 
@@ -2766,47 +2772,58 @@ double SRSpectrumHB( )
   static int DoInit=1;
   static double a1,a2,c1,xlow,ratio;
   double appr,exact,result;
-  
-  if(DoInit == 1)
+
+  /* Double-checked locking around the one-time init: the outer test
+     keeps the hot path branchless after the first call; the inner
+     critical section makes the init itself thread-safe.  When
+     compiled without _OPENMP the critical pragma is ignored and the
+     pattern degrades to a plain `if`. */
+  if (DoInit == 1)
   {
-    double xmin = 0. ;
-    double sum1ap, sum2ap ;
-    
-    DoInit=0;
-    xlow=1.;
-    
-    /* initialize constants used in the approximate expressions
-     * for SYNRAD   (integral over the modified Bessel function K5/3) */
-    
-    a1=SynRadC(1.e-38)/pow(1.e-38,-2./3.); /* = 2**2/3 GAMMA(2/3) */
-    a2=SynRadC(xlow)/exp(-xlow);
-    c1=pow(xmin,1./3.);
-    
-    /* calculate the integrals of the approximate expressions */
-    
-    sum1ap=3.*a1*(1.-pow(xmin,1./3.)); /* integral xmin --> 1  */
-    sum2ap=a2*exp(-1.);                /* integral 1 --> infin */
-    ratio=sum1ap/(sum1ap+sum2ap);
-    
+#ifdef _OPENMP
+    #pragma omp critical(srspectrum_hb_init)
+#endif
+    if (DoInit == 1)
+    {
+      double xmin = 0. ;
+      double sum1ap, sum2ap ;
+
+      xlow=1.;
+
+      /* initialize constants used in the approximate expressions
+       * for SYNRAD   (integral over the modified Bessel function K5/3) */
+
+      a1=SynRadC(1.e-38)/pow(1.e-38,-2./3.); /* = 2**2/3 GAMMA(2/3) */
+      a2=SynRadC(xlow)/exp(-xlow);
+      c1=pow(xmin,1./3.);
+
+      /* calculate the integrals of the approximate expressions */
+
+      sum1ap=3.*a1*(1.-pow(xmin,1./3.)); /* integral xmin --> 1  */
+      sum2ap=a2*exp(-1.);                /* integral 1 --> infin */
+      ratio=sum1ap/(sum1ap+sum2ap);
+
+      DoInit=0;
+    }
   }
-  
+
   /* Init done, now generate */
   do {
-    if(*RanFlatVecPtr(1)<ratio) /* use low energy approximation */
+    if(LucretiaRandFlat()<ratio) /* use low energy approximation */
     {
-      result=c1+(1.-c1)*(*RanFlatVecPtr(1));
+      result=c1+(1.-c1)*LucretiaRandFlat();
       result*=result*result;  /* take to 3rd power; */
       exact=SynRadC(result);
       appr=a1*pow(result,-2./3.);
     }
     else                        /* use high energy approximation */
     {
-      result=xlow-log(*RanFlatVecPtr(1));
+      result=xlow-log(LucretiaRandFlat());
       exact=SynRadC(result);
       appr=a2*exp(-result);
     }
   }
-  while(exact<appr*(*RanFlatVecPtr(1))); /* reject in proportion of approx */
+  while(exact<appr*LucretiaRandFlat()); /* reject in proportion of approx */
   return result;                         /* result now exact spectrum with unity weight */
 }
 
@@ -3180,4 +3197,161 @@ double GetMeanCoord( struct Bunch* ThisBunch, int dim )
     }
   }
   return sumdim / sumq ;
+}
+
+/*==================================================================*/
+
+/* Natural-focusing R-matrix for a laser modulator (LSRMDLTR) element.
+ * Ports pLucretia's get_lsrmdltr_map: planar undulator gives a vertical
+ * focusing kick (drift in x); helical undulator focuses both planes
+ * equally.  Average focusing strength:
+ *
+ *      ky^2 = K^2 * ku^2 / (2 * gamma^2)
+ *
+ * where K = 93.3652 * Bu[T] * lambda_u[m] and ku = 2*pi/lambda_u.  The
+ * laser interaction is NOT in the linear map (it is treated by the RK4
+ * tracker).
+ *
+ * Returns 1 if R was filled, 0 only if a required parameter is missing
+ * (then R is left as a drift). */
+
+int GetLsrmdltrMap( int elemno, Rmat R )
+{
+  double *L_ptr, *Bu_ptr, *Per_ptr, *P_ptr, *Hel_ptr ;
+  double L, Bu, P, gamma, lambda_u, ku, K, ky2, kx2, ky, kx, kxL, kyL ;
+  int Periods, Helical ;
+  const double K_undulator = 93.3652 ;  /* e/(2*pi*m_e*c) units giving
+                                           K = 93.37 * Bu[T] * lambda_u[m] */
+
+  L_ptr   = GetElemNumericPar( elemno, "L",       NULL ) ;
+  Bu_ptr  = GetElemNumericPar( elemno, "Bu",      NULL ) ;
+  Per_ptr = GetElemNumericPar( elemno, "Periods", NULL ) ;
+  P_ptr   = GetElemNumericPar( elemno, "P",       NULL ) ;
+  Hel_ptr = GetElemNumericPar( elemno, "Helical", NULL ) ;
+
+  if ( L_ptr==NULL || Bu_ptr==NULL || Per_ptr==NULL || P_ptr==NULL ) {
+    GetDriftMap( (L_ptr==NULL) ? 0. : *L_ptr, R ) ;
+    return 0 ;
+  }
+
+  L       = *L_ptr ;
+  Bu      = *Bu_ptr ;
+  Periods = (int) *Per_ptr ;
+  P       = *P_ptr ;
+  Helical = (Hel_ptr==NULL) ? 0 : (int) *Hel_ptr ;
+
+  /* Start from a drift; we will overlay focusing terms below. */
+  GetDriftMap( L, R ) ;
+
+  if ( L == 0. || P <= 0. || Periods <= 0 || Bu == 0. )
+    return 1 ;
+
+  lambda_u = L / (double) Periods ;
+  ku       = 2.0 * PI / lambda_u ;
+  K        = K_undulator * Bu * lambda_u ;
+  gamma    = P / ME2C2_GEV ;
+  ky2      = K * K * ku * ku / ( 2.0 * gamma * gamma ) ;
+
+  /* Vertical plane: natural focusing (always present for both planar
+     and helical undulators when Bu != 0). */
+  if ( ky2 > 0. ) {
+    ky  = sqrt( ky2 ) ;
+    kyL = ky * L ;
+    R[2][2] = cos( kyL ) ;
+    R[2][3] = sin( kyL ) / ky ;
+    R[3][2] = -ky * sin( kyL ) ;
+    R[3][3] = cos( kyL ) ;
+  }
+
+  /* Horizontal plane: drift for planar; equal focusing to vertical for
+     helical (drift is already set by GetDriftMap above). */
+  if ( Helical && ky2 > 0. ) {
+    kx2 = ky2 ;
+    kx  = sqrt( kx2 ) ;
+    kxL = kx * L ;
+    R[0][0] = cos( kxL ) ;
+    R[0][1] = sin( kxL ) / kx ;
+    R[1][0] = -kx * sin( kxL ) ;
+    R[1][1] = cos( kxL ) ;
+  }
+
+  return 1 ;
+}
+
+/*==================================================================*/
+
+/* Natural-focusing R-matrix for a CWIGGLER (canonical wiggler) element.
+ * Same physics as GetLsrmdltrMap (the laser interaction in LSRMDLTR
+ * does not contribute to the linear map, so the two R-matrices are
+ * identical when the underlying undulator parameters match).
+ *
+ * For multi-harmonic fields, K is computed from the dominant
+ * (largest |Cmn|) harmonic.  This is an approximation good enough for
+ * Twiss / closed-orbit; rigorous matched optics through a complex
+ * multi-harmonic device should use a tracking-derived linear map
+ * (the existing TMAP element).
+ *
+ * Returns 1 if R was filled, 0 only if a required parameter is
+ * missing (then R is left as a drift). */
+
+int GetCwigglerMap( int elemno, Rmat R )
+{
+  double *L_ptr, *Bmax_ptr, *Per_ptr, *P_ptr, *Hel_ptr ;
+  double L, Bmax, P, gamma, lambda_u, ku, K, ky2, kx2, ky, kx, kxL, kyL ;
+  int Periods, Helical ;
+  const double K_undulator = 93.3652 ;  /* same constant as LSRMDLTR */
+
+  L_ptr    = GetElemNumericPar( elemno, "L",       NULL ) ;
+  Bmax_ptr = GetElemNumericPar( elemno, "BMax",    NULL ) ;
+  Per_ptr  = GetElemNumericPar( elemno, "Periods", NULL ) ;
+  P_ptr    = GetElemNumericPar( elemno, "P",       NULL ) ;
+  Hel_ptr  = GetElemNumericPar( elemno, "Helical", NULL ) ;
+
+  if ( L_ptr==NULL || Bmax_ptr==NULL || Per_ptr==NULL || P_ptr==NULL ) {
+    GetDriftMap( (L_ptr==NULL) ? 0. : *L_ptr, R ) ;
+    return 0 ;
+  }
+
+  L       = *L_ptr ;
+  Bmax    = *Bmax_ptr ;
+  Periods = (int) *Per_ptr ;
+  P       = *P_ptr ;
+  Helical = (Hel_ptr==NULL) ? 0 : (int) *Hel_ptr ;
+
+  /* Start from a drift; overlay focusing terms below. */
+  GetDriftMap( L, R ) ;
+
+  if ( L == 0. || P <= 0. || Periods <= 0 || Bmax == 0. )
+    return 1 ;
+
+  lambda_u = L / (double) Periods ;
+  ku       = 2.0 * PI / lambda_u ;
+  K        = K_undulator * Bmax * lambda_u ;
+  gamma    = P / ME2C2_GEV ;
+  ky2      = K * K * ku * ku / ( 2.0 * gamma * gamma ) ;
+
+  /* Vertical plane: natural focusing (always present for both planar
+     and helical undulators when Bmax != 0). */
+  if ( ky2 > 0. ) {
+    ky  = sqrt( ky2 ) ;
+    kyL = ky * L ;
+    R[2][2] = cos( kyL ) ;
+    R[2][3] = sin( kyL ) / ky ;
+    R[3][2] = -ky * sin( kyL ) ;
+    R[3][3] = cos( kyL ) ;
+  }
+
+  /* Horizontal plane: drift for planar; equal focusing to vertical
+     for helical (drift was already set by GetDriftMap above). */
+  if ( Helical && ky2 > 0. ) {
+    kx2 = ky2 ;
+    kx  = sqrt( kx2 ) ;
+    kxL = kx * L ;
+    R[0][0] = cos( kxL ) ;
+    R[0][1] = sin( kxL ) / kx ;
+    R[1][0] = -kx * sin( kxL ) ;
+    R[1][1] = cos( kxL ) ;
+  }
+
+  return 1 ;
 }

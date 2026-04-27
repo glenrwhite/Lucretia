@@ -45,7 +45,72 @@ The
 
     <a href="SynRad.html">here</a> for more details.<br>
 <span style=""><span style=""><br>
-</span></span><span style=""><span style=""><b><span style="font-weight: bold;">5-April-2017<br>
+</span></span>
+
+<b>27-Apr-2026:</b><br>
+<ul>
+  <li><b>New element class: <a href="element_classes.html#LSRMDLTR">LSRMDLTR</a></b>
+    (Laser-Seeded Relativistic Modulator). Tracks particles through a
+    planar or helical undulator with a co-propagating Hermite-Gauss
+    laser beam using fixed-step 4th-order Runge-Kutta integration in
+    Elegant's scaled coordinate system.&nbsp; Includes classical and
+    quantum (ISR) synchrotron radiation.&nbsp; See
+    <a href="lattice_generation.html#LSRMDLTRStruc">LSRMDLTRStruc</a>
+    for the MATLAB constructor.</li>
+  <li><b>New element class: <a href="element_classes.html#CWIGGLER">CWIGGLER</a></b>
+    (Canonical Wiggler / Undulator), ported from Elegant's CWIGGLER
+    element (Y. Wu, Duke University).&nbsp; Uses a 4th-order Yoshida
+    symplectic integrator with optional multi-harmonic field
+    decomposition passed as a MATLAB matrix.&nbsp; Includes SR/ISR.&nbsp;
+    See <a href="lattice_generation.html#CWIGGLERStruc">CWIGGLERStruc</a>
+    for the MATLAB constructor.</li>
+  <li><b>OpenMP per-ray parallelisation</b> of all CPU tracking kernels
+    (Drift, Quad/Sext/Octu/Plens/Solenoid, Mult, SBend, RF (LCAV/TCAV),
+    BPM, INST, LSRMDLTR, CWIGGLER).&nbsp; Does not require the Parallel
+    Computing Toolbox.&nbsp; Enable with the new <code>omp</code> build
+    flag; see the <a href="downloads.html">downloads page</a> for the
+    full build-options table.&nbsp; Typical speedup 3&ndash;5&times; on
+    a modern multi-core workstation.</li>
+  <li><b>New <code>fast</code> build flag</b> enables aggressive compiler
+    optimisations (<code>-O3 -march=native -ffast-math</code>), giving
+    an additional 1.5&ndash;3&times; on top of the <code>omp</code>
+    gains.</li>
+  <li><b>New <a href="lattice_generation.html#SeedLucretiaRng">SeedLucretiaRng</a>
+    MEX function</b> seeds the per-thread C-side xoshiro256** random
+    number generator used for synchrotron-radiation sampling, BPM
+    noise, and ISR.&nbsp; With the same seed and the same
+    <code>OMP_NUM_THREADS</code>, tracking output is bit-reproducible
+    across re-runs.</li>
+  <li><b>Build system fix (macOS)</b>: <code>build.m</code> now prefers
+    MATLAB's own bundled <code>libomp</code> when linking the
+    <code>omp</code> build, avoiding the <code>pthread_mutex_init:
+    EINVAL</code> duplicate-runtime conflict that occurred when linking
+    Homebrew libomp against a MATLAB session that had already loaded
+    its own copy.</li>
+  <li><b>Performance improvements to <code>applyCSR.m</code></b>: the
+    CSR-bend and drift-CSR wake-function loops are now vectorised
+    using <code>filter()</code> and a new per-bin quartic root solver
+    (vectorised Newton's method replacing per-bin
+    <code>eig(4&times;4)</code>), giving ~70&times; speedup on the
+    drift-CSR inner loop.&nbsp; The <code>meshgrid+min</code> nearest-bin
+    searches are replaced with O(N) direct discretization.
+    <code>applyLSC.m</code> also has a minor redundant-computation
+    fix.</li>
+  <li><b>Bug fix</b>: <code>CheckP0StopPart</code> and
+    <code>CheckPperpStopPart</code> were decrementing a local pointer
+    copy instead of the underlying <code>ngoodray</code> counter
+    (pointer arithmetic error).&nbsp; Stops on negative momentum or
+    transverse-momentum overflow now correctly update
+    <code>ngoodray</code>.</li>
+  <li><b>New profiling tool:
+    <a href="tracking.html#ProfileTrack">ProfileTrack</a></b> -- wraps
+    any tracking call with the MATLAB profiler and (on macOS) the
+    system <code>sample</code> tool simultaneously, giving a
+    MATLAB-level and a C-level breakdown of where wall time is spent
+    across the MATLAB / mex boundary.</li>
+</ul>
+
+<span style=""><span style=""><b><span style="font-weight: bold;">5-April-2017<br>
 </span></b>* Added "DeckTool" class for reading and writing XSIF deck files - see documentation in<a href="lattice_generation.html"> Lattice Generation</a><br>
 <br>
 <b>13-June-2014:<br>

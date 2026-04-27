@@ -141,8 +141,121 @@ int TMapTrackFlag[NUM_TRACK_FLAGS] = {
 	0, 0, 0, 0, 0,
    0, 0, 0, 0, 0,
 	1, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0
-} ;  
-  
+} ;
+
+/* Laser-seeded relativistic modulator (LSRMDLTR) -- ported from
+   pLucretia LSRMdltr / Elegant LSRMDLTR.  Element parameters mirror the
+   pLucretia API exactly.  FieldExpansion is numeric:
+       0 = ideal, 1 = exact, 2 = leading terms.
+   SynchRad and ISR are element-level (0 or 1) flags, NOT Lucretia
+   track flags, matching the pLucretia element definition. */
+
+#define nLsrmdltrPar 26
+
+enum LsrmdltrOrdinal {
+	LsrS, LsrP, LsrL, LsrBu, LsrPeriods,
+	LsrLambda, LsrPower, LsrW0, LsrPhase,
+	LsrX0, LsrY0, LsrZ0, LsrTilt,
+	LsrM, LsrN, LsrNSteps, LsrFieldExpansion,
+	LsrPF1, LsrPF2, LsrPF3,
+	LsrHelical, LsrSynchRad, LsrISR,
+	LsrGirder, LsrOffset, Lsraper
+} ;
+
+struct LucretiaParameter LsrmdltrPar[nLsrmdltrPar] = {
+	{"S",              {Required,Required,Optional},{Ignored,Ignored ,Ignored },0,0,0,0,NULL    },
+	{"P",              {Required,Optional,Optional},{Ignored,Ignored ,Ignored },0,0,0,0,NULL    },
+	{"L",              {Required,Required,Optional},{Ignored,Ignored ,Ignored },0,0,0,0,NULL    },
+	{"Bu",             {Required,Required,Optional},{Ignored,Ignored ,Ignored },0,0,0,0,NULL    },
+	{"Periods",        {Required,Required,Optional},{Ignored,Ignored ,Ignored },0,0,0,0,NULL    },
+	{"LaserWavelength",{Optional,Optional,Optional},{Ignored,Ignored ,Ignored },0,0,0,0,NULL    },
+	{"LaserPeakPower", {Optional,Optional,Optional},{Ignored,Ignored ,Ignored },0,0,0,0,NULL    },
+	{"LaserW0",        {Optional,Optional,Optional},{Ignored,Ignored ,Ignored },0,0,0,0,NULL    },
+	{"LaserPhase",     {Optional,Optional,Optional},{Ignored,Ignored ,Ignored },0,0,0,0,NULL    },
+	{"LaserX0",        {Optional,Optional,Optional},{Ignored,Ignored ,Ignored },0,0,0,0,NULL    },
+	{"LaserY0",        {Optional,Optional,Optional},{Ignored,Ignored ,Ignored },0,0,0,0,NULL    },
+	{"LaserZ0",        {Optional,Optional,Optional},{Ignored,Ignored ,Ignored },0,0,0,0,NULL    },
+	{"LaserTilt",      {Optional,Optional,Optional},{Ignored,Ignored ,Ignored },0,0,0,0,NULL    },
+	{"LaserM",         {Optional,Optional,Optional},{Ignored,Ignored ,Ignored },0,0,0,0,NULL    },
+	{"LaserN",         {Optional,Optional,Optional},{Ignored,Ignored ,Ignored },0,0,0,0,NULL    },
+	{"NSteps",         {Optional,Required,Optional},{Ignored,Ignored ,Ignored },0,0,0,0,NULL    },
+	{"FieldExpansion", {Optional,Optional,Optional},{Ignored,Ignored ,Ignored },0,0,0,0,NULL    },
+	{"PoleFactor1",    {Optional,Optional,Optional},{Ignored,Ignored ,Ignored },0,0,0,0,NULL    },
+	{"PoleFactor2",    {Optional,Optional,Optional},{Ignored,Ignored ,Ignored },0,0,0,0,NULL    },
+	{"PoleFactor3",    {Optional,Optional,Optional},{Ignored,Ignored ,Ignored },0,0,0,0,NULL    },
+	{"Helical",        {Optional,Optional,Optional},{Ignored,Ignored ,Ignored },0,0,0,0,NULL    },
+	{"SynchRad",       {Optional,Optional,Optional},{Ignored,Ignored ,Ignored },0,0,0,0,NULL    },
+	{"ISR",            {Optional,Optional,Optional},{Ignored,Ignored ,Ignored },0,0,0,0,NULL    },
+	{"Girder",         {Ignored ,Optional,Optional},{Ignored,Ignored ,Ignored },0,0,0,0,NULL    },
+	{"Offset",         {Ignored ,Optional,Optional},{Ignored,Required,Optional},6,6,0,0,NULL    },
+	{"aper",           {Ignored ,Optional,Optional},{Ignored,Ignored ,Ignored },0,0,0,0,NULL    }
+} ;
+
+/* Allowed track flags: Aper (aperture check at exit), ZMotion / LorentzDelay
+   (kept for compatibility, see comment in tracker), Split (declared
+   permitted but the tracker is non-splittable; the dispatch in
+   TrackThruMain intercepts LSRMDLTR before ElemTracker).
+   SynRad track flag is intentionally NOT allowed: the LSRMDLTR element
+   uses its own SynchRad / ISR fields. */
+
+int LsrmdltrTrackFlag[NUM_TRACK_FLAGS] = {
+	0, 1, 0, 0, 0,
+	0, 0, 0, 0, 0,
+	1, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0
+} ;
+
+/* Canonical Wiggler / Undulator (CWIGGLER) -- ported from Elegant's
+   CWIGGLER (Y. Wu, Duke).  Sinusoidal field by default; supports an
+   arbitrary harmonic decomposition via the Harmonics matrix
+   (Nx5: [Cmn KxOverKw KyOverKw KzOverKw Phase]) matching Elegant's
+   BX_FILE/BY_FILE column names.  Integration is 4th-order Yoshida
+   symplectic (drift-kick splitting).  SynchRad and ISR are
+   element-level flags, NOT Lucretia track flags, matching the
+   Elegant CWIGGLER convention. */
+
+#define nCwigglerPar 19
+
+enum CwigglerOrdinal {
+	CwigS, CwigP, CwigL, CwigBMax, CwigPeriods,
+	CwigHelical, CwigVertical, CwigStepsPerPeriod, CwigIntegrationOrder,
+	CwigHarmonics,
+	CwigPF1, CwigPF2, CwigPF3,
+	CwigSynchRad, CwigISR,
+	CwigGirder, CwigOffset, CwigTilt, Cwigaper
+} ;
+
+struct LucretiaParameter CwigglerPar[nCwigglerPar] = {
+	{"S",                {Required,Required,Optional},{Ignored,Ignored ,Ignored },0,0,0,0,NULL    },
+	{"P",                {Required,Optional,Optional},{Ignored,Ignored ,Ignored },0,0,0,0,NULL    },
+	{"L",                {Required,Required,Optional},{Ignored,Ignored ,Ignored },0,0,0,0,NULL    },
+	{"BMax",             {Required,Required,Optional},{Ignored,Ignored ,Ignored },0,0,0,0,NULL    },
+	{"Periods",          {Required,Required,Optional},{Ignored,Ignored ,Ignored },0,0,0,0,NULL    },
+	{"Helical",          {Optional,Optional,Optional},{Ignored,Ignored ,Ignored },0,0,0,0,NULL    },
+	{"Vertical",         {Optional,Optional,Optional},{Ignored,Ignored ,Ignored },0,0,0,0,NULL    },
+	{"StepsPerPeriod",   {Optional,Required,Optional},{Ignored,Ignored ,Ignored },0,0,0,0,NULL    },
+	{"IntegrationOrder", {Optional,Optional,Optional},{Ignored,Ignored ,Ignored },0,0,0,0,NULL    },
+	{"Harmonics",        {Optional,Optional,Optional},{Ignored,Optional,Optional},0,0,0,0,NULL    },
+	{"PoleFactor1",      {Optional,Optional,Optional},{Ignored,Ignored ,Ignored },0,0,0,0,NULL    },
+	{"PoleFactor2",      {Optional,Optional,Optional},{Ignored,Ignored ,Ignored },0,0,0,0,NULL    },
+	{"PoleFactor3",      {Optional,Optional,Optional},{Ignored,Ignored ,Ignored },0,0,0,0,NULL    },
+	{"SynchRad",         {Optional,Optional,Optional},{Ignored,Ignored ,Ignored },0,0,0,0,NULL    },
+	{"ISR",              {Optional,Optional,Optional},{Ignored,Ignored ,Ignored },0,0,0,0,NULL    },
+	{"Girder",           {Ignored ,Optional,Optional},{Ignored,Ignored ,Ignored },0,0,0,0,NULL    },
+	{"Offset",           {Ignored ,Optional,Optional},{Ignored,Required,Optional},6,6,0,0,NULL    },
+	{"Tilt",             {Optional,Optional,Optional},{Ignored,Ignored ,Ignored },0,0,0,0,NULL    },
+	{"aper",             {Ignored ,Optional,Optional},{Ignored,Ignored ,Ignored },0,0,0,0,NULL    }
+} ;
+
+/* Allowed track flags: same set as LSRMDLTR.  SynRad TrackFlag is
+   intentionally NOT permitted -- the element uses its own SynchRad
+   and ISR fields. */
+
+int CwigglerTrackFlag[NUM_TRACK_FLAGS] = {
+	0, 1, 0, 0, 0,
+	0, 0, 0, 0, 0,
+	1, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0
+} ;
+
 /* Drift space */
 
 #define nDrifPar 3

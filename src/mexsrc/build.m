@@ -28,6 +28,23 @@ function build(varargin)
 % mlrand : use Matlabs default random number generator instead of C
 % compiler standard rand() function. e.g. for synchrotron radiation
 % calculation related functions. Caution: This is MUCH slower.
+% omp    : enable OpenMP parallelisation of per-ray tracking loops in the
+%   compiled mex files (Drift, QSOS, Mult, SBend, RF, BPM, INST,
+%   LSRMDLTR, CWIGGLER). Does NOT require the Parallel Computing Toolbox
+%   at runtime. On macOS, prefers MATLAB's bundled libomp (R2024b+,
+%   under matlabroot/bin/<arch>/libomp.dylib) so the mex shares MATLAB's
+%   own OpenMP runtime; falls back to Homebrew libomp with a warning if
+%   MATLAB does not ship it. The header omp.h is taken from MATLAB
+%   Coder's bundle if present, else from Homebrew. Set OMP_NUM_THREADS
+%   in the environment to tune the worker count.
+% fast   : enable aggressive compiler optimisations (-O3 -march=native
+%   -ffast-math -funroll-loops -flto on Linux/macOS, /O2 /Oi /Ot /fp:fast
+%   /GL on Windows MSVC). Combines safely with 'omp'. Adds compile time
+%   but typically buys 1.5-3x runtime in tracking-heavy workloads. The
+%   fast-math flags allow associative re-ordering of floating-point sums,
+%   so reductions (BPM moments, etc.) may differ at the last few bits
+%   from the standard build.
+
 % verbose : echo all build command output
 % =======
 
@@ -58,6 +75,8 @@ end
 % - Set defaults and parse input arguments
 target='none';
 randFunc='c';
+useOMP=false;
+useFast=false;
 if nargin>0
   for iarg=1:nargin
     switch lower(varargin{iarg})
@@ -65,6 +84,10 @@ if nargin>0
         target=lower(varargin{iarg});
       case 'mlrand'
         randFunc='matlab';
+      case 'omp'
+        useOMP=true;
+      case 'fast'
+        useFast=true;
     end
   end
 end
@@ -75,6 +98,7 @@ LIBS = [] ;
 if strcmp(randFunc,'matlab')
   FLAGS = [FLAGS ' -DLUCRETIA_MLRAND'] ;
 end
+
 if strcmp(target,'gpu')
   CC='mexcuda -dynamic';
 elseif strcmp(target,'cpu-g4')
@@ -95,6 +119,112 @@ if nargin>0
     end
   end
 end
+% Aggressive optimisation flags -- enables auto-vectorisation, link-time
+% optimisation, loop unrolling, and the unsafe-but-usually-fine
+% fast-math relaxations (associative reordering, denormals-as-zero,
+% no-NaN-checking).  Works alongside 'omp'.  Skipped on cpu-g4 because
+% G4 builds with C++ which has slightly different flag plumbing -- add
+% by hand if you need it.
+if useFast
+  if strcmp(target,'gpu')
+    error('Build:fast:gpuConflict', ...
+          'The ''fast'' option is for the cpu/cpu-g4 targets only.')
+  end
+  if ispc
+    fastFlags = ' COMPFLAGS=''$COMPFLAGS /O2 /Oi /Ot /fp:fast /GL''' ;
+  else
+    fastFlags = [' CFLAGS=''$CFLAGS -O3 -march=native -ffast-math' ...
+                 ' -funroll-loops -flto'' ' ...
+                 'LDFLAGS=''$LDFLAGS -flto'''] ;
+  end
+  FLAGS = [FLAGS fastFlags] ;
+end
+
+% OpenMP parallelisation of per-ray tracking loops.  See LucretiaCommon.c
+% for which kernels are parallelised; currently Drift, QSOS (Quad/Sext/
+% Octu/Plens/Solenoid), Mult, SBend, RF (LCAV/TCAV per-slice ray loop),
+% BPM and INST.
+if useOMP
+  if strcmp(target,'gpu')
+    error('Build:omp:gpuConflict', ...
+          'The ''omp'' option is not supported with the gpu target.')
+  end
+  if ismac
+    % MATLAB ships its own LLVM libomp under bin/<arch>/libomp.dylib
+    % (install_name = @rpath/libomp.dylib).  If we link against
+    % Homebrew's libomp at its absolute path, two libomps end up loaded
+    % in the same process -- the mex sees the Homebrew path while MATLAB
+    % has already loaded its own copy via @rpath.  The duplicate
+    % runtime causes pthread_mutex_init to fail with EINVAL on first
+    % parallel region.  Prefer MATLAB's bundled libomp when present
+    % (R2024b+); link with -L pointing at bin/<arch> so the recorded
+    % dependency is @rpath/libomp.dylib and dyld resolves it to the
+    % already-loaded copy.  Falls back to Homebrew (with a warning)
+    % only if MATLAB's libomp is missing.
+    arch = computer('arch') ;                              % 'maca64' / 'maci64'
+    matlabOmpLibDir = fullfile(matlabroot, 'bin', arch) ;
+    matlabOmpLib    = fullfile(matlabOmpLibDir, 'libomp.dylib') ;
+    matlabOmpInc    = fullfile(matlabroot, 'toolbox', 'eml', ...
+                               'externalDependency', 'omp', arch, ...
+                               'include') ;
+    matlabOmpHdr    = fullfile(matlabOmpInc, 'omp.h') ;
+
+    if exist(matlabOmpLib,'file')
+      % Header preference: MATLAB's (Coder) > Homebrew's.  MATLAB's
+      % libomp is ABI-compatible with both, so a Homebrew header is
+      % a fine fallback.
+      if exist(matlabOmpHdr,'file')
+        ompIncFlag = sprintf('-I%s', matlabOmpInc) ;
+      elseif exist('/opt/homebrew/opt/libomp/include/omp.h','file')
+        ompIncFlag = '-I/opt/homebrew/opt/libomp/include' ;
+      elseif exist('/usr/local/opt/libomp/include/omp.h','file')
+        ompIncFlag = '-I/usr/local/opt/libomp/include' ;
+      else
+        error('Build:omp:headerMissing', ...
+          ['OpenMP libomp.dylib found in MATLAB but omp.h is not.\n' ...
+           'Either install MATLAB Coder (which bundles omp.h) or\n' ...
+           'install Homebrew libomp for its header:\n' ...
+           '    brew install libomp\n' ...
+           'and re-run the build.'])
+      end
+      FLAGS = [FLAGS sprintf( ...
+        [' CFLAGS=''$CFLAGS -Xpreprocessor -fopenmp %s''' ...
+         ' LDFLAGS=''$LDFLAGS -L%s -lomp'''], ...
+        ompIncFlag, matlabOmpLibDir)];
+    else
+      % MATLAB doesn't ship libomp -- fall back to Homebrew with a
+      % warning.  This path is the source of the
+      % `pthread_mutex_init: EINVAL` error if MATLAB later loads its
+      % own libomp anyway, so warn explicitly.
+      if exist('/opt/homebrew/opt/libomp','dir')
+        ompPrefix = '/opt/homebrew/opt/libomp' ;
+      elseif exist('/usr/local/opt/libomp','dir')
+        ompPrefix = '/usr/local/opt/libomp' ;
+      else
+        error('Build:omp:libompMissing', ...
+          ['OpenMP requested but libomp was not found in either\n' ...
+           '    %s\n  or\n    /opt/homebrew/opt/libomp\n' ...
+           'Install with:  brew install libomp'], matlabOmpLib)
+      end
+      warning('Build:omp:homebrewFallback', ...
+        ['MATLAB does not ship libomp at %s; falling back to %s.\n' ...
+         'If tracking aborts with `OMP: Error #179: ' ...
+         'pthread_mutex_init failed`, the duplicate-runtime conflict ' ...
+         'is the cause; an updated MATLAB (R2024b+) ships libomp.'], ...
+        matlabOmpLib, ompPrefix) ;
+      FLAGS = [FLAGS sprintf( ...
+        [' CFLAGS=''$CFLAGS -Xpreprocessor -fopenmp -I%s/include''' ...
+         ' LDFLAGS=''$LDFLAGS -L%s/lib -lomp'''], ...
+        ompPrefix, ompPrefix)];
+    end
+  elseif ispc
+    FLAGS = [FLAGS ' COMPFLAGS=''$COMPFLAGS /openmp'''];
+  else  % assume Linux gcc/clang
+    FLAGS = [FLAGS ...
+      ' CFLAGS=''$CFLAGS -fopenmp'' LDFLAGS=''$LDFLAGS -fopenmp'''];
+  end
+end
+
 if strcmp(target,'cpu-g4')
   [stat,G4LIBS] = system('geant4-config --libs');
   %G4LIBS='-L/var/geant4/bin/../lib64 -lG4Tree -lG4FR -lG4GMocren -lG4visHepRep -lG4RayTracer -lG4VRML -lG4vis_management -lG4modeling -lG4interfaces -lG4analysis -lG4error_propagation -lG4readout -lG4physicslists -lG4run -lG4event -lG4tracking -lG4parmodels -lG4processes -lG4digits_hits -lG4track -lG4particles -lG4geometry -lG4materials -lG4graphics_reps -lG4intercoms -lG4global -lG4clhep -lG4zlib';
@@ -124,6 +254,7 @@ dep.GetTwiss={'LucretiaCommon' 'LucretiaPhysics' 'LucretiaMatlab' 'LucretiaMatla
 dep.RmatAtoB={'LucretiaCommon' 'LucretiaPhysics' 'LucretiaMatlab' 'LucretiaMatlabErrMsg' 'LucretiaMatlab.h' 'LucretiaCommon.h' 'LucretiaGlobalAccess.h'};
 dep.TrackThru={'LucretiaCommon' 'LucretiaPhysics' 'LucretiaMatlab' 'LucretiaMatlabErrMsg' 'LucretiaMatlab.h' 'LucretiaCommon.h' 'LucretiaGlobalAccess.h' 'LucretiaCuda.h'};
 dep.VerifyLattice={'LucretiaCommon' 'LucretiaPhysics' 'LucretiaMatlab' 'LucretiaMatlabErrMsg' 'LucretiaMatlab.h' 'LucretiaCommon.h' 'LucretiaGlobalAccess.h'};
+dep.SeedLucretiaRng={'LucretiaCommon' 'LucretiaPhysics' 'LucretiaMatlab' 'LucretiaMatlabErrMsg' 'LucretiaGlobalAccess.h' 'LucretiaCommon.h'};
 % - target dependent dependencies
 if strcmp(target,'cpu-g4')
   if ispc
@@ -141,9 +272,9 @@ if strcmp(target,'gpu')
   ilist.exe={'TrackThru'};
   ilist.dir={'Tracking'};
 else
-  blist={'GetRmats' 'GetTwiss' 'RmatAtoB' 'TrackThru' 'VerifyLattice' 'LucretiaCommon' 'LucretiaPhysics' 'LucretiaMatlab' 'LucretiaMatlabErrMsg'};
-  ilist.exe={'GetRmats' 'GetTwiss' 'RmatAtoB' 'TrackThru' 'VerifyLattice'};
-  ilist.dir={'RMatrix'  'Twiss'    'RMatrix'  'Tracking'  'LatticeVerification'};
+  blist={'GetRmats' 'GetTwiss' 'RmatAtoB' 'TrackThru' 'VerifyLattice' 'SeedLucretiaRng' 'LucretiaCommon' 'LucretiaPhysics' 'LucretiaMatlab' 'LucretiaMatlabErrMsg'};
+  ilist.exe={'GetRmats' 'GetTwiss' 'RmatAtoB' 'TrackThru' 'VerifyLattice' 'SeedLucretiaRng'};
+  ilist.dir={'RMatrix'  'Twiss'    'RMatrix'  'Tracking'  'LatticeVerification' 'Tracking'};
 end
   
 % Perform the build
