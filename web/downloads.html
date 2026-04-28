@@ -361,7 +361,114 @@ href="http://www.slac.stanford.edu/accel/ilc/codes/Lucretia/package/G4Data.tar-b
     <span style="font-weight: bold;">First-time macOS OpenMP setup:</span><br>
     <blockquote>
       <code>brew install libomp</code><br>
-      <em>(One-time, before the first <code>build cpu omp</code>.)</em>
+      <em>(One-time, before the first <code>build cpu omp</code>.
+      Not needed if your MATLAB is R2024b or later, which ships its
+      own libomp.)</em>
+    </blockquote>
+    <br>
+    <span style="font-weight: bold;">First-time Linux OpenMP setup:</span><br>
+    <blockquote>
+      <code>sudo apt install linux-tools-common linux-tools-$(uname -r)</code><br>
+      <code>sudo sysctl -w kernel.perf_event_paranoid=1</code><br>
+      <em>(The first line installs the <code>perf</code> profiling tool
+      used by <a href="tracking.html#ProfileTrack">ProfileTrack</a>.
+      The second allows it to attach to a running MATLAB process.
+      OpenMP itself only requires a gcc that supports
+      <code>-fopenmp</code>, which all modern Ubuntu/RHEL toolchains
+      do.)</em>
+    </blockquote>
+    <br>
+    <div class="auto-style2"><strong>Setting OMP_NUM_THREADS for
+        optimal performance</strong></div>
+    <br>
+    After a successful <code>build cpu omp install</code>, the build
+    script prints a machine-specific recommendation based on the
+    detected CPU and NUMA topology.&nbsp; The general rules are:
+    <br><br>
+    <table style="width: 100%; text-align: left;" border="1"
+      cellpadding="3" cellspacing="2">
+      <tbody>
+        <tr>
+          <td style="font-weight: bold; text-align: center;">Platform</td>
+          <td style="font-weight: bold; text-align: center;">Situation</td>
+          <td style="font-weight: bold;">Recommended setting</td>
+        </tr>
+        <tr>
+          <td valign="top" align="center">macOS</td>
+          <td valign="top">Any (Apple Silicon or Intel)</td>
+          <td valign="top">Set <code>OMP_NUM_THREADS</code> to the
+            <em>physical</em> core count
+            (<code>sysctl -n hw.physicalcpu</code>).&nbsp;
+            Hyperthreads rarely help for memory-bandwidth-bound
+            tracking and sometimes hurt.
+            <blockquote>
+              <code>export OMP_NUM_THREADS=$(sysctl -n hw.physicalcpu)</code><br>
+              <code>export OMP_PROC_BIND=close</code><br>
+              <code>export OMP_PLACES=cores</code>
+            </blockquote>
+          </td>
+        </tr>
+        <tr>
+          <td valign="top" align="center">Linux<br>(standard NUMA)</td>
+          <td valign="top">One NUMA node per socket<br>
+            (<code>lscpu</code> shows NUMA nodes = sockets)</td>
+          <td valign="top">Use the physical cores of <em>one socket</em>
+            and bind memory locally.&nbsp; Going across sockets costs
+            2&times; the memory latency.
+            <blockquote>
+              <code>export OMP_NUM_THREADS=$(lscpu | awk '/Core\(s\) per socket/{print $NF}')</code><br>
+              <code>export OMP_PROC_BIND=close</code><br>
+              <code>export OMP_PLACES=cores</code><br>
+              <code>numactl --localalloc --cpunodebind=0 matlab</code>
+            </blockquote>
+          </td>
+        </tr>
+        <tr>
+          <td valign="top" align="center">Linux<br>(SNC enabled)</td>
+          <td valign="top">Sub-NUMA Clustering: NUMA nodes &gt; sockets
+            (e.g. 2 sockets but 6 NUMA nodes, typically SNC=2 or
+            SNC=3).&nbsp; Common on AMD EPYC and Intel Sapphire Rapids
+            servers.</td>
+          <td valign="top">The correct unit is <em>one NUMA node</em>,
+            not one socket.&nbsp; With SNC=3 on a 72-core socket there
+            are 3 NUMA nodes of 24 cores each -- using all 72 cores
+            costs 3&times; the memory latency for 2/3 of threads.&nbsp;
+            Use <code>numactl --localalloc</code> to pin memory to the
+            same node as the threads.
+            <blockquote>
+              <em>(SNC=3 example, 24 physical cores per NUMA node)</em><br>
+              <code>export OMP_NUM_THREADS=24</code><br>
+              <code>export OMP_PROC_BIND=close</code><br>
+              <code>export OMP_PLACES=cores</code><br>
+              <code>numactl --localalloc --cpunodebind=0 matlab</code>
+            </blockquote>
+            To scale across all nodes on one socket with interleaved
+            memory:
+            <blockquote>
+              <em>(SNC=3, 72 cores total on socket 0 = nodes 0,1,2)</em><br>
+              <code>export OMP_NUM_THREADS=72</code><br>
+              <code>numactl --interleave=0,1,2 --cpunodebind=0,1,2 matlab</code>
+            </blockquote>
+            The build script detects SNC automatically and prints the
+            specific values for your machine after an OMP build.
+          </td>
+        </tr>
+      </tbody>
+    </table>
+    <br>
+    <span style="font-weight: bold;">Why more threads can be
+      slower:</span>&nbsp; With 144 threads on a 6-NUMA-node server,
+    threads on node 5 access bunch arrays allocated on node 0 at twice
+    the latency.&nbsp; The parallel tracking kernels are
+    memory-bandwidth-bound, so latency scales directly to wall time.&nbsp;
+    The optimal thread count is almost always the physical core count
+    of <em>one NUMA node</em> -- not the total core count.&nbsp; Once
+    you have the per-node number, sweep it upwards:
+    <blockquote>
+      <code>for N in 4 8 16 24 36 48; do</code><br>
+      <code>&nbsp;&nbsp;OMP_NUM_THREADS=$N numactl --localalloc --cpunodebind=0 \</code><br>
+      <code>&nbsp;&nbsp;&nbsp;&nbsp;matlab -batch "load injector; tic; I.track(1,1); fprintf('N=%d t=%.1f\n',$N,toc);" 2&gt;/dev/null</code><br>
+      <code>done</code>
     </blockquote>
     <br>
 https://github.com/slaclab/Lucretia.git<br>

@@ -322,6 +322,13 @@ if nargin>0
   end
 end
 
+% After a successful OMP build, print OMP_NUM_THREADS recommendations
+% based on the detected CPU / NUMA topology of the current machine.
+if useOMP && ~strcmp(target,'none')
+  printOmpHints() ;
+end
+
+% =========================================================================
 % perform build
 function doBuild(bname,CC,FLAGS,LIBS,ilist,dep,target)
 olist=[];
@@ -391,4 +398,114 @@ else
   end
 end
 
-  
+
+% =========================================================================
+% OMP hint printer -- detect CPU / NUMA topology and suggest the right
+% OMP_NUM_THREADS, OMP_PROC_BIND, and numactl command for this machine.
+function printOmpHints()
+fprintf('\n') ;
+fprintf('==========================================================\n') ;
+fprintf(' OMP build complete -- recommended runtime settings\n') ;
+fprintf('==========================================================\n') ;
+
+if ismac
+  % macOS: use physical cores, not logical (HT doubles the count but
+  % not the memory bandwidth available to the OMP workers).
+  [~, physStr] = system('sysctl -n hw.physicalcpu 2>/dev/null') ;
+  nPhys = str2double(strtrim(physStr)) ;
+  [~, logStr]  = system('sysctl -n hw.logicalcpu 2>/dev/null') ;
+  nLog  = str2double(strtrim(logStr)) ;
+  fprintf('Platform:   macOS  (%d physical cores, %d logical)\n', nPhys, nLog) ;
+  fprintf('\nBest setting (stay on physical cores; HT rarely helps\n') ;
+  fprintf('for memory-bandwidth-bound tracking):\n\n') ;
+  fprintf('  export OMP_NUM_THREADS=%d\n', nPhys) ;
+  fprintf('  export OMP_PROC_BIND=close\n') ;
+  fprintf('  export OMP_PLACES=cores\n') ;
+
+elseif isunix
+  [~, lscpuOut] = system('lscpu 2>/dev/null') ;
+  nSockets     = parseTopologyInt(lscpuOut, 'Socket\(s\)') ;
+  coresPerSock = parseTopologyInt(lscpuOut, 'Core\(s\) per socket') ;
+  nNuma        = parseTopologyInt(lscpuOut, 'NUMA node\(s\)') ;
+  nCpuTotal    = parseTopologyInt(lscpuOut, '^CPU\(s\)') ;
+
+  fprintf('Platform:   Linux\n') ;
+  fprintf('Sockets:    %d  |  Cores/socket: %d  |  NUMA nodes: %d  |  Total CPUs (incl HT): %d\n', ...
+          nSockets, coresPerSock, nNuma, nCpuTotal) ;
+
+  if nNuma > 0 && nSockets > 0 && nNuma > nSockets
+    % Sub-NUMA Clustering (SNC) -- most important case for large servers.
+    sncFactor    = nNuma / nSockets ;
+    coresPerNuma = round(coresPerSock / sncFactor) ;
+    numaOneSocket = strjoin(arrayfun(@num2str, 0:sncFactor-1, ...
+                                     'UniformOutput', false), ',') ;
+    fprintf('\n*** Sub-NUMA Clustering (SNC=%d) detected ***\n', sncFactor) ;
+    fprintf('Each socket is divided into %d NUMA domains of %d physical\n', ...
+            sncFactor, coresPerNuma) ;
+    fprintf('cores each.  Crossing domain boundaries costs 2x memory\n') ;
+    fprintf('latency -- this is why using all %d cores can be SLOWER\n', ...
+            nCpuTotal) ;
+    fprintf('than using far fewer.\n') ;
+    fprintf('\nStart here (one NUMA node, fastest for a single job):\n\n') ;
+    fprintf('  export OMP_NUM_THREADS=%d\n', coresPerNuma) ;
+    fprintf('  export OMP_PROC_BIND=close\n') ;
+    fprintf('  export OMP_PLACES=cores\n') ;
+    fprintf('  numactl --localalloc --cpunodebind=0 matlab\n') ;
+    fprintf('\nScale to one full socket (%d cores) with interleaved memory:\n\n', ...
+            coresPerSock) ;
+    fprintf('  export OMP_NUM_THREADS=%d\n', coresPerSock) ;
+    fprintf('  numactl --interleave=%s --cpunodebind=%s matlab\n', ...
+            numaOneSocket, numaOneSocket) ;
+    fprintf('\nBeyond one socket: adds NUMA penalty, rarely worth it\n') ;
+    fprintf('unless numactl --interleave=all is used for ALL sockets.\n') ;
+
+  elseif nSockets > 0 && coresPerSock > 0
+    % Standard NUMA -- one memory domain per socket.
+    fprintf('\nBest setting (physical cores on one socket, local memory):\n\n') ;
+    fprintf('  export OMP_NUM_THREADS=%d\n', coresPerSock) ;
+    fprintf('  export OMP_PROC_BIND=close\n') ;
+    fprintf('  export OMP_PLACES=cores\n') ;
+    fprintf('  numactl --localalloc --cpunodebind=0 matlab\n') ;
+    if nSockets > 1
+      numaAll = strjoin(arrayfun(@num2str, 0:nSockets-1, ...
+                                 'UniformOutput', false), ',') ;
+      fprintf('\nTo span all %d sockets with interleaved memory:\n\n', nSockets) ;
+      fprintf('  export OMP_NUM_THREADS=%d\n', nSockets * coresPerSock) ;
+      fprintf('  numactl --interleave=%s matlab\n', numaAll) ;
+    end
+  else
+    fprintf('\nCould not determine core/NUMA topology; run:\n') ;
+    fprintf('  lscpu | grep -E "Socket|Core|NUMA"\n') ;
+    fprintf('and set OMP_NUM_THREADS to the physical-core count of one NUMA node.\n') ;
+  end
+
+  fprintf('\nTo install numactl if not already present:\n') ;
+  fprintf('  sudo apt install numactl  (Ubuntu/Debian)\n') ;
+  fprintf('  sudo yum install numactl  (RHEL/CentOS)\n') ;
+
+else  % Windows
+  fprintf('Platform:   Windows\n') ;
+  fprintf('\nSet OMP_NUM_THREADS to the number of physical processor cores.\n') ;
+  fprintf('Check: Task Manager > Performance > CPU > Cores.\n') ;
+  fprintf('  set OMP_NUM_THREADS=<N>\n') ;
+  fprintf('  matlab\n') ;
+end
+
+fprintf('\nTo verify at runtime:\n') ;
+fprintf('  SeedLucretiaRng(42)  %% optional, for reproducible SR\n') ;
+fprintf('  tic; I.track(1,1); toc\n') ;
+fprintf('  %% Sweep OMP_NUM_THREADS = [1 4 8 N] to find the optimum.\n') ;
+fprintf('==========================================================\n\n') ;
+end
+
+
+% =========================================================================
+function n = parseTopologyInt( txt, pattern )
+% Extract the first integer after `pattern:` from lscpu output.
+n = 0 ;
+tok = regexp(txt, [pattern '\s*:\s*([0-9]+)'], 'tokens', 'once') ;
+if ~isempty(tok)
+  n = str2double(tok{1}) ;
+end
+end
+
