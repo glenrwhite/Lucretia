@@ -298,8 +298,11 @@ recordCmd = sprintf('perf record %s -F %d -g -p %d -o %s -- sleep %d', ...
                     eventFlag, freqHz, matPid, escapeShell(dataFile), durSec) ;
 % Flat report sorted by self-time -- the most useful view for finding
 % hot tracking kernels.
+% --stdio forces text output instead of the TUI pager (works on all
+% perf versions; --no-pager is a newer alias that some older builds
+% do not recognise, so we avoid it here).
 reportCmd = sprintf( ...
-  'perf report --no-pager --stdio --no-children --call-graph flat,0.001 -i %s > %s 2>&1', ...
+  'perf report --stdio --no-children --call-graph flat,0.001 -i %s > %s 2>&1', ...
   escapeShell(dataFile), escapeShell(reportPath)) ;
 bgCmd = sprintf('( sleep %d && %s && %s ) & echo $! > %s', ...
                 delaySec, recordCmd, reportCmd, escapeShell(pidFile)) ;
@@ -324,23 +327,57 @@ end
 
 % =========================================================================
 function printNumaHints()
-% Print NUMA topology so it lands in the session log next to the profile.
+% Print NUMA topology and, on SNC machines, the optimal OMP_NUM_THREADS.
 fprintf('\n--- NUMA / CPU topology ---\n') ;
-[~, out] = system('lscpu 2>/dev/null | grep -E "^CPU.s.|^Thread|^Core|^Socket|NUMA node"') ;
-if ~isempty(strtrim(out))
-  fprintf('%s', out) ;
+[~, lscpuOut] = system('lscpu 2>/dev/null | grep -E "^CPU.s.|^Thread|^Core.s. per socket|^Socket|NUMA node"') ;
+if ~isempty(strtrim(lscpuOut))
+  fprintf('%s', lscpuOut) ;
 end
-[~, out] = system('numactl --hardware 2>/dev/null | head -12') ;
-if ~isempty(strtrim(out))
-  fprintf('%s', out) ;
-end
-nThreads = getenv('OMP_NUM_THREADS') ;
+
+% Parse key values for advice.
+nSockets  = parseFirstInt(lscpuOut, 'Socket') ;
+coresPerSock = parseFirstInt(lscpuOut, 'Core') ;
+nNuma     = parseFirstInt(lscpuOut, 'NUMA node\(s\)') ;
+nThreads  = getenv('OMP_NUM_THREADS') ;
 if isempty(nThreads), nThreads = '(unset -- defaulting to all cores)' ; end
 fprintf('OMP_NUM_THREADS:   %s\n', nThreads) ;
 nBind = getenv('OMP_PROC_BIND') ;
 if isempty(nBind), nBind = '(unset)' ; end
 fprintf('OMP_PROC_BIND:     %s\n', nBind) ;
+
+% Detect SNC (Sub-NUMA Clustering): nNuma > nSockets.
+if nNuma > 0 && nSockets > 0 && nNuma > nSockets
+  sncFactor = nNuma / nSockets ;
+  coresPerNuma = round(coresPerSock / sncFactor) ;
+  fprintf('\n*** Sub-NUMA Clustering (SNC=%d) detected ***\n', sncFactor) ;
+  fprintf('  %d sockets x %d cores/socket = %d cores total\n', ...
+          nSockets, coresPerSock, nSockets*coresPerSock) ;
+  fprintf('  BUT split into %d NUMA nodes of only %d cores each.\n', ...
+          nNuma, coresPerNuma) ;
+  fprintf('  For Lucretia OMP tracking, threads on node N+1 pay 2x memory\n') ;
+  fprintf('  latency to access bunch arrays allocated on node N.\n') ;
+  fprintf('\n  Recommended settings (start here, then tune):\n') ;
+  fprintf('    # Bind to ONE NUMA node (fastest)\n') ;
+  fprintf('    numactl --localalloc --cpunodebind=0 matlab\n') ;
+  fprintf('    OMP_NUM_THREADS=%d OMP_PROC_BIND=close OMP_PLACES=cores\n', ...
+          coresPerNuma) ;
+  fprintf('\n    # Or try 2 NUMA nodes on one socket:\n') ;
+  fprintf('    OMP_NUM_THREADS=%d\n', coresPerNuma * sncFactor) ;
+  fprintf('\n  Going beyond one socket is unlikely to help for memory-\n') ;
+  fprintf('  bandwidth-bound tracking unless numactl --interleave=all\n') ;
+  fprintf('  is also used (which spreads bunch arrays across all nodes).\n') ;
+end
 fprintf('---------------------------\n') ;
+end
+
+
+function n = parseFirstInt( txt, pattern )
+% Extract the first integer after `pattern` in txt.
+n = 0 ;
+tok = regexp(txt, [pattern '[^0-9]*([0-9]+)'], 'tokens', 'once') ;
+if ~isempty(tok)
+  n = str2double(tok{1}) ;
+end
 end
 
 
