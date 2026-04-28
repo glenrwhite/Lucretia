@@ -249,7 +249,7 @@ end
 % =========================================================================
 function [started, bgPid] = startLinuxPerf( opt, outDir, reportPath )
 started = false ; bgPid = '' ;
-% Check perf is available
+% Check perf is available.
 [rc, ~] = system('which perf 2>/dev/null') ;
 if rc ~= 0
   warning('ProfileTrack:noperf', ...
@@ -259,13 +259,29 @@ if rc ~= 0
      '  sudo sysctl -w kernel.perf_event_paranoid=1']) ;
   return
 end
-% Check paranoid setting
+% Check paranoid setting.
 [~, paranoidStr] = system('cat /proc/sys/kernel/perf_event_paranoid 2>/dev/null') ;
 paranoid = str2double(strtrim(paranoidStr)) ;
 if isnan(paranoid) || paranoid > 1
   warning('ProfileTrack:perfParanoid', ...
     ['perf_event_paranoid=%s -- perf may not be able to sample the process.\n' ...
      'Run:  sudo sysctl -w kernel.perf_event_paranoid=1'], strtrim(paranoidStr)) ;
+end
+
+% Detect whether hardware PMU cycle counters are available.
+% On VMs / containers the hypervisor often does not expose the CPU's
+% hardware PMU, so `perf record` (which samples on cycles by default)
+% silently records nothing.  Fall back to the `cpu-clock` software
+% timer, which is always available and measures wall time per sample
+% slot -- actually MORE useful for finding tracking bottlenecks.
+[rc2, ~] = system('perf stat -e cycles echo x 2>&1 | grep -q "<not supported>"') ;
+hwPmuAvail = (rc2 ~= 0) ;   % grep returns 0 if the string was found
+if hwPmuAvail
+  eventFlag = '' ;           % default: hardware cycles
+  envNote   = 'hardware PMU' ;
+else
+  eventFlag = '-e cpu-clock' ;   % software fallback for VMs
+  envNote   = 'software cpu-clock (VM/container: hardware PMU not available)' ;
 end
 
 matPid   = feature('getpid') ;
@@ -275,14 +291,16 @@ freqHz   = max(1, opt.perfFreqHz) ;
 pidFile  = fullfile(outDir, 'perf.pid') ;
 dataFile = fullfile(outDir, 'perf.data') ;
 
-% Chain: wait, then record for durSec seconds, then convert to text.
-% `perf record -p PID -- sleep DURATION` records PID for as long as
-% `sleep DURATION` runs, then writes the data file.
-%  perf report --stdio converts it to the human-readable call tree.
-recordCmd = sprintf('perf record -F %d -g -p %d -o %s -- sleep %d', ...
-                    freqHz, matPid, escapeShell(dataFile), durSec) ;
-reportCmd = sprintf('perf report --no-pager --stdio --call-graph flat,0.001 -i %s > %s 2>&1', ...
-                    escapeShell(dataFile), escapeShell(reportPath)) ;
+% Build the record + report chain.
+% `perf record -p PID -- sleep DURATION` records the target PID for
+% exactly DURATION seconds (the `sleep` child is the recording timer).
+recordCmd = sprintf('perf record %s -F %d -g -p %d -o %s -- sleep %d', ...
+                    eventFlag, freqHz, matPid, escapeShell(dataFile), durSec) ;
+% Flat report sorted by self-time -- the most useful view for finding
+% hot tracking kernels.
+reportCmd = sprintf( ...
+  'perf report --no-pager --stdio --no-children --call-graph flat,0.001 -i %s > %s 2>&1', ...
+  escapeShell(dataFile), escapeShell(reportPath)) ;
 bgCmd = sprintf('( sleep %d && %s && %s ) & echo $! > %s', ...
                 delaySec, recordCmd, reportCmd, escapeShell(pidFile)) ;
 
@@ -297,8 +315,9 @@ try
 catch
   bgPid = '?' ;
 end
-fprintf('C-level sampler:   perf record -F %d -p %d for %ds (PID %s, delay %ds)\n', ...
-        freqHz, matPid, durSec, bgPid, delaySec) ;
+fprintf('C-level sampler:   perf record %s -F %d -p %d for %ds (PID %s, delay %ds)\n', ...
+        eventFlag, freqHz, matPid, durSec, bgPid, delaySec) ;
+fprintf('                   (%s)\n', envNote) ;
 fprintf('                   -> %s\n', reportPath) ;
 end
 
