@@ -515,17 +515,33 @@ against the full workload.<br><br>
 
 <strong>Requirements</strong><br>
 <ul>
-  <li>macOS for the C-level sampler (<code>sample</code> is part of
-    macOS Developer Tools, on the default PATH).</li>
+  <li><span style="font-weight: bold;">macOS</span>: <code>sample</code>
+    is part of macOS Developer Tools and is on the default PATH.&nbsp;
+    For richer interactive analysis, point
+    <code>Instruments.app &rarr; Time Profiler</code> at the matlab
+    process.</li>
+  <li><span style="font-weight: bold;">Linux</span>: install the
+    <code>perf</code> tool and grant unprivileged access:
+    <blockquote>
+      <code>sudo apt install linux-tools-common linux-tools-$(uname -r)</code><br>
+      <code>sudo sysctl -w kernel.perf_event_paranoid=1</code>
+    </blockquote>
+    ProfileTrack will detect <code>perf</code> automatically and
+    switch to <code>perf record + perf report</code>.&nbsp; On
+    Linux, ProfileTrack also prints the NUMA / CPU topology
+    (number of sockets, cores per socket, NUMA nodes) alongside
+    the wall time, which is useful for diagnosing scaling problems
+    on multi-socket servers.&nbsp; See the NUMA scaling note in
+    the <code>help ProfileTrack</code> text for recommended
+    <code>OMP_NUM_THREADS</code> / <code>OMP_PROC_BIND</code>
+    settings on NUMA machines.</li>
+  <li><span style="font-weight: bold;">Windows</span>: the C-level
+    sampler is not implemented.&nbsp; Use Intel VTune or AMD uProf
+    externally; the MATLAB-level profiler still runs normally.</li>
   <li>Lucretia mex files built with debug symbols are not required
     for function-name level resolution -- exported symbols
     suffice.&nbsp; For file/line numbers in the C report, rebuild
     with <code>-g</code> in <code>CFLAGS</code> (no runtime cost).</li>
-  <li>For richer interactive analysis, point Instruments at the
-    matlab process: open <code>Instruments.app</code>, choose the
-    <em>Time Profiler</em> template, target <code>matlab</code>,
-    record.&nbsp; Same data as <code>sample</code> with a UI for
-    drill-down.</li>
 </ul>
 
 </body>
