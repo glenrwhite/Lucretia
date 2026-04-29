@@ -471,12 +471,18 @@ int main (int argc, char* argv[])
         // ---- Space charge (optional) ----
         std::unique_ptr<lucretiatt::spacecharge::SpaceCharge> sc;
         {
-            int sc_enabled = 0;
-            amrex::ParmParse("space_charge").query("enabled", sc_enabled);
+            int sc_enabled  = 0;
+            int sc_comoving = 0;
+            amrex::ParmParse pp_sc("space_charge");
+            pp_sc.query("enabled",  sc_enabled);
+            pp_sc.query("comoving", sc_comoving);
             if (sc_enabled != 0) {
                 sc = std::make_unique<lucretiatt::spacecharge::SpaceCharge>(
                     geom, ba, dm);
-                amrex::Print() << "Space charge: enabled\n";
+                sc->set_comoving(sc_comoving != 0);
+                amrex::Print() << "Space charge: enabled"
+                               << (sc_comoving ? "  (co-moving mesh)" : "  (static mesh)")
+                               << "\n";
             }
         }
 

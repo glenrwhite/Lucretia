@@ -35,6 +35,7 @@ properties
     work_dir   = ''                                              % '' -> tempname
     binary     = ''                                              % '' -> which('lucretia-tt')
     enable_space_charge = false                                  % toggles ParmParse space_charge.enabled
+    sc_comoving         = false                                  % SC mesh follows the bunch in z
 
     last_input_file = ''
     last_log        = ''

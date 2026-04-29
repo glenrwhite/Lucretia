@@ -53,6 +53,58 @@ SpaceCharge::SpaceCharge (
 }
 
 
+amrex::Real SpaceCharge::compute_mean_z (particles::TimeBunch& bunch) const
+{
+    using namespace amrex;
+    using namespace particles;
+
+    long n_total = bunch.TotalNumberOfParticles(true, false);
+    if (n_total == 0) { return 0.0; }
+
+    Real sum_z = 0.0;
+    using PIter = ParIterSoA<RealSoA::nattribs, IntSoA::nattribs>;
+    constexpr int lev = 0;
+    for (PIter pti(bunch, lev); pti.isValid(); ++pti) {
+        auto& soa = pti.GetStructOfArrays();
+        const int np = pti.numParticles();
+        const auto& zs = soa.GetRealData(RealSoA::z);
+        for (int i = 0; i < np; ++i) { sum_z += zs[i]; }
+    }
+    ParallelDescriptor::ReduceRealSum(sum_z);
+    return sum_z / Real(n_total);
+}
+
+
+void SpaceCharge::recenter (amrex::Real z_new)
+{
+    using namespace amrex;
+    auto const* lo = m_geom.ProbLo();
+    auto const* hi = m_geom.ProbHi();
+    const Real lz_half = Real(0.5) * (hi[2] - lo[2]);
+
+    // Keep transverse extent + integer Box; only shift z.
+    RealBox rb({lo[0], lo[1], z_new - lz_half},
+               {hi[0], hi[1], z_new + lz_half});
+    Array<int, AMREX_SPACEDIM> is_per{0, 0, 0};
+    m_geom.define(m_geom.Domain(), rb, CoordSys::cartesian, is_per);
+
+    // Old field data refers to the old physical extent and is now
+    // meaningless. Reset; the next solve() will repopulate.
+    m_rho.setVal(0.0);
+    m_phi.setVal(0.0);
+    m_Ex.setVal(0.0);
+    m_Ey.setVal(0.0);
+    m_Ez.setVal(0.0);
+
+    ++m_n_recenters;
+
+    // Recenter events are significant (mesh moved, may indicate
+    // bunch outrunning the static box) -- always print one line.
+    amrex::Print() << "[SpaceCharge] recenter: z -> " << z_new
+                   << " m (recenter #" << m_n_recenters << ")\n";
+}
+
+
 amrex::Real SpaceCharge::compute_mean_beta_z (particles::TimeBunch& bunch) const
 {
     using namespace amrex;
@@ -187,6 +239,21 @@ void SpaceCharge::compute_E_from_phi ()
 void SpaceCharge::solve (particles::TimeBunch& bunch)
 {
     using namespace amrex;
+
+    // Co-moving recenter check: shift the mesh in z if the bunch has
+    // drifted into the outer 25% of the box.
+    if (m_comoving) {
+        const long n = bunch.TotalNumberOfParticles(true, false);
+        if (n > 0) {
+            const Real z_centroid = compute_mean_z(bunch);
+            auto const* lo_p = m_geom.ProbLo();
+            auto const* hi_p = m_geom.ProbHi();
+            const Real margin = Real(0.25) * (hi_p[2] - lo_p[2]);
+            if (z_centroid < lo_p[2] + margin || z_centroid > hi_p[2] - margin) {
+                recenter(z_centroid);
+            }
+        }
+    }
 
     m_last_beta_z = compute_mean_beta_z(bunch);
 

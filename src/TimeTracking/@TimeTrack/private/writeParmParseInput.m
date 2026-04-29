@@ -97,6 +97,9 @@ end
 if obj.enable_space_charge
     fprintf(f, '\n# ---- Space charge ----\n');
     fprintf(f, 'space_charge.enabled = 1\n');
+    if isprop(obj, 'sc_comoving') && obj.sc_comoving
+        fprintf(f, 'space_charge.comoving = 1\n');
+    end
 end
 
 fprintf(f, '\nout_dir = %s\n', obj.output_dir);
