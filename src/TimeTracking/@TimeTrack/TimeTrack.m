@@ -91,5 +91,89 @@ methods
         diag_dir = fullfile(obj.work_dir, obj.output_dir);
         bunches  = readBeamOpenPMD(diag_dir);
     end
+
+    function beam = freezePlaneOut(obj, dump_step)
+    % FREEZEPLANEOUT  Convert a captured time-based dump into a Lucretia
+    % Beam struct ready for downstream s-based tracking via TrackThru.
+    %
+    %   B = tt.freezePlaneOut('last')          % use the last dump
+    %   B = tt.freezePlaneOut(step_id)         % use a specific dump step
+    %
+    % Returns a Lucretia-format Beam:
+    %   B.BunchInterval = 0
+    %   B.Bunch.x = 6 x N matrix:
+    %       row 1: x   (m)
+    %       row 2: x' = px / pz   (rad, small-angle)
+    %       row 3: y   (m)
+    %       row 4: y' = py / pz
+    %       row 5: z   (m, relative to bunch z-centroid)
+    %       row 6: P   (GeV/c, total momentum |p|*c in GeV)
+    %   B.Bunch.Q = 1 x N: physical charge per macroparticle (C)
+    %   B.Bunch.stop = 1 x N: zeros (no particles dead initially)
+    %
+    % Note: rows 1..5 are taken at the dump TIME (not at a specific s).
+    % If the bunch is short relative to its transit length scale (so
+    % all particles are near the same z when the dump fires) this is a
+    % good approximation to the s-based capture that a true z-triggered
+    % freeze plane would produce. The TIMER-style readout (BeamMonitor +
+    % freezePlaneOut(step)) is the simplest path -- a true z-triggered
+    % FreezePlane element with per-particle drift-back is a future
+    % refinement.
+        bunches = obj.readDumps();
+        if nargin < 2 || (ischar(dump_step) || isstring(dump_step))
+            % default 'last'
+            target = bunches{end};
+        else
+            steps  = cellfun(@(b) b.step, bunches);
+            idx    = find(steps == dump_step, 1);
+            if isempty(idx)
+                error('TimeTrack:freezePlaneOut:noStep', ...
+                      'No dump at step %d (have %s)', ...
+                      dump_step, mat2str(steps));
+            end
+            target = bunches{idx};
+        end
+
+        % Constants
+        me_kg = 9.1093837015e-31;
+        c     = 299792458.0;
+        % m_e * c^2 in GeV
+        me_GeV_c2 = me_kg * c^2 / 1.602176634e-19 / 1e9;   % ~ 0.000510999 GeV
+
+        N = numel(target.x);
+        if N == 0
+            error('TimeTrack:freezePlaneOut:emptyBunch', ...
+                  'Dump at step %d has no particles', target.step);
+        end
+
+        px = double(target.px(:));         % momentum, kg.m/s
+        py = double(target.py(:));
+        pz = double(target.pz(:));
+        xx = double(target.x(:));
+        yy = double(target.y(:));
+        zz = double(target.z(:));
+
+        % Lucretia row 6 = total momentum P in GeV/c.
+        % |p| in kg.m/s -> GeV/c via |p|*c / 1.602e-19 / 1e9.
+        p2  = px.*px + py.*py + pz.*pz;
+        Pgev = sqrt(p2) * c / 1.602176634e-19 / 1e9;
+
+        % Slopes (small-angle)
+        xp = px ./ max(pz, 1e-30);
+        yp = py ./ max(pz, 1e-30);
+
+        % Centred z (longitudinal position relative to bunch centroid)
+        z_rel = zz - mean(zz);
+
+        bunch       = struct();
+        bunch.x     = [xx.'; xp.'; yy.'; yp.'; z_rel.'; Pgev.'];
+        bunch.Q     = abs(double(target.q(:)).' .* double(target.w(:)).');  % C
+        bunch.stop  = zeros(1, N);
+
+        beam.BunchInterval = 0;
+        beam.Bunch         = bunch;
+
+        amrex_unused = me_GeV_c2;       %#ok<NASGU>  % kept for unit reference
+    end
 end
 end
