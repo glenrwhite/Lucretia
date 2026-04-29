@@ -59,18 +59,12 @@ void TrackingLoop::step (
         }, el);
     }
 
-    // ---- 3. Space-charge solve (once per step) ----
-    Array4<const Real> Ex_sc_arr, Ey_sc_arr, Ez_sc_arr;
+    // ---- 3. Space-charge solve (once per step, all ranks/tiles) ----
     GpuArray<Real, 3>  dxi_sc{}, lo_sc{};
-    Box                sc_box;
     if (sc) {
         sc->solve(bunch);
-        Ex_sc_arr = sc->ExArr();
-        Ey_sc_arr = sc->EyArr();
-        Ez_sc_arr = sc->EzArr();
-        dxi_sc    = sc->dxi();
-        lo_sc     = sc->lo();
-        sc_box    = sc->mesh_box();
+        dxi_sc = sc->dxi();
+        lo_sc  = sc->lo();
     }
 
     // ---- 4. Per-particle push ----
@@ -80,6 +74,16 @@ void TrackingLoop::step (
     for (PIter pti(bunch, lev); pti.isValid(); ++pti) {
         auto ptd = pti.GetParticleTile().getParticleTileData();
         const int np = pti.numParticles();
+
+        // Per-tile SC field arrays (one Array4 per FAB owned by this rank).
+        Array4<const Real> Ex_sc_arr, Ey_sc_arr, Ez_sc_arr;
+        Box                sc_box;
+        if (sc) {
+            Ex_sc_arr = sc->Ex_array(pti);
+            Ey_sc_arr = sc->Ey_array(pti);
+            Ez_sc_arr = sc->Ez_array(pti);
+            sc_box    = sc->mesh_box(pti);
+        }
 
         // CPU-only loop (Phase 4A). GPU portability deferred to Phase 7.
 #ifdef AMREX_USE_OMP

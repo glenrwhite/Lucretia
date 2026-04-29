@@ -9,6 +9,7 @@
 #include "particles/TimeBunch.H"
 
 #include <AMReX_ParIter.H>
+#include <AMReX_Vector.H>
 
 #include <openPMD/openPMD.hpp>
 
@@ -47,11 +48,7 @@ void OpenPMDImpl::write (particles::TimeBunch& bunch, int step, amrex::Real t)
 {
     using namespace particles;
 
-    // Phase 1.7: single-rank only.
-    if (!amrex::ParallelDescriptor::IOProcessor()) { return; }
-    if (!m_series) { return; }
-
-    // ---- 1. Pull SoA into flat host vectors ----
+    // ---- 1. Pull this rank's SoA into flat host vectors ----
     std::vector<amrex::ParticleReal> x_v, y_v, z_v;
     std::vector<amrex::ParticleReal> px_v, py_v, pz_v;
     std::vector<amrex::ParticleReal> q_v, w_v;
@@ -89,6 +86,53 @@ void OpenPMDImpl::write (particles::TimeBunch& bunch, int step, amrex::Real t)
             id_v.push_back(idcpu[i]);
         }
     }
+
+    // ---- 1b. MPI gather to rank 0 ----
+    // openPMD-api was built with serial HDF5, so only rank 0 writes. To
+    // capture the full bunch we need to gather every rank's local
+    // particles to rank 0 first. Single-rank: Gatherv is a no-op copy.
+    const int io_root  = amrex::ParallelDescriptor::IOProcessorNumber();
+    const int my_rank  = amrex::ParallelDescriptor::MyProc();
+    const int n_ranks  = amrex::ParallelDescriptor::NProcs();
+    const int local_n  = static_cast<int>(x_v.size());
+
+    amrex::Vector<int> counts(n_ranks, 0);
+    amrex::ParallelDescriptor::Gather(&local_n, 1, counts.data(), 1, io_root);
+
+    amrex::Vector<int> displs;
+    long total_n = 0;
+    if (my_rank == io_root) {
+        displs.assign(n_ranks, 0);
+        total_n = counts[0];
+        for (int i = 1; i < n_ranks; ++i) {
+            displs[i] = displs[i-1] + counts[i-1];
+            total_n += counts[i];
+        }
+    }
+
+    auto gather_real = [&] (std::vector<amrex::ParticleReal>& v) {
+        std::vector<amrex::ParticleReal> recv;
+        if (my_rank == io_root) { recv.assign(static_cast<size_t>(total_n), 0); }
+        amrex::ParallelDescriptor::Gatherv(
+            v.data(), local_n,
+            recv.data(), counts, displs, io_root);
+        if (my_rank == io_root) { v = std::move(recv); }
+    };
+    auto gather_u64 = [&] (std::vector<uint64_t>& v) {
+        std::vector<uint64_t> recv;
+        if (my_rank == io_root) { recv.assign(static_cast<size_t>(total_n), 0); }
+        amrex::ParallelDescriptor::Gatherv(
+            v.data(), local_n,
+            recv.data(), counts, displs, io_root);
+        if (my_rank == io_root) { v = std::move(recv); }
+    };
+    gather_real(x_v);  gather_real(y_v);  gather_real(z_v);
+    gather_real(px_v); gather_real(py_v); gather_real(pz_v);
+    gather_real(q_v);  gather_real(w_v);
+    gather_u64(id_v);
+
+    if (my_rank != io_root) { return; }
+    if (!m_series) { return; }
 
     const uint64_t n = x_v.size();
     if (n == 0) {

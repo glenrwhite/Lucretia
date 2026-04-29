@@ -88,6 +88,15 @@ if(LucretiaTT_OPENPMD)
     target_compile_definitions(app PUBLIC LUCRETIATT_USE_OPENPMD)
 endif()
 
+# Our field-map I/O code (Solenoid3D, FieldMap3D, BeamMonitor scratch reads,
+# main.cpp parmparse-from-h5) calls the HDF5 C API directly. In serial-openPMD
+# builds the include path leaks through openPMD's INTERFACE properties, but
+# that breaks under openPMD+MPI when openPMD is wired against parallel HDF5
+# but our own files want serial HDF5 headers. Find HDF5 explicitly so we
+# always have a known include path for our direct uses.
+find_package(HDF5 REQUIRED COMPONENTS C)
+target_link_libraries(app PRIVATE HDF5::HDF5)
+
 if(LucretiaTT_FFT)
     target_compile_definitions(app PUBLIC LUCRETIATT_USE_FFT)
 endif()

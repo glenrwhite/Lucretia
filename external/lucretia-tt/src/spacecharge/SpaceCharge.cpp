@@ -24,22 +24,20 @@ constexpr amrex::Real kSpeedOfLight = amrex::Real(299792458.0);
 SpaceCharge::SpaceCharge (
     const amrex::Geometry&            geom,
     const amrex::BoxArray&            cell_ba,
-    const amrex::DistributionMapping& /*dm*/)
+    const amrex::DistributionMapping& dm)
     : m_geom(geom)
-    // Force a single box covering the whole domain so deposit + IGF FFT
-    // see one contiguous mesh. Phase 6 will revisit for multi-rank.
-    , m_ba_nodal(amrex::convert(amrex::BoxArray{cell_ba.minimalBox()},
-                                 amrex::IntVect{1, 1, 1}))
-    , m_dm(amrex::DistributionMapping{m_ba_nodal})
+    , m_ba_nodal(amrex::convert(cell_ba, amrex::IntVect{1, 1, 1}))
+    , m_dm(dm)
 {
     constexpr int kNComp = 1;
+    const amrex::IntVect ng_rho(1);  // CIC deposit crosses tile edges
     const amrex::IntVect ng_phi(1);
     const amrex::IntVect ng_E(1);
 
-    // rho needs no ghosts in the IGF solver path (the solver wraps it
-    // up internally). phi and E need a ghost layer for centered diff
-    // and CIC gather across box boundaries.
-    m_rho.define(m_ba_nodal, m_dm, kNComp, 0);
+    // rho needs 1 ghost so CIC deposits that straddle a tile boundary
+    // can be summed back via SumBoundary. phi and E need a ghost layer
+    // for centered diff and CIC gather across box boundaries.
+    m_rho.define(m_ba_nodal, m_dm, kNComp, ng_rho);
     m_phi.define(m_ba_nodal, m_dm, kNComp, ng_phi);
     m_Ex.define (m_ba_nodal, m_dm, kNComp, ng_E);
     m_Ey.define (m_ba_nodal, m_dm, kNComp, ng_E);
@@ -156,14 +154,6 @@ void SpaceCharge::deposit_charge (particles::TimeBunch& bunch)
     const Real inv_dy = Real(1.0) / dx[1];
     const Real inv_dz = Real(1.0) / dx[2];
 
-    // Single-box single-rank: deposit into the FAB on rank 0.
-    if (!ParallelDescriptor::IOProcessor()) { return; }
-
-    auto& rho_fab = m_rho[0];
-    auto rho_arr  = rho_fab.array();
-    Box const& vbox = rho_fab.box();
-    auto const& vlo = vbox.smallEnd();
-
     using PIter = ParIterSoA<RealSoA::nattribs, IntSoA::nattribs>;
     constexpr int lev = 0;
     for (PIter pti(bunch, lev); pti.isValid(); ++pti) {
@@ -175,6 +165,14 @@ void SpaceCharge::deposit_charge (particles::TimeBunch& bunch)
         const auto& qs = soa.GetRealData(RealSoA::q);
         const auto& ws = soa.GetRealData(RealSoA::w);
 
+        // Per-tile rho FAB (includes the 1-cell ghost region so that CIC
+        // deposits straddling a tile boundary can be summed back via
+        // SumBoundary). gbox = valid cells + ghost cells.
+        auto rho_arr = m_rho.array(pti);
+        Box const& gbox = m_rho[pti].box();
+        auto const& glo = gbox.smallEnd();
+        auto const& ghi = gbox.bigEnd();
+
         for (int p = 0; p < np; ++p) {
             const Real fx = (xs[p] - lo[0]) * inv_dx;
             const Real fy = (ys[p] - lo[1]) * inv_dy;
@@ -182,11 +180,11 @@ void SpaceCharge::deposit_charge (particles::TimeBunch& bunch)
             const int  ix = int(std::floor(fx));
             const int  iy = int(std::floor(fy));
             const int  iz = int(std::floor(fz));
-            if (ix     < vlo[0] || ix + 1 > vbox.bigEnd(0) ||
-                iy     < vlo[1] || iy + 1 > vbox.bigEnd(1) ||
-                iz     < vlo[2] || iz + 1 > vbox.bigEnd(2))
+            if (ix     < glo[0] || ix + 1 > ghi[0] ||
+                iy     < glo[1] || iy + 1 > ghi[1] ||
+                iz     < glo[2] || iz + 1 > ghi[2])
             {
-                continue;  // off-grid particle: skip
+                continue;  // particle outside this tile (incl. ghosts): skip
             }
             const Real wx1 = fx - Real(ix);   const Real wx0 = Real(1.0) - wx1;
             const Real wy1 = fy - Real(iy);   const Real wy0 = Real(1.0) - wy1;
@@ -203,6 +201,11 @@ void SpaceCharge::deposit_charge (particles::TimeBunch& bunch)
             rho_arr(ix+1, iy+1, iz+1) += qw * wx1 * wy1 * wz1;
         }
     }
+
+    // Sum ghost-cell deposits back to their owning tile (and across
+    // ranks under MPI). Required as soon as the BoxArray has more than
+    // one box / particles can sit near a tile boundary.
+    m_rho.SumBoundary(m_geom.periodicity());
 }
 
 

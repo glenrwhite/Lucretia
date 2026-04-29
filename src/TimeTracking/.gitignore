@@ -1,5 +1,7 @@
-# Built lucretia-tt binary (built locally; gets staged here by build_tt.m).
+# Built lucretia-tt binaries (built locally; staged here by build_tt.m).
+# Variants: lucretia-tt (cpu), lucretia-tt_mpi, lucretia-tt_gpu, lucretia-tt_gpu_mpi.
 lucretia-tt
+lucretia-tt_*
 
 # openPMD diagnostic output written by lucretia-tt runs.
 diags*/

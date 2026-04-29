@@ -50,10 +50,18 @@ end
 
 % Resolve paths.  This file lives at src/TimeTracking/build_tt.m; lucretia-tt
 % source is at external/lucretia-tt/ (two levels up + over).
+% MPI builds live in build_mpi/ to keep the non-MPI binary alongside.
 thisDir   = fileparts(mfilename('fullpath')) ;
 projRoot  = fileparts(fileparts(thisDir)) ;                        % Lucretia/
 ttRoot    = fullfile(projRoot, 'external', 'lucretia-tt') ;
-buildDir  = fullfile(ttRoot, 'build') ;
+isMPI     = endsWith(target, '-mpi') ;
+if isMPI
+  buildDir = fullfile(ttRoot, 'build_mpi') ;
+  binName  = 'lucretia-tt_mpi' ;
+else
+  buildDir = fullfile(ttRoot, 'build') ;
+  binName  = 'lucretia-tt' ;
+end
 
 if ~exist(ttRoot, 'dir')
   error('build_tt:missing', 'lucretia-tt source not found at %s', ttRoot) ;
@@ -82,6 +90,22 @@ if ismac
     error('build_tt:noLibomp', ...
       ['libomp not found in /opt/homebrew/opt/libomp or /usr/local/opt/libomp.\n' ...
        'Install with:  brew install libomp']) ;
+  end
+end
+
+% macOS + MPI: route compilers through Homebrew's mpicxx wrapper so that
+% MPI is found without hand-tuning include/lib paths.
+if ismac && isMPI
+  if exist('/opt/homebrew/bin/mpicxx', 'file')
+    opts = [opts ' -DCMAKE_C_COMPILER=/opt/homebrew/bin/mpicc' ...
+                 ' -DCMAKE_CXX_COMPILER=/opt/homebrew/bin/mpicxx'] ;
+  elseif exist('/usr/local/bin/mpicxx', 'file')
+    opts = [opts ' -DCMAKE_C_COMPILER=/usr/local/bin/mpicc' ...
+                 ' -DCMAKE_CXX_COMPILER=/usr/local/bin/mpicxx'] ;
+  else
+    error('build_tt:noMPIWrappers', ...
+      ['MPI compiler wrappers (mpicxx) not found in /opt/homebrew/bin or /usr/local/bin.\n' ...
+       'Install with:  brew install open-mpi']) ;
   end
 end
 
@@ -117,8 +141,10 @@ if stat ~= 0
 end
 
 % Stage binary into src/TimeTracking/ for which()-based discovery from MATLAB.
+% Non-MPI build -> lucretia-tt;  MPI build -> lucretia-tt_mpi (so the two
+% can coexist and TimeTrack can pick by mpi_nranks).
 binSrc = fullfile(buildDir, 'bin', 'lucretia-tt') ;
-binDst = fullfile(thisDir, 'lucretia-tt') ;
+binDst = fullfile(thisDir, binName) ;
 if exist(binSrc, 'file')
   copyfile(binSrc, binDst) ;
   fileattrib(binDst, '+x') ;

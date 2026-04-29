@@ -53,6 +53,16 @@ macro(find_ablastr)
             "Download & build openPMD-api" FORCE)
     endif()
 
+    # Force openPMD-api to use the SERIAL HDF5 backend even when our app
+    # is built with MPI. Reasoning: BeamIO writes only on rank 0 (after
+    # an MPI gather), so we never need parallel HDF5. Setting this OFF
+    # avoids requiring a separate hdf5-mpi install (Homebrew ships only
+    # serial hdf5 by default; brew install hdf5-mpi is a 100MB+ extra).
+    # On Linux + parallel HDF5 the user can override with
+    # -DopenPMD_USE_MPI=ON.
+    set(openPMD_USE_MPI OFF CACHE BOOL
+        "Build openPMD-api with serial HDF5 backend (rank-0 dumps only)" FORCE)
+
     # Transitive control: ABLASTR / WarpX (we only build the ABLASTR sublib).
     if(LucretiaTT_ablastr_internal OR LucretiaTT_ablastr_src)
         set(CMAKE_POLICY_DEFAULT_CMP0077 NEW)
@@ -93,6 +103,9 @@ macro(find_ablastr)
                 GIT_REPOSITORY ${LucretiaTT_ablastr_repo}
                 GIT_TAG        ${LucretiaTT_ablastr_branch}
                 BUILD_IN_SOURCE 0
+                PATCH_COMMAND  ${CMAKE_COMMAND} -P
+                               ${LucretiaTT_SOURCE_DIR}/cmake/patches/disable_openpmd_mpi.cmake
+                UPDATE_DISCONNECTED 1
             )
             FetchContent_MakeAvailable(fetchedablastr)
             if(DEFINED AMReX_DIR)

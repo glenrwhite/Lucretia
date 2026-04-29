@@ -36,6 +36,9 @@ properties
     binary     = ''                                              % '' -> which('lucretia-tt')
     enable_space_charge = false                                  % toggles ParmParse space_charge.enabled
     sc_comoving         = false                                  % SC mesh follows the bunch in z
+    mpi_nranks          = 1                                      % >1 -> mpirun -np N (requires MPI-enabled binary)
+    mpi_binary          = ''                                     % '' -> autodetect lucretia-tt_mpi next to lucretia-tt
+    mpirun_bin          = ''                                     % '' -> /opt/homebrew/bin/mpirun, /usr/local/bin/mpirun, or PATH
 
     last_input_file = ''
     last_log        = ''
@@ -50,9 +53,35 @@ methods
 
     function run(obj)
     % Resolve binary, write input file, invoke lucretia-tt.
+    %
+    % When mpi_nranks > 1 the run will prefer obj.mpi_binary, then fall
+    % back to lucretia-tt_mpi next to lucretia-tt, then to obj.binary
+    % (which must itself be an MPI-capable build for mpirun to work).
+        ttDir   = fileparts(fileparts(mfilename('fullpath')));
+        nranks  = 1;
+        if isprop(obj, 'mpi_nranks') && ~isempty(obj.mpi_nranks)
+            nranks = max(1, round(double(obj.mpi_nranks)));
+        end
+
+        if nranks > 1
+            cand_mpi = obj.mpi_binary;
+            if isempty(cand_mpi)
+                cand_mpi = fullfile(ttDir, 'lucretia-tt_mpi');
+            end
+            if exist(cand_mpi, 'file') == 2
+                obj.binary = cand_mpi;
+            elseif ~isempty(obj.binary) && exist(obj.binary, 'file') == 2
+                % use whatever the user supplied, hope it's MPI-capable
+            else
+                error('TimeTrack:noMpiBinary', ...
+                    ['mpi_nranks=%d but no MPI binary found at %s. ' ...
+                     'Build with `build_tt cpu-mpi` or set tt.mpi_binary.'], ...
+                     nranks, cand_mpi);
+            end
+        end
+
         if isempty(obj.binary)
             % Look next to TimeTrack.m: src/TimeTracking/lucretia-tt
-            ttDir   = fileparts(fileparts(mfilename('fullpath')));
             cand    = fullfile(ttDir, 'lucretia-tt');
             if exist(cand, 'file') == 2
                 obj.binary = cand;

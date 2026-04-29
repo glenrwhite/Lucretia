@@ -26,16 +26,17 @@ namespace spacecharge {
  *    5. FillBoundary on Ex, Ey, Ez so particles near box edges can gather
  *       across periodic / mirrored neighbours (single-rank: no-op).
  *
- *  Use:
+ *  Use (per-tile, MFIter-driven):
  *    SpaceCharge sc(geom, cell_ba, dm);   // construct once
  *    sc.solve(bunch);                     // call per timestep
- *    auto Ex = sc.ExArr();                // hand to particle-loop kernel
- *    ...
- *    auto E = ablastr::particles::doGatherVectorFieldNodal(
- *        x, y, z, Ex, Ey, Ez, sc.dxi(), sc.lo());
+ *    for (PIter pti(bunch, 0); pti.isValid(); ++pti) {
+ *        auto Ex = sc.Ex_array(pti);
+ *        ...
+ *        auto E = ablastr::particles::doGatherVectorFieldNodal(
+ *            x, y, z, Ex, Ey, Ez, sc.dxi(), sc.lo());
+ *    }
  *
- *  Phase 4A simplifications:
- *    - Single rank, single box (no per-tile MFIter on E gather).
+ *  Phase 6 (multi-box) simplifications still in force:
  *    - SC-induced B field neglected (O(beta^2) correction; transverse SC
  *      is reduced by 1/gamma^2 as captured implicitly through the boost
  *      stretch and the v x B term vanishes for stationary particles).
@@ -69,14 +70,24 @@ public:
     /** Number of times the mesh has been recentered since construction. */
     int n_recenters () const noexcept { return m_n_recenters; }
 
-    // ---- Access for the particle-loop kernel ----
+    // ---- Access for the particle-loop kernel (per-tile, MFIter-driven) ----
 
-    amrex::Array4<const amrex::Real> ExArr () const { return m_Ex[0].const_array(); }
-    amrex::Array4<const amrex::Real> EyArr () const { return m_Ey[0].const_array(); }
-    amrex::Array4<const amrex::Real> EzArr () const { return m_Ez[0].const_array(); }
+    template <typename PIter>
+    amrex::Array4<const amrex::Real> Ex_array (const PIter& pti) const
+    { return m_Ex.const_array(pti); }
+    template <typename PIter>
+    amrex::Array4<const amrex::Real> Ey_array (const PIter& pti) const
+    { return m_Ey.const_array(pti); }
+    template <typename PIter>
+    amrex::Array4<const amrex::Real> Ez_array (const PIter& pti) const
+    { return m_Ez.const_array(pti); }
 
-    /** Valid index range of the SC field arrays (single nodal box). */
-    amrex::Box mesh_box () const { return m_Ex[0].box(); }
+    /** Valid index range of the SC field arrays for the tile owned by pti.
+     *  Includes ghost cells so CIC gather handles particles right at the
+     *  box edge. */
+    template <typename PIter>
+    amrex::Box mesh_box (const PIter& pti) const
+    { return m_Ex[pti].box(); }
 
     amrex::GpuArray<amrex::Real, 3> dxi () const
     {
