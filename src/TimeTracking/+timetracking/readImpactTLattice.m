@@ -107,7 +107,12 @@ if numel(h9) >= 6, Tini = h9(6); end
 % empirically by phase_scan.m (peak exit gamma matches phase_imp =
 % 304.668 deg to within ~1 deg, the scan resolution).
 
-total_charge = abs(Bcurr) * t_em;   % C (current in A * emission time in s)
+% Total bunch charge per ImpactT convention: Q = Bcurr / Bfreq (where
+% Bfreq is the bunch repetition / scaling frequency, typically the RF
+% frequency). For LCLS (Bcurr = 2.91 A, Bfreq = 2.856 GHz) this gives
+% Q = 1.02 nC. The earlier "Bcurr * Temission" formula (~100 pC) was
+% wrong -- it interpreted Bcurr as the average emission-current.
+total_charge = abs(Bcurr) / max(Bfreq, eps);   % C
 pulse_shape  = 'flat_top';          % flagdist 16 = uniform-in-t
 if flagdist ~= 16
     pulse_shape = 'gaussian';       % fallback
