@@ -1,0 +1,33 @@
+# Cyclotron benchmark: single electron in uniform Bz.
+#
+# Analytic (with proper velocity ux = 1e7 m/s, Bz = 1e-3 T):
+#   gamma  = sqrt(1 + (ux/c)^2)        ~ 1.000556
+#   v      = ux/gamma                  ~ 9.99e6 m/s
+#   r_L    = gamma*m*v/(|q|*B)         ~ 5.685e-5 m  (56.85 um)
+#   T_c    = 2*pi*gamma*m/(|q|*B)      ~ 3.5736e-8 s (35.7 ns)
+#
+# We integrate 2 cyclotron periods at 200 steps/period (400 total steps).
+# Orbit center: (0, +r_L, 0). Particle returns to origin every T_c.
+
+geom.lo    = -2.0e-4 -2.0e-4 -1.0e-4
+geom.hi    =  2.0e-4  2.0e-4  1.0e-4
+geom.ncell = 32 32 16
+
+beam.n_particles = 1
+beam.x  = 0.0
+beam.y  = 0.0
+beam.z  = 0.0
+beam.ux = 1.0e7
+beam.uy = 0.0
+beam.uz = 0.0
+
+lattice.elements = uB1 mon1
+lattice.uB1.type = uniform_b
+lattice.uB1.Bz   = 1.0e-3
+lattice.mon1.type       = beam_monitor
+lattice.mon1.dump_every = 4
+
+tracking.dt      = 1.7868e-10
+tracking.n_steps = 400
+
+out_dir = diags_cyclotron

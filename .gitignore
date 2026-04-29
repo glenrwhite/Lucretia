@@ -2,3 +2,8 @@
 *.csv
 *.o
 
+# MATLAB autosave files
+*.asv
+
+# build.m option-stamp (regenerated on every build)
+src/mexsrc/.build_options

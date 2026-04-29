@@ -1,0 +1,18 @@
+build/
+build-*/
+_deps/
+.cache/
+*.o
+*.obj
+*.so
+*.dylib
+*.dll
+*.a
+*.exe
+compile_commands.json
+.vscode/
+.idea/
+CMakeUserPresets.json
+
+# openPMD diagnostic output written by lucretia-tt runs.
+diags*/

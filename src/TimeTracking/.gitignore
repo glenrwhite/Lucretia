@@ -1,0 +1,8 @@
+# Built lucretia-tt binary (built locally; gets staged here by build_tt.m).
+lucretia-tt
+
+# openPMD diagnostic output written by lucretia-tt runs.
+diags*/
+
+# MATLAB autosave files.
+*.asv

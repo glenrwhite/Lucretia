@@ -47,6 +47,31 @@ function build(varargin)
 
 % verbose : echo all build command output
 % =======
+%
+% lucretia-tt (time-based 3D PIC tracker, separate C++ executable):
+%   build tt              -- defaults to 'cpu' target
+%   build tt cpu          -- single-node CPU OpenMP, no MPI (macOS-friendly)
+%   build tt cpu-mpi      -- CPU OpenMP + MPI
+%   build tt gpu          -- CUDA single-GPU (Linux only)
+%   build tt gpu-mpi      -- CUDA + MPI multi-GPU (Linux only)
+%   build tt cpu clean    -- rm -rf build/ first
+%   build tt cpu nofft noopmd  -- skip FFT + openPMD deps (early bring-up)
+% See src/TimeTracking/build_tt.m for the full option list.
+
+% Delegate the 'tt' subcommand to the lucretia-tt build wrapper.  This must
+% run before the MEX-target parsing below so that 'build tt clean' does not
+% wipe the MEX *.o files unrelated to lucretia-tt.
+if nargin > 0 && strcmpi(varargin{1}, 'tt')
+  thisDir = fileparts(mfilename('fullpath')) ;
+  ttDir   = fullfile(thisDir, '..', 'TimeTracking') ;
+  if ~exist(fullfile(ttDir, 'build_tt.m'), 'file')
+    error('build:tt:missing', ...
+          'lucretia-tt MATLAB driver not found at %s/build_tt.m', ttDir) ;
+  end
+  addpath(ttDir) ;
+  build_tt(varargin{2:end}) ;
+  return ;
+end
 
 % If cleaning, deal with that now
 if nargin>0
@@ -58,6 +83,7 @@ if nargin>0
       else
         delete('*.o');
       end
+      if exist('.build_options','file'), delete('.build_options'); end
     end
     if strcmp(varargin{iarg},'cleanall')
       delete(sprintf('*.%s',mexext));
@@ -68,6 +94,7 @@ if nargin>0
         delete('*.o');
         delete('g4track/*.a');
       end
+      if exist('.build_options','file'), delete('.build_options'); end
     end
   end
 end
@@ -89,6 +116,38 @@ if nargin>0
       case 'fast'
         useFast=true;
     end
+  end
+end
+
+% Detect a change of build options since the previous build.  Stale .o
+% files from a prior run carry the compile-time defines and (for OMP
+% builds) references to OpenMP runtime symbols that the current link
+% line knows nothing about.  Mismatch -> the link of the mex
+% executables fails with undefined ___kmpc_* / _omp_get_thread_num
+% symbols.  When the stored signature differs, wipe the prior .o /
+% mex outputs so the build loop rebuilds everything under the new
+% option set.  The signature is rewritten at the end of a successful
+% build (see below).
+optStampFile = '.build_options' ;
+if ~strcmp(target,'none')
+  curSig = buildSignature(target, useOMP, useFast, randFunc) ;
+  prevSig = '' ;
+  if exist(optStampFile,'file')
+    fid = fopen(optStampFile,'r') ;
+    prevSig = strtrim(fread(fid,inf,'*char')') ;
+    fclose(fid) ;
+  end
+  if ~isempty(prevSig) && ~strcmp(prevSig, curSig)
+    fprintf(['Build options changed since the previous build:\n' ...
+             '  was: %s\n  now: %s\n' ...
+             'Removing stale object/mex files to force a clean rebuild.\n\n'], ...
+            prevSig, curSig) ;
+    if ispc
+      delete('*.obj') ;
+    else
+      delete('*.o') ;
+    end
+    delete(sprintf('*.%s', mexext)) ;
   end
 end
 
@@ -299,6 +358,13 @@ if ~strcmp(target,'none')
   if ~anybuild
     disp('Build up to date, nothing done.')
   end
+  % Record the option set used for this build.  Done unconditionally
+  % (even when nothing was rebuilt) so the stamp matches the option
+  % set that produced the .o files now on disk -- e.g. after a manual
+  % `delete *.build_options` the next successful run re-establishes it.
+  fid = fopen(optStampFile,'w') ;
+  fprintf(fid, '%s', buildSignature(target, useOMP, useFast, randFunc)) ;
+  fclose(fid) ;
 end
 
 % Install files
@@ -327,6 +393,13 @@ end
 if useOMP && ~strcmp(target,'none')
   printOmpHints() ;
 end
+
+% =========================================================================
+% Signature of the active option set, written to .build_options after a
+% successful build and compared on entry to detect option-set changes.
+function sig = buildSignature(target, useOMP, useFast, randFunc)
+sig = sprintf('target=%s|omp=%d|fast=%d|rand=%s', ...
+              target, useOMP, useFast, randFunc) ;
 
 % =========================================================================
 % perform build
@@ -496,7 +569,6 @@ fprintf('  SeedLucretiaRng(42)  %% optional, for reproducible SR\n') ;
 fprintf('  tic; I.track(1,1); toc\n') ;
 fprintf('  %% Sweep OMP_NUM_THREADS = [1 4 8 N] to find the optimum.\n') ;
 fprintf('==========================================================\n\n') ;
-end
 
 
 % =========================================================================
@@ -506,6 +578,5 @@ n = 0 ;
 tok = regexp(txt, [pattern '\s*:\s*([0-9]+)'], 'tokens', 'once') ;
 if ~isempty(tok)
   n = str2double(tok{1}) ;
-end
 end
 
