@@ -90,6 +90,9 @@ end
 if isprop(obj, 'dt_after') && ~isempty(obj.dt_after)
     fprintf(f, 'tracking.dt_after    = %.10g\n', obj.dt_after);
 end
+if isprop(obj, 't_start') && ~isempty(obj.t_start)
+    fprintf(f, 'tracking.t_start     = %.10g\n', obj.t_start);
+end
 
 if obj.enable_space_charge
     fprintf(f, '\n# ---- Space charge ----\n');

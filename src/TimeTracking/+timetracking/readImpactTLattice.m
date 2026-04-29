@@ -78,7 +78,21 @@ end
 
 h2 = header_vals{2};   dt0 = h2(1);  n_steps0 = round(h2(2));
 h4 = header_vals{4};   ncellH = h4(1:3)';  xrad = h4(5);  yrad = h4(6);
-h5 = header_vals{5};   t_em = h5(5);  flagdist = h5(1);
+h5 = header_vals{5};   t_em_full = h5(5);  flagdist = h5(1);  Nemission = round(h5(4));
+
+% ImpactT semantics: Temission (h5(5)) is the upper bound on the
+% emission window; the actual emission rate has Nemission particles
+% per ImpactT timestep at the initial dt = h2(1). Effective window is
+% min(Temission, Nemission * dt_initial). Verified empirically (Phase
+% 4D-followup): the narrow Nemission*dt_initial window gives a peak
+% gamma matching the IT plateau to 2% on the LCLS gun, while the wider
+% Temission window underestimates by ~25%.
+t_em_narrow = Nemission * h2(1);
+if t_em_narrow > 0 && t_em_narrow < t_em_full
+    t_em = t_em_narrow;
+else
+    t_em = t_em_full;
+end
 h6 = header_vals{6};   sigx = h6(1);
 h7 = header_vals{7};   sigy = h7(1);
 h8 = header_vals{8};   sigz = h8(1);  %#ok<NASGU>
@@ -173,13 +187,18 @@ else
     end
 end
 
-% Insert CathodeSource at the FRONT of the lattice
+% Insert CathodeSource at the FRONT of the lattice. Emission window
+% starts at Tini in lab time so that the wall-clock instant at which
+% each particle is emitted matches ImpactT, and the bunch sees the same
+% RF phase history during transit. tracking.t_start (set below) makes
+% the simulation actually begin at Tini so that t = pulse_t0 is the
+% first emission step.
 cathode = timetracking.CathodeSource('name', 'cat', ...
     'z_cathode', cathode_z, 'image_charge', true, ...
     'n_macroparticles_total', opts.n_macros, ...
     'total_charge', total_charge, ...
     'pulse_shape', pulse_shape, ...
-    'pulse_duration', t_em, 'pulse_t0', 0.0, ...
+    'pulse_duration', t_em, 'pulse_t0', Tini, ...
     'transverse_profile', 'gaussian', ...
     'spot_size', max(sigx, sigy), 'mte', opts.mte_eV);
 
@@ -202,6 +221,7 @@ geom.ncell = ncellH;       % from ImpactT header (Nx Ny Nz)
 % --- Tracking suggestion ---
 tracking.dt      = max(dt0, 0.5e-12);   % bump up if ImpactT used very small dt
 tracking.n_steps = max(1000, round(n_steps0 / 100));   % scale down
+tracking.t_start = Tini;     % match ImpactT's wall-clock start
 
 % --- Info / warnings ---
 info.warnings    = warnings;

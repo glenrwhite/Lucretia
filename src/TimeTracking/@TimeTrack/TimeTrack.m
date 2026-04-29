@@ -27,6 +27,7 @@ properties
     n_steps      = 100
     dt_change_t  = []                                            % s, time at which to switch dt (empty = no switch)
     dt_after     = []                                            % s, dt to use after dt_change_t (empty = same as dt)
+    t_start      = []                                            % s, initial sim time (empty = 0)
     geom_lo    = [-0.05, -0.05,  0.0]                            % m
     geom_hi    = [ 0.05,  0.05,  1.0]                            % m
     geom_ncell = [32, 32, 32]
