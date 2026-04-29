@@ -24,6 +24,7 @@
 #include <hdf5.h>
 
 #include <algorithm>
+#include <limits>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -479,24 +480,41 @@ int main (int argc, char* argv[])
             }
         }
 
-        // ---- Time-stepping ----
-        amrex::Real dt      = 1.0e-12;
-        int         n_steps = 100;
+        // ---- Time-stepping (with optional change-of-dt schedule) ----
+        // tracking.dt           : initial dt (s)
+        // tracking.n_steps      : total number of steps to take
+        // tracking.dt_change_t  : if set, switch dt at this simulation time
+        // tracking.dt_after     : dt to use after dt_change_t (default = dt)
+        amrex::Real dt           = 1.0e-12;
+        int         n_steps      = 100;
+        amrex::Real dt_change_t  = std::numeric_limits<amrex::Real>::infinity();
+        amrex::Real dt_after     = -1.0;
         {
             amrex::ParmParse pp_track("tracking");
             pp_track.query("dt", dt);
             pp_track.query("n_steps", n_steps);
+            pp_track.query("dt_change_t", dt_change_t);
+            pp_track.query("dt_after",    dt_after);
         }
+        if (dt_after <= 0.0) { dt_after = dt; }
 
         lucretiatt::tracking::TrackingLoop tracker;
         amrex::Real t = 0.0;
+        bool        switched = false;
 
         // Step 0 = initial state (pre-push).
         maybe_dump(writer.get(), lattice, bunch, 0, t);
 
         for (int s = 1; s <= n_steps; ++s) {
-            tracker.step(bunch, lattice, t, dt, sc.get());
-            t += dt;
+            const amrex::Real cur_dt = (t >= dt_change_t) ? dt_after : dt;
+            if (!switched && t >= dt_change_t) {
+                amrex::Print() << "[tracking] switched dt: "
+                               << dt << " -> " << dt_after
+                               << " s at t = " << t << " s (step " << s << ")\n";
+                switched = true;
+            }
+            tracker.step(bunch, lattice, t, cur_dt, sc.get());
+            t += cur_dt;
             maybe_dump(writer.get(), lattice, bunch, s, t);
         }
 

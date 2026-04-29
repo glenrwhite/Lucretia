@@ -84,6 +84,12 @@ end
 fprintf(f, '\n# ---- Tracking ----\n');
 fprintf(f, 'tracking.dt      = %.10g\n', obj.dt);
 fprintf(f, 'tracking.n_steps = %d\n',    obj.n_steps);
+if isprop(obj, 'dt_change_t') && ~isempty(obj.dt_change_t)
+    fprintf(f, 'tracking.dt_change_t = %.10g\n', obj.dt_change_t);
+end
+if isprop(obj, 'dt_after') && ~isempty(obj.dt_after)
+    fprintf(f, 'tracking.dt_after    = %.10g\n', obj.dt_after);
+end
 
 if obj.enable_space_charge
     fprintf(f, '\n# ---- Space charge ----\n');

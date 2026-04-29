@@ -85,15 +85,13 @@ h8 = header_vals{8};   sigz = h8(1);  %#ok<NASGU>
 h9 = header_vals{9};   Bcurr = h9(1);  Bfreq = h9(5);  Tini = 0;
 if numel(h9) >= 6, Tini = h9(6); end
 
-% ImpactT time reference: simulation starts at t = Tini (header h9(6),
-% typically negative -- e.g. -13 ps for LCLS). Our run starts at t = 0.
-% To make the RF phase that any element sees identical at the matching
-% wall-clock instant, we shift every RF element's phase by omega*Tini:
-%   IT field at T_imp:  cos(omega T_imp + phase_imp)
-%   LT field at LT_t:   cos(omega LT_t  + phase_LT)
-%   With LT_t = T_imp - Tini -> phase_LT = phase_imp + omega*Tini
-phase_shift_rad = 2*pi * Bfreq * Tini;
-phase_shift_deg = phase_shift_rad * 180 / pi;
+% NOTE on time references: ImpactT's "Tini" header (h9(6), typically
+% negative -- e.g. -13.06 ps for LCLS) only sets when the FIRST particle
+% is emitted relative to the simulation t=0; it does NOT shift the RF
+% reference. The field cos(omega t + phase) uses the same t=0 in both
+% codes, so phase_imp passes through to lucretia-tt unchanged. Verified
+% empirically by phase_scan.m (peak exit gamma matches phase_imp =
+% 304.668 deg to within ~1 deg, the scan resolution).
 
 total_charge = abs(Bcurr) * t_em;   % C (current in A * emission time in s)
 pulse_shape  = 'flat_top';          % flagdist 16 = uniform-in-t
@@ -129,12 +127,10 @@ for k = 1:numel(lat_lines)
             scale_B = v(17);
         end
         path = fullfile(impactt_dir, sprintf('rfdata%d', file_id));
-        % Shift phase to compensate for ImpactT's Tini origin.
-        phase_shifted = phase_dg + phase_shift_deg;
         lattice{end+1} = timetracking.ImpactTField('name', nm, ...
             'z', z_edge, 'path', path, ...
             'scale_E', scale_E, 'scale_B', scale_B, ...
-            'f_RF', f_RF, 'phase_deg', phase_shifted);  %#ok<AGROW>
+            'f_RF', f_RF, 'phase_deg', phase_dg);  %#ok<AGROW>
         % Track first gun-like element (RF, scale_E > 0)
         if scale_E > 0 && (isnan(gun_z_edge) || z_edge < gun_z_edge)
             gun_z_edge = z_edge;

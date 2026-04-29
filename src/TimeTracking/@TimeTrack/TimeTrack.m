@@ -23,8 +23,10 @@ properties
     beam       = struct('n_particles', 1, ...
                         'x', 0, 'y', 0, 'z', 0, ...
                         'ux', 0, 'uy', 0, 'uz', 0)
-    dt         = 1e-12                                           % s
-    n_steps    = 100
+    dt           = 1e-12                                         % s, initial dt
+    n_steps      = 100
+    dt_change_t  = []                                            % s, time at which to switch dt (empty = no switch)
+    dt_after     = []                                            % s, dt to use after dt_change_t (empty = same as dt)
     geom_lo    = [-0.05, -0.05,  0.0]                            % m
     geom_hi    = [ 0.05,  0.05,  1.0]                            % m
     geom_ncell = [32, 32, 32]
