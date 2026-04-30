@@ -43,7 +43,8 @@ opts = p.Results;
 
 fprintf('\nbench_scaling: %.0e macros, %d steps, 64^3 SC mesh\n', ...
         opts.macros, opts.n_steps);
-fprintf('NUMA binding via --bind-to socket: %s\n', mat2str(opts.numa_bind));
+fprintf('NUMA binding (--bind-to numa --map-by numa, OMP_PLACES=cores): %s\n', ...
+        mat2str(opts.numa_bind));
 [~, lscpu] = system('lscpu | grep -E "^(Socket|Core|Model name)" 2>/dev/null');
 if ~isempty(lscpu), fprintf('host:\n%s', lscpu); end
 fprintf('\n');
