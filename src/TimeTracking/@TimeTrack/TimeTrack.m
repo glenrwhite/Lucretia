@@ -36,8 +36,9 @@ properties
     binary     = ''                                              % '' -> which('lucretia-tt')
     enable_space_charge = false                                  % toggles ParmParse space_charge.enabled
     sc_comoving         = false                                  % SC mesh follows the bunch in z
+    target              = 'cpu'                                  % 'cpu' | 'gpu'  -- combined with mpi_nranks selects the binary
     mpi_nranks          = 1                                      % >1 -> mpirun -np N (requires MPI-enabled binary)
-    mpi_binary          = ''                                     % '' -> autodetect lucretia-tt_mpi next to lucretia-tt
+    mpi_binary          = ''                                     % deprecated (use target+mpi_nranks); '' -> autodetect
     mpirun_bin          = ''                                     % '' -> /opt/homebrew/bin/mpirun, /usr/local/bin/mpirun, or PATH
 
     last_input_file = ''
@@ -54,44 +55,53 @@ methods
     function run(obj)
     % Resolve binary, write input file, invoke lucretia-tt.
     %
-    % When mpi_nranks > 1 the run will prefer obj.mpi_binary, then fall
-    % back to lucretia-tt_mpi next to lucretia-tt, then to obj.binary
-    % (which must itself be an MPI-capable build for mpirun to work).
+    % Binary selection precedence:
+    %   1. obj.binary (if set) -- explicit override.
+    %   2. obj.mpi_binary (if mpi_nranks>1, deprecated) -- legacy override.
+    %   3. (target, mpi_nranks) -> staged binary name next to TimeTrack.m:
+    %        cpu  + 1  -> lucretia-tt
+    %        cpu  + N  -> lucretia-tt_mpi
+    %        gpu  + 1  -> lucretia-tt_gpu
+    %        gpu  + N  -> lucretia-tt_gpu_mpi
+    %   4. which('lucretia-tt') -- last-ditch path search (cpu+1 only).
         ttDir   = fileparts(fileparts(mfilename('fullpath')));
         nranks  = 1;
         if isprop(obj, 'mpi_nranks') && ~isempty(obj.mpi_nranks)
             nranks = max(1, round(double(obj.mpi_nranks)));
         end
-
-        if nranks > 1
-            cand_mpi = obj.mpi_binary;
-            if isempty(cand_mpi)
-                cand_mpi = fullfile(ttDir, 'lucretia-tt_mpi');
-            end
-            if exist(cand_mpi, 'file') == 2
-                obj.binary = cand_mpi;
-            elseif ~isempty(obj.binary) && exist(obj.binary, 'file') == 2
-                % use whatever the user supplied, hope it's MPI-capable
-            else
-                error('TimeTrack:noMpiBinary', ...
-                    ['mpi_nranks=%d but no MPI binary found at %s. ' ...
-                     'Build with `build_tt cpu-mpi` or set tt.mpi_binary.'], ...
-                     nranks, cand_mpi);
-            end
+        target = 'cpu';
+        if isprop(obj, 'target') && ~isempty(obj.target)
+            target = lower(strtrim(obj.target));
+        end
+        if ~ismember(target, {'cpu', 'gpu'})
+            error('TimeTrack:badTarget', ...
+                  'tt.target must be ''cpu'' or ''gpu'' (got ''%s'')', target);
         end
 
         if isempty(obj.binary)
-            % Look next to TimeTrack.m: src/TimeTracking/lucretia-tt
-            cand    = fullfile(ttDir, 'lucretia-tt');
-            if exist(cand, 'file') == 2
-                obj.binary = cand;
+            % (2) legacy mpi_binary override (only applies when mpi_nranks>1)
+            if nranks > 1 && isprop(obj, 'mpi_binary') && ~isempty(obj.mpi_binary) ...
+               && exist(obj.mpi_binary, 'file') == 2
+                obj.binary = obj.mpi_binary;
             else
-                obj.binary = which('lucretia-tt');
-            end
-            if isempty(obj.binary) || exist(obj.binary, 'file') ~= 2
-                error('TimeTrack:noBinary', ...
-                    ['lucretia-tt binary not found at %s nor on path. ' ...
-                     'Build with `build_tt cpu` or set tt.binary.'], cand);
+                % (3) systematic name based on (target, nranks)
+                binName = pick_binary_name(target, nranks);
+                cand = fullfile(ttDir, binName);
+                if exist(cand, 'file') == 2
+                    obj.binary = cand;
+                elseif strcmp(binName, 'lucretia-tt')
+                    % (4) last-ditch: PATH search for the cpu+1 binary
+                    obj.binary = which('lucretia-tt');
+                end
+                if isempty(obj.binary) || exist(obj.binary, 'file') ~= 2
+                    build_arg = pick_build_arg(target, nranks);
+                    error('TimeTrack:noBinary', ...
+                        ['Binary not found: %s\n' ...
+                         '  expected at: %s\n' ...
+                         '  build with:  build_tt %s\n' ...
+                         '  or set tt.binary explicitly.'], ...
+                         binName, cand, build_arg);
+                end
             end
         end
         if isempty(obj.work_dir)

@@ -59,17 +59,25 @@ end
 
 % Resolve paths.  This file lives at src/TimeTracking/build_tt.m; lucretia-tt
 % source is at external/lucretia-tt/ (two levels up + over).
-% MPI builds live in build_mpi/ to keep the non-MPI binary alongside.
+% Per-target build dirs and binary names so cpu and gpu builds can coexist:
+%   cpu      -> build/         lucretia-tt
+%   cpu-mpi  -> build_mpi/     lucretia-tt_mpi
+%   gpu      -> build_gpu/     lucretia-tt_gpu
+%   gpu-mpi  -> build_gpu_mpi/ lucretia-tt_gpu_mpi
 thisDir   = fileparts(mfilename('fullpath')) ;
 projRoot  = fileparts(fileparts(thisDir)) ;                        % Lucretia/
 ttRoot    = fullfile(projRoot, 'external', 'lucretia-tt') ;
 isMPI     = endsWith(target, '-mpi') ;
-if isMPI
-  buildDir = fullfile(ttRoot, 'build_mpi') ;
-  binName  = 'lucretia-tt_mpi' ;
-else
+isGPU     = startsWith(target, 'gpu') ;
+suffix    = '' ;
+if isGPU, suffix = [suffix '_gpu'] ; end
+if isMPI, suffix = [suffix '_mpi'] ; end
+if isempty(suffix)
   buildDir = fullfile(ttRoot, 'build') ;
   binName  = 'lucretia-tt' ;
+else
+  buildDir = fullfile(ttRoot, ['build' suffix]) ;
+  binName  = ['lucretia-tt' suffix] ;
 end
 
 if ~exist(ttRoot, 'dir')

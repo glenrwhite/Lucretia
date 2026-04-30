@@ -179,16 +179,16 @@ spack env activate luctt
             <td><code>build_tt gpu</code></td>
             <td>CUDA</td>
             <td>off</td>
-            <td><code>build/</code></td>
-            <td><code>lucretia-tt</code></td>
+            <td><code>build_gpu/</code></td>
+            <td><code>lucretia-tt_gpu</code></td>
             <td>Linux</td>
         </tr>
         <tr>
             <td><code>build_tt gpu-mpi</code></td>
             <td>CUDA</td>
             <td>on</td>
-            <td><code>build_mpi/</code></td>
-            <td><code>lucretia-tt_mpi</code></td>
+            <td><code>build_gpu_mpi/</code></td>
+            <td><code>lucretia-tt_gpu_mpi</code></td>
             <td>Linux</td>
         </tr>
     </tbody>
@@ -275,7 +275,8 @@ bunches = tt.readDumps();   % cell array of per-step structs
         <tr><td><code>geom_lo</code> / <code>geom_hi</code> / <code>geom_ncell</code></td><td>10&nbsp;cm box, 32&sup3;</td><td>SC mesh extent and resolution</td></tr>
         <tr><td><code>enable_space_charge</code></td><td><code>false</code></td><td>Turn on the IGF Poisson solver</td></tr>
         <tr><td><code>sc_comoving</code></td><td><code>false</code></td><td>Mesh follows the bunch in z (recenters when the centroid drifts past the central 50% of the box)</td></tr>
-        <tr><td><code>mpi_nranks</code></td><td><code>1</code></td><td>&gt;1 invokes <code>mpirun -np N</code>; auto-selects the <code>lucretia-tt_mpi</code> binary</td></tr>
+        <tr><td><code>target</code></td><td><code>'cpu'</code></td><td><code>'cpu'</code> or <code>'gpu'</code> &mdash; combined with <code>mpi_nranks</code>, picks the staged binary (<code>lucretia-tt</code> / <code>_mpi</code> / <code>_gpu</code> / <code>_gpu_mpi</code>)</td></tr>
+        <tr><td><code>mpi_nranks</code></td><td><code>1</code></td><td>&gt;1 invokes <code>mpirun -np N</code> and selects the <code>_mpi</code> variant of the binary chosen by <code>target</code></td></tr>
         <tr><td><code>work_dir</code></td><td><code>''</code> &rarr; tempname</td><td>Where the input file and openPMD dumps live</td></tr>
         <tr><td><code>output_dir</code></td><td><code>'diags'</code></td><td>openPMD output dir, relative to <code>work_dir</code></td></tr>
     </tbody>
@@ -310,7 +311,8 @@ tt.run();
 <pre><code>% After build_tt gpu-mpi on the Linux box
 tt = TimeTrack();
 % ... lattice / beam / geometry ...
-tt.mpi_nranks = 8;          % one rank per A100
+tt.target     = 'gpu';      % picks the lucretia-tt_gpu* binary
+tt.mpi_nranks = 8;          % one rank per A100 -> lucretia-tt_gpu_mpi
 tt.run();
 </code></pre>
 
