@@ -32,8 +32,12 @@ else
               ['mpi_nranks=%d but no mpirun found. Install Open MPI ' ...
                '(brew install open-mpi) or set obj.mpirun_bin.'], nranks);
     end
-    cmd = sprintf('cd "%s" && %s"%s" -np %d "%s" "%s" 2>&1', ...
-                  obj.work_dir, envP, mpirun, nranks, obj.binary, in_file);
+    extra = '';
+    if isprop(obj, 'mpirun_extra_args') && ~isempty(obj.mpirun_extra_args)
+        extra = [obj.mpirun_extra_args ' '];
+    end
+    cmd = sprintf('cd "%s" && %s"%s" %s-np %d "%s" "%s" 2>&1', ...
+                  obj.work_dir, envP, mpirun, extra, nranks, obj.binary, in_file);
 end
 [status, log] = system(cmd);
 end

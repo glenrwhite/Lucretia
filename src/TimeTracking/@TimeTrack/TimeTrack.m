@@ -40,6 +40,7 @@ properties
     mpi_nranks          = 1                                      % >1 -> mpirun -np N (requires MPI-enabled binary)
     mpi_binary          = ''                                     % deprecated (use target+mpi_nranks); '' -> autodetect
     mpirun_bin          = ''                                     % '' -> /opt/homebrew/bin/mpirun, /usr/local/bin/mpirun, or PATH
+    mpirun_extra_args   = ''                                     % e.g. '--bind-to socket --map-by socket' for NUMA-aware placement
 
     last_input_file = ''
     last_log        = ''
