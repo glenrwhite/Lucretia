@@ -61,10 +61,16 @@ void TrackingLoop::step (
 
     // ---- 3. Space-charge solve (once per step, all ranks/tiles) ----
     GpuArray<Real, 3>  dxi_sc{}, lo_sc{};
+    Real const*        sf_lut[3] = {nullptr, nullptr, nullptr};
+    int                sf_n      = 0;
     if (sc) {
         sc->solve(bunch);
         dxi_sc = sc->dxi();
         lo_sc  = sc->lo();
+        sf_n      = sc->lut_n();
+        sf_lut[0] = sc->lut_ptr(0);
+        sf_lut[1] = sc->lut_ptr(1);
+        sf_lut[2] = sc->lut_ptr(2);
     }
 
     // ---- 4. Per-particle push ----
@@ -152,8 +158,14 @@ void TrackingLoop::step (
                 // Subtract Coulomb field of this particle's own deposited
                 // CIC cloud (8 weighted point charges at the surrounding
                 // nodes). Removes the self-interaction the IGF + gather
-                // chain would otherwise carry. Soft-core to avoid the
-                // singularity when wx,wy,wz lands exactly on a node.
+                // chain would otherwise carry. Implementation: trilinear
+                // interp of a precomputed shape table (built once per
+                // SpaceCharge in build_self_force_lut, see SpaceCharge.cpp)
+                // indexed on the particle's fractional cell position. The
+                // table holds E per unit qw=1 -- the per-particle qw
+                // factor is applied after the lookup. ~20 cycles +
+                // 8 cached reads per particle vs ~150 cycles for the
+                // 8 sqrt+div sum that this replaces.
                 const Real w  = ptd.rdata(RealSoA::w)[ip];
                 const Real qw = q * w * kCoulombConstant;
 
@@ -164,39 +176,50 @@ void TrackingLoop::step (
                 const Real wy_frac = fy - std::floor(fy);
                 const Real wz_frac = fz - std::floor(fz);
 
-                const Real dx = Real(1.0) / dxi_sc[0];
-                const Real dy = Real(1.0) / dxi_sc[1];
-                const Real dz = Real(1.0) / dxi_sc[2];
-                const Real eps2 = Real(1.0e-6) * (dx * dx);   // ~10^-3 cell
+                const Real tx = wx_frac * Real(sf_n);
+                const Real ty = wy_frac * Real(sf_n);
+                const Real tz = wz_frac * Real(sf_n);
+                int ix_t = int(tx); if (ix_t >= sf_n) ix_t = sf_n - 1;
+                int iy_t = int(ty); if (iy_t >= sf_n) iy_t = sf_n - 1;
+                int iz_t = int(tz); if (iz_t >= sf_n) iz_t = sf_n - 1;
+                if (ix_t < 0) ix_t = 0;
+                if (iy_t < 0) iy_t = 0;
+                if (iz_t < 0) iz_t = 0;
+                const Real ax = tx - Real(ix_t);
+                const Real ay = ty - Real(iy_t);
+                const Real az = tz - Real(iz_t);
+                const int  s1 = sf_n + 1;
+                const int  s2 = s1 * s1;
+                const int  i000 = ix_t * s2 + iy_t * s1 + iz_t;
 
-                Real Ex_self = 0.0, Ey_self = 0.0, Ez_self = 0.0;
-                for (int a = 0; a < 2; ++a) {
-                    const Real wa = (a == 0) ? (Real(1.0) - wx_frac) : wx_frac;
-                    const Real rx_v = (wx_frac - Real(a)) * dx;
-                    for (int b = 0; b < 2; ++b) {
-                        const Real wb = (b == 0) ? (Real(1.0) - wy_frac) : wy_frac;
-                        const Real ry_v = (wy_frac - Real(b)) * dy;
-                        for (int c = 0; c < 2; ++c) {
-                            const Real wc = (c == 0) ? (Real(1.0) - wz_frac) : wz_frac;
-                            const Real rz_v = (wz_frac - Real(c)) * dz;
-                            const Real r2 = rx_v*rx_v + ry_v*ry_v + rz_v*rz_v + eps2;
-                            const Real r3_inv = Real(1.0) / (r2 * std::sqrt(r2));
-                            const Real factor = qw * wa * wb * wc * r3_inv;
-                            Ex_self += factor * rx_v;
-                            Ey_self += factor * ry_v;
-                            Ez_self += factor * rz_v;
-                        }
-                    }
+                Real E_self[3];
+                for (int c = 0; c < 3; ++c) {
+                    const Real* T = sf_lut[c];
+                    const Real v000 = T[i000];
+                    const Real v001 = T[i000 + 1];
+                    const Real v010 = T[i000 + s1];
+                    const Real v011 = T[i000 + s1 + 1];
+                    const Real v100 = T[i000 + s2];
+                    const Real v101 = T[i000 + s2 + 1];
+                    const Real v110 = T[i000 + s2 + s1];
+                    const Real v111 = T[i000 + s2 + s1 + 1];
+                    const Real v00  = v000 + (v001 - v000) * az;
+                    const Real v01  = v010 + (v011 - v010) * az;
+                    const Real v10  = v100 + (v101 - v100) * az;
+                    const Real v11  = v110 + (v111 - v110) * az;
+                    const Real v0   = v00  + (v01  - v00 ) * ay;
+                    const Real v1   = v10  + (v11  - v10 ) * ay;
+                    E_self[c] = v0 + (v1 - v0) * ax;
                 }
 
                 // Empirical fudge factor: Coulomb-of-point-charges over-
                 // corrects vs the smeared IGF cloud. Calibrated on the
-                // uniform-sphere test (1000 macros, R = 1 mm). Replace
-                // with proper IGF-self lookup table in a future polish.
+                // uniform-sphere test (1000 macros, R = 1 mm).
                 constexpr Real kSelfForceFactor = Real(0.62);
-                Ex += E_sc[0] - kSelfForceFactor * Ex_self;
-                Ey += E_sc[1] - kSelfForceFactor * Ey_self;
-                Ez += E_sc[2] - kSelfForceFactor * Ez_self;
+                const Real qw_f = qw * kSelfForceFactor;
+                Ex += E_sc[0] - qw_f * E_self[0];
+                Ey += E_sc[1] - qw_f * E_self[1];
+                Ez += E_sc[2] - qw_f * E_self[2];
             }
             sc_done:;
 

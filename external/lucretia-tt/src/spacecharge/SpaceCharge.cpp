@@ -48,6 +48,64 @@ SpaceCharge::SpaceCharge (
     m_Ex.setVal(0.0);
     m_Ey.setVal(0.0);
     m_Ez.setVal(0.0);
+
+    build_self_force_lut();
+}
+
+
+void SpaceCharge::build_self_force_lut ()
+{
+    using namespace amrex;
+
+    auto const* dx_arr = m_geom.CellSize();
+    const Real dx = dx_arr[0];
+    const Real dy = dx_arr[1];
+    const Real dz = dx_arr[2];
+    const Real eps2 = Real(1.0e-6) * (dx * dx);   // matches TrackingLoop softening
+
+    constexpr int N = kSelfForceLutN;
+    const int stride1 = N + 1;
+    const int stride2 = stride1 * stride1;
+    const int total   = stride1 * stride1 * stride1;
+
+    for (int c = 0; c < 3; ++c) {
+        m_self_force_lut[c].assign(total, 0.0);
+    }
+
+    for (int ix = 0; ix <= N; ++ix) {
+        const Real wx_frac = Real(ix) / Real(N);
+        for (int iy = 0; iy <= N; ++iy) {
+            const Real wy_frac = Real(iy) / Real(N);
+            for (int iz = 0; iz <= N; ++iz) {
+                const Real wz_frac = Real(iz) / Real(N);
+
+                Real Ex_unit = 0.0, Ey_unit = 0.0, Ez_unit = 0.0;
+                for (int a = 0; a < 2; ++a) {
+                    const Real wa   = (a == 0) ? (Real(1.0) - wx_frac) : wx_frac;
+                    const Real rx_v = (wx_frac - Real(a)) * dx;
+                    for (int b = 0; b < 2; ++b) {
+                        const Real wb   = (b == 0) ? (Real(1.0) - wy_frac) : wy_frac;
+                        const Real ry_v = (wy_frac - Real(b)) * dy;
+                        for (int cc = 0; cc < 2; ++cc) {
+                            const Real wc   = (cc == 0) ? (Real(1.0) - wz_frac) : wz_frac;
+                            const Real rz_v = (wz_frac - Real(cc)) * dz;
+                            const Real r2 = rx_v*rx_v + ry_v*ry_v + rz_v*rz_v + eps2;
+                            const Real r3_inv = Real(1.0) / (r2 * std::sqrt(r2));
+                            const Real factor = wa * wb * wc * r3_inv;
+                            Ex_unit += factor * rx_v;
+                            Ey_unit += factor * ry_v;
+                            Ez_unit += factor * rz_v;
+                        }
+                    }
+                }
+
+                const int idx = ix * stride2 + iy * stride1 + iz;
+                m_self_force_lut[0][idx] = Ex_unit;
+                m_self_force_lut[1][idx] = Ey_unit;
+                m_self_force_lut[2][idx] = Ez_unit;
+            }
+        }
+    }
 }
 
 

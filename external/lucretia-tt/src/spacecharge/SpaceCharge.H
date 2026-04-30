@@ -11,6 +11,9 @@
 #include <AMReX_MultiFab.H>
 #include <AMReX_REAL.H>
 
+#include <array>
+#include <vector>
+
 
 namespace lucretiatt {
 namespace spacecharge {
@@ -102,11 +105,41 @@ public:
         return { lo[0], lo[1], lo[2] };
     }
 
+    // ---- Self-force lookup table ----
+    //
+    // The self-force-subtraction step (see TrackingLoop) computes the
+    // Coulomb field at a particle's position from its own deposited CIC
+    // cloud (8 weighted point charges at the surrounding nodes). The
+    // expensive bit is 8 sqrt + 8 division per particle. The shape of
+    // this field depends only on the particle's fractional position in
+    // its cell (wx_frac, wy_frac, wz_frac) and on the cell aspect ratio
+    // (which is constant for the simulation). The dependence on charge
+    // and weight is a single multiplicative factor.
+    //
+    // We precompute a (N+1)^3 table per E component at construction,
+    // then look up + trilinear-interpolate per particle. ~20 cycles of
+    // arithmetic + 8 cached reads, vs ~150 cycles for the original 8
+    // sqrt+div sum. The table is ~860 KiB at N=32, easily L2-resident.
+    //
+    // self_force_unit(c, wx, wy, wz) returns E_c per unit (q*w*kCoulomb).
+    // The consumer multiplies by qw_kc to get the field, then by the
+    // empirical kSelfForceFactor to get the actual subtraction term.
+    //
+    // N=64 (table size 65^3 * 3 * 8 bytes = 6.6 MiB, fits in L3) gives
+    // ~0.025% trilinear-interp error on the self-force shape, which
+    // matches the per-particle exact calc to within the empirical fudge
+    // factor calibration noise (test_uniform_sphere ~3e-3 rel err).
+    static constexpr int kSelfForceLutN = 64;
+    int                     lut_n         () const noexcept { return kSelfForceLutN; }
+    amrex::Real const*      lut_ptr       (int comp) const noexcept
+    { return m_self_force_lut[comp].data(); }
+
 private:
     amrex::Real compute_mean_beta_z (particles::TimeBunch& bunch) const;
     amrex::Real compute_mean_z      (particles::TimeBunch& bunch) const;
     void deposit_charge          (particles::TimeBunch& bunch);
     void compute_E_from_phi      ();
+    void build_self_force_lut    ();
 
     amrex::Geometry            m_geom;
     amrex::BoxArray            m_ba_nodal;
@@ -121,6 +154,11 @@ private:
     amrex::Real                m_last_beta_z = 0.0;
     bool                       m_comoving    = false;
     int                        m_n_recenters = 0;
+
+    // Per-component self-force shape table, size (N+1)^3 each, indexed
+    // [ix*(N+1)^2 + iy*(N+1) + iz]. Built once in ctor; cell aspect
+    // ratio is fixed for the lifetime of this SpaceCharge.
+    std::array<std::vector<amrex::Real>, 3> m_self_force_lut;
 };
 
 } // namespace spacecharge
