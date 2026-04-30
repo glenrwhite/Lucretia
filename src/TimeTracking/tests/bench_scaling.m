@@ -20,10 +20,13 @@ function results = bench_scaling(varargin)
 % 1 nC / 10^7 macros / 100 steps in a 64^3 SC mesh. Run takes ~1-3
 % minutes per config. Total wall time for the default sweep: ~10-15 min.
 %
-% NUMA binding: pass numa_bind=true to add `--bind-to socket --map-by
-% socket` to mpirun. Pins each rank to one socket so OMP threads stay
-% NUMA-local. Strongly recommended on multi-socket boxes; harmless
-% on single-socket.
+% NUMA binding: pass numa_bind=true to add `--bind-to numa --map-by
+% NUMA` to mpirun and set OMP_PLACES=cores / OMP_PROC_BIND=close.
+% Pins each rank to one NUMA node so OMP threads stay NUMA-local;
+% physical cores only, no hyperthreading. Recommended on every multi-
+% NUMA box (including Intel Sub-NUMA-Clustered SKUs where one socket
+% has multiple NUMA nodes -- e.g. c4-standard-192 has 2 sockets but
+% 4 NUMA nodes of 24 cores each).
 %
 % Strong-scaling efficiency = (speedup * baseline_threads) /
 % (current_threads). 100% is perfect linear scaling. Below ~70% on
@@ -49,8 +52,15 @@ seed = build_seed_(opts.macros);
 
 results = struct('nranks', {}, 'omp', {}, 'wall_s', {}, 'pps', {});
 
-old_omp = getenv('OMP_NUM_THREADS');
-restore = onCleanup(@() setenv('OMP_NUM_THREADS', old_omp));
+old_omp    = getenv('OMP_NUM_THREADS');
+old_places = getenv('OMP_PLACES');
+old_bind   = getenv('OMP_PROC_BIND');
+restore    = onCleanup(@() restore_env_(old_omp, old_places, old_bind));
+
+if opts.numa_bind
+    setenv('OMP_PLACES', 'cores');
+    setenv('OMP_PROC_BIND', 'close');
+end
 
 for i = 1:numel(opts.configs)
     cfg = opts.configs{i};
@@ -62,7 +72,7 @@ for i = 1:numel(opts.configs)
     if nranks > 1
         tt.mpi_nranks = nranks;
         if opts.numa_bind
-            tt.mpirun_extra_args = '--bind-to socket --map-by socket';
+            tt.mpirun_extra_args = '--bind-to numa --map-by numa';
         end
     end
     tt.lattice = { ...
@@ -117,6 +127,13 @@ fprintf('  - Efficiency <50%%: bottleneck somewhere; try numa_bind=true\n');
 fprintf('    or fewer ranks. The IGF FFT solve floors scaling at small\n');
 fprintf('    macro counts -- bump --macros 5e7 or higher to expose\n');
 fprintf('    the push-bound regime.\n');
+end
+
+
+function restore_env_(omp, places, bind)
+setenv('OMP_NUM_THREADS', omp);
+setenv('OMP_PLACES',     places);
+setenv('OMP_PROC_BIND',  bind);
 end
 
 
