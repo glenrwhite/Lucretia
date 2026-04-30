@@ -136,6 +136,13 @@ end
 cmakeBin = locateBin('cmake', ...
   {'/opt/homebrew/bin/cmake', '/usr/local/bin/cmake'}) ;
 
+% On Linux, MATLAB ships its own libstdc++/libcurl/libjsoncpp under
+% sys/os/glnxa64 and prepends them to LD_LIBRARY_PATH, breaking system
+% cmake/gcc which need the host's newer libstdc++. Strip MATLAB-rooted
+% entries from LD_LIBRARY_PATH for spawned subprocesses; keep everything
+% else (CUDA paths, custom HDF5, etc.) intact. No-op on Mac.
+envP = timetracking.linux_matlab_env_prefix() ;
+
 % Clean
 if doClean && exist(buildDir, 'dir')
   fprintf('build_tt: removing %s\n', buildDir) ;
@@ -144,7 +151,7 @@ end
 
 % Configure
 fprintf('build_tt: configuring (%s)\n', target) ;
-cfgCmd = sprintf('"%s" -S "%s" -B "%s" %s', cmakeBin, ttRoot, buildDir, opts) ;
+cfgCmd = sprintf('%s"%s" -S "%s" -B "%s" %s', envP, cmakeBin, ttRoot, buildDir, opts) ;
 fprintf('  $ %s\n', cfgCmd) ;
 stat = system(cfgCmd) ;
 if stat ~= 0
@@ -153,7 +160,7 @@ end
 
 % Build
 fprintf('\nbuild_tt: compiling (this fetches AMReX+ABLASTR on first run; ~15-25 min)\n') ;
-buildCmd = sprintf('"%s" --build "%s" -j', cmakeBin, buildDir) ;
+buildCmd = sprintf('%s"%s" --build "%s" -j', envP, cmakeBin, buildDir) ;
 if verbose
   buildCmd = [buildCmd ' --verbose'] ;
 end

@@ -7,9 +7,15 @@ if isprop(obj, 'mpi_nranks') && ~isempty(obj.mpi_nranks)
     nranks = max(1, round(double(obj.mpi_nranks)));
 end
 
+% On Linux, strip MATLAB's bundled libs from LD_LIBRARY_PATH so the
+% lucretia-tt binary (linked against the host's libstdc++) can find
+% the right symbols. No-op on Mac and when LD_LIBRARY_PATH has no
+% MATLAB entries.
+envP = timetracking.linux_matlab_env_prefix();
+
 if nranks <= 1
-    cmd = sprintf('cd "%s" && "%s" "%s" 2>&1', ...
-                  obj.work_dir, obj.binary, in_file);
+    cmd = sprintf('cd "%s" && %s"%s" "%s" 2>&1', ...
+                  obj.work_dir, envP, obj.binary, in_file);
 else
     mpirun = '';
     if isprop(obj, 'mpirun_bin') && ~isempty(obj.mpirun_bin)
@@ -26,8 +32,8 @@ else
               ['mpi_nranks=%d but no mpirun found. Install Open MPI ' ...
                '(brew install open-mpi) or set obj.mpirun_bin.'], nranks);
     end
-    cmd = sprintf('cd "%s" && "%s" -np %d "%s" "%s" 2>&1', ...
-                  obj.work_dir, mpirun, nranks, obj.binary, in_file);
+    cmd = sprintf('cd "%s" && %s"%s" -np %d "%s" "%s" 2>&1', ...
+                  obj.work_dir, envP, mpirun, nranks, obj.binary, in_file);
 end
 [status, log] = system(cmd);
 end
