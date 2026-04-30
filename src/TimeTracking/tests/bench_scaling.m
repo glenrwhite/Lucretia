@@ -105,18 +105,33 @@ for i = 1:numel(opts.configs)
     results(end).pps     = pps;
 end
 
-% Strong-scaling summary
-fprintf('\nStrong-scaling summary (relative to first config):\n');
+% Strong-scaling summary -- skip failed configs and use the first
+% SUCCESSFUL one as the baseline so a single failure doesn't corrupt
+% all downstream speedup numbers.
+ok_mask  = arrayfun(@(r) ~isnan(r.pps), results);
+fprintf('\nStrong-scaling summary (relative to first SUCCESSFUL config):\n');
 fprintf('   nranks   omp   total   wall(s)   speedup   efficiency\n');
-base = results(1).wall_s;
-base_threads = results(1).nranks * results(1).omp;
+if ~any(ok_mask)
+    fprintf('   (all configs failed; nothing to summarise)\n');
+    return
+end
+base_idx     = find(ok_mask, 1, 'first');
+base         = results(base_idx).wall_s;
+base_threads = results(base_idx).nranks * results(base_idx).omp;
 for i = 1:numel(results)
     r = results(i);
     total_threads = r.nranks * r.omp;
+    if ~ok_mask(i)
+        fprintf('   %5d  %4d  %5d   FAILED        --        --\n', ...
+                r.nranks, r.omp, total_threads);
+        continue
+    end
     speedup = base / r.wall_s;
     eff = speedup * base_threads / total_threads;
-    fprintf('   %5d  %4d  %5d  %8.1f  %7.2fx  %7.0f%%\n', ...
-            r.nranks, r.omp, total_threads, r.wall_s, speedup, eff*100);
+    marker  = '';
+    if i == base_idx, marker = '  (baseline)'; end
+    fprintf('   %5d  %4d  %5d  %8.1f  %7.2fx  %7.0f%%%s\n', ...
+            r.nranks, r.omp, total_threads, r.wall_s, speedup, eff*100, marker);
 end
 
 fprintf('\nInterpretation:\n');
