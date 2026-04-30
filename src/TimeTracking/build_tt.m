@@ -177,7 +177,14 @@ binSrc = fullfile(buildDir, 'bin', 'lucretia-tt') ;
 binDst = fullfile(thisDir, binName) ;
 if exist(binSrc, 'file')
   copyfile(binSrc, binDst) ;
-  fileattrib(binDst, '+x') ;
+  % Ensure +x. fileattrib is unreliable under MATLAB R2026a on Linux
+  % (silently leaves binary at 0644), so on Unix shell out to chmod 755
+  % which always works.
+  if isunix
+    system(sprintf('chmod 755 "%s"', binDst)) ;
+  else
+    fileattrib(binDst, '+x') ;
+  end
   fprintf('\nbuild_tt: built %s\n', binDst) ;
 else
   warning('build_tt:noBinary', ...
