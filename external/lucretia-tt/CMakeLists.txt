@@ -52,6 +52,8 @@ option(LucretiaTT_MPI                 "Multi-node MPI support"           ON)
 option(LucretiaTT_MPI_THREAD_MULTIPLE "MPI thread-multiple (async I/O)"  ON)
 option(LucretiaTT_FFT                 "FFT-based Poisson (IGF)"          ON)
 option(LucretiaTT_OPENPMD             "openPMD I/O (HDF5/ADIOS)"         ON)
+option(LucretiaTT_OPENPMD_MPI         "Build openPMD-api with MPI / parallel HDF5 (requires hdf5-mpi). Default OFF: BeamIO MPI-gathers to rank 0 then writes serially, which works with serial HDF5 on every platform."
+                                                                         OFF)
 option(LucretiaTT_FASTMATH            "Enable -ffast-math optimisations" OFF)
 option(LucretiaTT_IPO                 "Interprocedural / link-time optimization" OFF)
 

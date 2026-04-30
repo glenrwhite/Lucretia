@@ -14,34 +14,43 @@ function build_tt(varargin)
 %   build_tt gpu-mpi      % CUDA + MPI multi-GPU (Linux only)
 %
 % Modifiers (any combination):
-%   clean    - rm -rf build/ before configuring
-%   debug    - CMAKE_BUILD_TYPE=Debug (default Release)
-%   nofft    - LucretiaTT_FFT=OFF (skip FFT-based Poisson; for early bring-up)
-%   noopmd   - LucretiaTT_OPENPMD=OFF (skip openPMD I/O; for early bring-up)
-%   verbose  - cmake --verbose
+%   clean      - rm -rf build/ before configuring
+%   debug      - CMAKE_BUILD_TYPE=Debug (default Release)
+%   nofft      - LucretiaTT_FFT=OFF (skip FFT-based Poisson; for early bring-up)
+%   noopmd     - LucretiaTT_OPENPMD=OFF (skip openPMD I/O; for early bring-up)
+%   opmd-mpi   - LucretiaTT_OPENPMD_MPI=ON (use parallel HDF5; requires hdf5-mpi)
+%                Default OFF: openPMD-api uses serial HDF5 and BeamIO MPI-gathers
+%                to rank 0 before writing -- works on every platform without
+%                hdf5-mpi installed. Set this for high-frequency / large dumps
+%                on Linux production boxes where collective parallel I/O matters.
+%   verbose    - cmake --verbose
 %
 % Examples:
-%   build_tt cpu nofft noopmd       % minimal CPU build, fastest path to a binary
-%   build_tt cpu-mpi clean          % full CPU+MPI rebuild from scratch
-%   build_tt gpu-mpi                % production target on the deployment box
+%   build_tt cpu nofft noopmd          % minimal CPU build, fastest path to a binary
+%   build_tt cpu-mpi clean             % full CPU+MPI rebuild from scratch
+%   build_tt gpu-mpi                   % production target on the deployment box
+%   build_tt gpu-mpi opmd-mpi clean    % production w/ collective parallel HDF5
 %
 % Also invokable as `build tt cpu`, `build tt clean`, etc. via build.m.
 
-target  = 'cpu' ;
-doClean = false ;
-debug   = false ;
-nofft   = false ;
-noopmd  = false ;
-verbose = false ;
+target   = 'cpu' ;
+doClean  = false ;
+debug    = false ;
+nofft    = false ;
+noopmd   = false ;
+opmdMPI  = false ;
+verbose  = false ;
 for iarg = 1:nargin
   switch lower(varargin{iarg})
     case {'cpu','cpu-mpi','gpu','gpu-mpi'}
       target = lower(varargin{iarg}) ;
-    case 'clean',   doClean = true ;
-    case 'debug',   debug   = true ;
-    case 'nofft',   nofft   = true ;
-    case 'noopmd',  noopmd  = true ;
-    case 'verbose', verbose = true ;
+    case 'clean',    doClean  = true ;
+    case 'debug',    debug    = true ;
+    case 'nofft',    nofft    = true ;
+    case 'noopmd',   noopmd   = true ;
+    case {'opmd-mpi','openpmd-mpi'}
+                     opmdMPI  = true ;
+    case 'verbose',  verbose  = true ;
     otherwise
       warning('build_tt:unknownArg', 'Ignoring unknown argument: %s', ...
               varargin{iarg}) ;
@@ -75,9 +84,15 @@ switch target
   case 'gpu-mpi', opts = '-DLucretiaTT_COMPUTE=CUDA -DLucretiaTT_MPI=ON'  ;
 end
 
-opts = [opts sprintf(' -DCMAKE_BUILD_TYPE=%s', ternary(debug,'Debug','Release'))] ;
-opts = [opts sprintf(' -DLucretiaTT_FFT=%s',     ternary(nofft, 'OFF','ON'))] ;
-opts = [opts sprintf(' -DLucretiaTT_OPENPMD=%s', ternary(noopmd,'OFF','ON'))] ;
+opts = [opts sprintf(' -DCMAKE_BUILD_TYPE=%s',       ternary(debug,'Debug','Release'))] ;
+opts = [opts sprintf(' -DLucretiaTT_FFT=%s',         ternary(nofft,  'OFF','ON'))] ;
+opts = [opts sprintf(' -DLucretiaTT_OPENPMD=%s',     ternary(noopmd, 'OFF','ON'))] ;
+opts = [opts sprintf(' -DLucretiaTT_OPENPMD_MPI=%s', ternary(opmdMPI,'ON', 'OFF'))] ;
+
+if opmdMPI && ~isMPI
+  warning('build_tt:opmdMpiNoMpi', ...
+    'opmd-mpi requested but target is %s -- collective parallel I/O needs an MPI build. Add cpu-mpi or gpu-mpi.', target) ;
+end
 
 % macOS: point CMake at Homebrew libomp (AppleClang ships no native OpenMP).
 % On Linux gcc/clang find OpenMP without hints.

@@ -1,0 +1,550 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Lucretia: lucretia-tt &mdash; time-based 3D PIC tracker</title>
+    <meta name="description" content="lucretia-tt is a standalone C++/CUDA time-based particle-in-cell tracker for the Lucretia accelerator-physics codebase, designed for photoinjector and capture-section simulation.">
+    <link rel="stylesheet" href="lucretia.css">
+</head>
+<body>
+
+<nav class="lucretia-nav">
+    <div class="nav-inner">
+        <a class="nav-brand" href="index.html">
+            <img src="LucretiaLogo.gif" alt="" style="width:24px;height:auto;">
+            <span>LU<span class="pink">CRETIA</span></span>
+        </a>
+        <a class="nav-link" href="index.html">Home</a>
+        <a class="nav-link" href="overview.html">Overview</a>
+        <a class="nav-link" href="setup.html">Setup</a>
+        <a class="nav-link" href="downloads.html">Downloads</a>
+        <a class="nav-link" href="examples.html">Examples</a>
+        <a class="nav-link active" href="function_index.html">Documentation</a>
+        <a class="nav-link" href="gui.html">GUI</a>
+        <a class="nav-link" href="whatsnew.html">What's New</a>
+    </div>
+</nav>
+
+
+<h1>lucretia-tt &mdash; time-based 3D PIC tracker</h1>
+
+<p>
+    <code>lucretia-tt</code> is a standalone C++/CUDA particle-in-cell tracker
+    designed for the parts of an accelerator that Lucretia's <a href="tracking.html">s-based
+    <code>TrackThru</code></a> cannot model directly: photoinjectors, capture
+    sections, and any region where the bunch is non-relativistic, the
+    longitudinal motion is non-trivial, or 3D space charge dominates.
+    It lives in <code>external/lucretia-tt/</code> and is invoked from
+    MATLAB via the <code>TimeTrack</code> class.
+</p>
+
+<p>
+    Built on <a href="https://amrex-codes.github.io/amrex/">AMReX</a> +
+    <a href="https://blast.lbl.gov/codes-ablastr/">ABLASTR</a> (the BSD-licensed
+    PIC infrastructure shared by WarpX, ImpactX, and HiPACE++); particle dumps
+    use <a href="https://www.openpmd.org/">openPMD-api</a>.
+    The end-of-region beam can be handed back to Lucretia's s-based world via
+    <code>freezePlaneOut</code>, ready for the standard <code>TrackThru</code>
+    pipeline.
+</p>
+
+<h2>What it does</h2>
+
+<ul>
+    <li><strong>Cathode emission</strong> with thermal MTE and image-charge return force</li>
+    <li><strong>3D space charge</strong> via FFT-based open-BC Poisson (ABLASTR's IGF solver), with a co-moving mesh that follows the bunch in z</li>
+    <li><strong>Field-source elements</strong>: analytic (<code>SWCavity</code>, <code>TWCavity</code>, <code>QuadAnalytic</code>, <code>SolenoidAnalytic</code>, <code>UniformB</code>) and 3D-map (<code>FieldMap3D</code>, <code>Solenoid3D</code>, <code>ImpactTField</code>)</li>
+    <li><strong>Boris pusher</strong> (relativistic kick-rotate-kick) with adaptive time stepping</li>
+    <li><strong>openPMD HDF5</strong> beam dumps; conversion to Lucretia <code>Beam</code> structs via <code>freezePlaneOut</code></li>
+    <li><strong>ImpactT lattice import</strong>: <code>readImpactTLattice</code> parses an <code>ImpactT.in</code> file (incl. <code>rfdata*</code> field maps) into a lucretia-tt lattice cell array</li>
+</ul>
+
+<p>
+    Target scale: 10<sup>7</sup> macroparticles routine, 10<sup>8</sup>
+    occasional, on a single 8&times;A100 workstation; CPU-MPI also supported.
+</p>
+
+
+<h2 id="setup">Setup</h2>
+
+<h3 id="setup-mac">macOS &mdash; development box</h3>
+
+<p>
+    macOS is the supported authoring environment. Single-rank CPU-OMP runs
+    are perfectly usable for tests and small physics experiments; multi-rank
+    CPU-MPI also works. CUDA is Linux-only.
+</p>
+
+<p>Install the toolchain via Homebrew:</p>
+
+<pre><code>brew install cmake hdf5 ccache libomp
+brew install open-mpi      # only if you want to build the cpu-mpi target
+</code></pre>
+
+<p>Notes:</p>
+
+<ul>
+    <li><code>libomp</code> is required because AppleClang doesn't ship native OpenMP. <code>build_tt</code> auto-detects it under <code>/opt/homebrew/opt/libomp</code> (Apple Silicon) or <code>/usr/local/opt/libomp</code> (Intel).</li>
+    <li>Homebrew's <code>hdf5</code> formula provides serial HDF5. <code>hdf5-mpi</code> conflicts with <code>hdf5</code> &mdash; do <em>not</em> install it. The MPI build of lucretia-tt patches openPMD-api to use serial HDF5 (BeamIO MPI-gathers to rank 0 then writes serially), so the parallel HDF5 package is not needed.</li>
+    <li><code>openPMD-api</code> itself is FetchContent-built; no Homebrew package needed.</li>
+    <li><code>ccache</code> is optional but cuts re-build time substantially.</li>
+</ul>
+
+<h3 id="setup-linux">Linux &mdash; 8&times;A100 deployment box</h3>
+
+<p>
+    The recommended path is <a href="https://spack.io">Spack</a>, matching the
+    WarpX-recommended dependency stack. This gives you CUDA-aware MPI
+    (UCX over GPU-direct), parallel HDF5, and openPMD-api in one go.
+</p>
+
+<pre><code>git clone --depth=1 https://github.com/spack/spack.git ~/spack
+. ~/spack/share/spack/setup-env.sh
+
+spack env create luctt
+spack env activate luctt
+spack add cmake@3.24:
+spack add openmpi+cuda fabrics=ucx
+spack add ucx+cuda+gdrcopy+thread_multiple
+spack add hdf5@1.14: +mpi +cxx
+spack add openpmd-api +mpi +hdf5
+spack add cuda@12: cuda_arch=80
+spack add ccache
+spack install -j 32
+</code></pre>
+
+<p>Activate the environment in any shell where you build or run:</p>
+
+<pre><code>. ~/spack/share/spack/setup-env.sh
+spack env activate luctt
+</code></pre>
+
+<p>Verify CUDA-aware MPI is enabled:</p>
+
+<pre><code>ompi_info --parsable --all | grep mpi_built_with_cuda_support:value
+# expected:
+# mca:mpi:base:param:mpi_built_with_cuda_support:value:true
+</code></pre>
+
+<p>
+    A bare-metal install (apt/yum) also works if you already have a recent
+    CUDA toolkit, OpenMPI built with CUDA support, and HDF5 development
+    headers on the system. The minimum required versions are CMake 3.24,
+    HDF5 1.14, OpenMPI 4.x, and CUDA 12.
+</p>
+
+
+<h2 id="building">Building</h2>
+
+<p>
+    Builds are driven from MATLAB via <code>build_tt</code>, which lives at
+    <code>src/TimeTracking/build_tt.m</code>. It runs CMake under the hood,
+    handles platform-specific compiler flags (libomp, mpicxx wrappers), and
+    stages the resulting binary into <code>src/TimeTracking/</code> for
+    <code>which()</code>-based discovery.
+</p>
+
+<h3>Build targets</h3>
+
+<table>
+    <thead>
+        <tr>
+            <th>Command</th>
+            <th>Backend</th>
+            <th>MPI</th>
+            <th>Build dir</th>
+            <th>Staged binary</th>
+            <th>Platform</th>
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><code>build_tt cpu</code></td>
+            <td>OpenMP</td>
+            <td>off</td>
+            <td><code>build/</code></td>
+            <td><code>lucretia-tt</code></td>
+            <td>Mac, Linux</td>
+        </tr>
+        <tr>
+            <td><code>build_tt cpu-mpi</code></td>
+            <td>OpenMP</td>
+            <td>on</td>
+            <td><code>build_mpi/</code></td>
+            <td><code>lucretia-tt_mpi</code></td>
+            <td>Mac, Linux</td>
+        </tr>
+        <tr>
+            <td><code>build_tt gpu</code></td>
+            <td>CUDA</td>
+            <td>off</td>
+            <td><code>build/</code></td>
+            <td><code>lucretia-tt</code></td>
+            <td>Linux</td>
+        </tr>
+        <tr>
+            <td><code>build_tt gpu-mpi</code></td>
+            <td>CUDA</td>
+            <td>on</td>
+            <td><code>build_mpi/</code></td>
+            <td><code>lucretia-tt_mpi</code></td>
+            <td>Linux</td>
+        </tr>
+    </tbody>
+</table>
+
+<p>Modifiers (any combination):</p>
+
+<ul>
+    <li><code>clean</code> &mdash; <code>rm -rf build/</code> before configuring</li>
+    <li><code>debug</code> &mdash; <code>CMAKE_BUILD_TYPE=Debug</code> (default Release)</li>
+    <li><code>nofft</code> &mdash; skip the FFT-based Poisson solver (early bring-up only)</li>
+    <li><code>noopmd</code> &mdash; skip openPMD I/O (early bring-up only)</li>
+    <li><code>opmd-mpi</code> &mdash; build openPMD-api with parallel HDF5 (<code>LucretiaTT_OPENPMD_MPI=ON</code>). Requires <code>hdf5-mpi</code> installed. Default off; see <a href="#parallel-hdf5">Parallel HDF5 (opt-in)</a> below.</li>
+    <li><code>verbose</code> &mdash; pass <code>--verbose</code> to <code>cmake --build</code></li>
+</ul>
+
+<h3>Examples</h3>
+
+<p>From the MATLAB prompt, with Lucretia on the path:</p>
+
+<pre><code>build_tt cpu                   % macOS dev: fastest path to a working binary
+build_tt cpu-mpi clean         % full CPU+MPI rebuild from scratch
+build_tt gpu-mpi               % Linux: 8x A100 production target
+build_tt gpu nofft noopmd      % Linux: smoke test the CUDA pipeline only
+</code></pre>
+
+<p>Equivalent direct CMake invocation (for CI or shell-only environments):</p>
+
+<pre><code>cd external/lucretia-tt
+cmake -S . -B build \
+      -DLucretiaTT_COMPUTE=CUDA \
+      -DLucretiaTT_MPI=ON \
+      -DLucretiaTT_FFT=ON \
+      -DCMAKE_CUDA_ARCHITECTURES=80 \
+      -DCMAKE_BUILD_TYPE=Release
+cmake --build build -j 16
+</code></pre>
+
+<p>
+    On the first build, AMReX, ABLASTR, and openPMD-api are fetched and built
+    via FetchContent &mdash; expect 15&ndash;25 minutes. Subsequent rebuilds
+    are incremental and ccache-accelerated; touching one source file usually
+    takes &lt;30 seconds.
+</p>
+
+
+<h2 id="running">Running</h2>
+
+<p>
+    Driving lucretia-tt from MATLAB uses the <code>TimeTrack</code> class
+    (<code>src/TimeTracking/@TimeTrack</code>). It writes a ParmParse input
+    file, invokes the staged binary, and reads back the openPMD dumps.
+</p>
+
+<h3>Minimal example: cyclotron in a uniform B<sub>z</sub></h3>
+
+<pre><code>tt = TimeTrack();
+tt.lattice = { ...
+    timetracking.UniformB('name','B','Bz',1e-3), ...
+    timetracking.BeamMonitor('name','m','dump_every',100) };
+tt.beam = struct('n_particles',1, ...
+                 'x',0,'y',0,'z',0, ...
+                 'ux',1e7,'uy',0,'uz',0);
+tt.geom_lo    = [-0.1, -0.1, -0.1];
+tt.geom_hi    = [ 0.1,  0.1,  0.1];
+tt.geom_ncell = [16, 16, 16];
+tt.dt = 35.7e-12;     % T_c / 1000
+tt.n_steps = 1000;
+tt.run();
+bunches = tt.readDumps();   % cell array of per-step structs
+</code></pre>
+
+<h3>Key TimeTrack properties</h3>
+
+<table>
+    <thead><tr><th>Property</th><th>Default</th><th>Meaning</th></tr></thead>
+    <tbody>
+        <tr><td><code>lattice</code></td><td><code>{}</code></td><td>Cell of element structs (see <a href="#elements">elements</a>)</td></tr>
+        <tr><td><code>beam</code></td><td>1 particle at origin</td><td>Initial particles. Use a <code>SeedBeam</code> with a pre-written HDF5 seed for non-trivial bunches.</td></tr>
+        <tr><td><code>dt</code></td><td><code>1e-12</code></td><td>Initial time step in seconds</td></tr>
+        <tr><td><code>n_steps</code></td><td><code>100</code></td><td>Number of time steps</td></tr>
+        <tr><td><code>dt_change_t</code> / <code>dt_after</code></td><td><code>[]</code></td><td>Switch <code>dt</code> at a given simulation time (variable-dt schedule)</td></tr>
+        <tr><td><code>t_start</code></td><td><code>[]</code></td><td>Initial wall-clock time (empty = 0). Use to align with ImpactT's <code>Tini</code>.</td></tr>
+        <tr><td><code>geom_lo</code> / <code>geom_hi</code> / <code>geom_ncell</code></td><td>10&nbsp;cm box, 32&sup3;</td><td>SC mesh extent and resolution</td></tr>
+        <tr><td><code>enable_space_charge</code></td><td><code>false</code></td><td>Turn on the IGF Poisson solver</td></tr>
+        <tr><td><code>sc_comoving</code></td><td><code>false</code></td><td>Mesh follows the bunch in z (recenters when the centroid drifts past the central 50% of the box)</td></tr>
+        <tr><td><code>mpi_nranks</code></td><td><code>1</code></td><td>&gt;1 invokes <code>mpirun -np N</code>; auto-selects the <code>lucretia-tt_mpi</code> binary</td></tr>
+        <tr><td><code>work_dir</code></td><td><code>''</code> &rarr; tempname</td><td>Where the input file and openPMD dumps live</td></tr>
+        <tr><td><code>output_dir</code></td><td><code>'diags'</code></td><td>openPMD output dir, relative to <code>work_dir</code></td></tr>
+    </tbody>
+</table>
+
+<h3>Multi-rank MPI runs</h3>
+
+<p>After building <code>cpu-mpi</code> (Mac or Linux) or <code>gpu-mpi</code> (Linux):</p>
+
+<pre><code>tt = TimeTrack();
+% ... lattice / beam / geometry as before ...
+tt.mpi_nranks = 8;          % auto-picks lucretia-tt_mpi alongside lucretia-tt
+tt.run();
+</code></pre>
+
+<p>Notes on resource sharing:</p>
+
+<ul>
+    <li>If you set <code>mpi_nranks</code> &gt; 1 with the default <code>OMP_NUM_THREADS</code> (usually = number of cores), each rank will spawn that many OpenMP threads, oversubscribing the box. Set <code>OMP_NUM_THREADS</code> in the shell that launches MATLAB so each rank gets a fair share. On macOS for an 8-core box with <code>mpi_nranks=2</code>, that means <code>OMP_NUM_THREADS=4</code>.</li>
+    <li><code>mpirun</code> is auto-located: <code>/opt/homebrew/bin/mpirun</code>, then <code>/usr/local/bin/mpirun</code>, then PATH. Override with <code>tt.mpirun_bin = '/path/to/mpirun'</code>.</li>
+    <li>On Linux SLURM clusters, you typically want <code>srun</code> not <code>mpirun</code>. Set <code>tt.mpirun_bin = 'srun'</code>; it'll be invoked as <code>srun -np N &hellip;</code>.</li>
+</ul>
+
+<h3>GPU runs (Linux only)</h3>
+
+<p>
+    The Linux box auto-uses CUDA when you build with <code>build_tt gpu</code>
+    or <code>gpu-mpi</code>. From MATLAB, the workflow is identical to the
+    CPU case &mdash; the staged binary handles GPU-vs-CPU transparently.
+</p>
+
+<pre><code>% After build_tt gpu-mpi on the Linux box
+tt = TimeTrack();
+% ... lattice / beam / geometry ...
+tt.mpi_nranks = 8;          % one rank per A100
+tt.run();
+</code></pre>
+
+<p>
+    AMReX places one MPI rank on each visible GPU. If you want to limit which
+    GPUs are used, set <code>CUDA_VISIBLE_DEVICES</code> in the launching
+    shell.
+</p>
+
+
+<h2 id="elements">Lattice elements</h2>
+
+<p>
+    Lattice elements are MATLAB structs created by helper functions in the
+    <code>+timetracking</code> package. A lattice is a cell array of such
+    structs, evaluated in order at each time step.
+</p>
+
+<table>
+    <thead><tr><th>Element</th><th>Helper</th><th>Notes</th></tr></thead>
+    <tbody>
+        <tr><td>Drift (3D)</td><td><code>timetracking.Drift3D</code></td><td>Field-free region; only the geometry matters.</td></tr>
+        <tr><td>Cathode emission</td><td><code>timetracking.CathodeSource</code></td><td>Gaussian temporal profile, thermal MTE; optional image-charge return force.</td></tr>
+        <tr><td>Quadrupole (analytic)</td><td><code>timetracking.QuadAnalytic</code></td><td>Linear field; thin-lens limit accurate to within a few percent for short quads.</td></tr>
+        <tr><td>Solenoid (analytic)</td><td><code>timetracking.SolenoidAnalytic</code></td><td>Paraxial off-axis Maxwell expansion of an on-axis B<sub>z</sub>(z) profile.</td></tr>
+        <tr><td>Solenoid (3D map)</td><td><code>timetracking.Solenoid3D</code></td><td>Reads a 2D (r,z) HDF5 field map and expands paraxially.</td></tr>
+        <tr><td>SW cavity</td><td><code>timetracking.SWCavity</code></td><td>Pure-sine standing-wave; sufficient for capture-section tests, not for cold-cathode emission (use <code>ImpactTField</code> + a real gun map for that).</td></tr>
+        <tr><td>TW cavity</td><td><code>timetracking.TWCavity</code></td><td>Travelling-wave structure with phase drift.</td></tr>
+        <tr><td>3D field map</td><td><code>timetracking.FieldMap3D</code></td><td>Trilinear interpolation of a 3D Cartesian E/B map.</td></tr>
+        <tr><td>ImpactT field</td><td><code>timetracking.ImpactTField</code></td><td>Reads ImpactT-format <code>rfdata*</code> Fourier-series field files (used for the LCLS gun and L0A linac).</td></tr>
+        <tr><td>Uniform B</td><td><code>timetracking.UniformB</code></td><td>Constant B field; useful for cyclotron tests.</td></tr>
+        <tr><td>Beam monitor</td><td><code>timetracking.BeamMonitor</code></td><td>Dump the bunch to openPMD every N steps.</td></tr>
+    </tbody>
+</table>
+
+
+<h2 id="output">Output and handoff to Lucretia</h2>
+
+<h3>Reading dumps</h3>
+
+<pre><code>bunches = tt.readDumps();
+% bunches{k}.x  - x positions (m)
+% bunches{k}.px - px momenta (kg.m/s)
+% bunches{k}.q, .w - charge and weight per macroparticle
+% bunches{k}.time, .step - simulation time and step index
+</code></pre>
+
+<h3>Freeze-plane handoff to TrackThru</h3>
+
+<p>
+    To convert a captured time-based dump into a Lucretia <code>Beam</code>
+    struct that <a href="tracking.html"><code>TrackThru</code></a> can
+    consume:
+</p>
+
+<pre><code>beam = tt.freezePlaneOut('last');     % use the last dump
+% beam.Bunch.x is the standard 6 x N matrix:
+%   row 1: x   (m)
+%   row 2: x' = px / pz   (rad)
+%   row 3: y   (m)
+%   row 4: y' = py / pz
+%   row 5: z   (m, centred on the bunch)
+%   row 6: P   (GeV/c)
+% beam.Bunch.Q is per-macroparticle charge in Coulombs.
+
+% Hand off to standard Lucretia tracking:
+[stat, beam_out] = TrackThru(elem1, elem2, beam, 1, 1);
+</code></pre>
+
+<p>
+    The conversion takes the dump at a fixed <em>time</em>, not a fixed
+    <em>s</em>. For bunches that are short longitudinally compared to their
+    transit length scale (the typical photo-injector handoff case), this is
+    exact. A truly z-triggered freeze plane that drift-corrects each particle
+    to a common s is a future refinement.
+</p>
+
+
+<h2 id="parallel-hdf5">Parallel HDF5 (opt-in)</h2>
+
+<p>
+    By default, lucretia-tt builds openPMD-api with serial HDF5 even when the
+    application itself is built with MPI. <code>BeamIO</code> MPI-gathers every
+    rank's particles to rank 0 and then writes serially. This is the only mode
+    that works on macOS (Homebrew's serial <code>hdf5</code> formula conflicts
+    with <code>hdf5-mpi</code>) and is the safest default everywhere.
+</p>
+
+<p>
+    The cost is rank-0 serial I/O on every dump. For the design scale (10<sup>7</sup>
+    macros, infrequent dumps) this is a fraction of a second per dump &mdash;
+    invisible. At 10<sup>9</sup>+ macros with frequent dumps, the rank-0
+    serial path becomes a real bottleneck.
+</p>
+
+<p>
+    On Linux with parallel HDF5 already installed (Spack <code>hdf5+mpi</code>,
+    or apt <code>libhdf5-mpi-dev</code>), build with <code>opmd-mpi</code> to
+    skip the patch and let openPMD-api use parallel HDF5:
+</p>
+
+<pre><code>build_tt gpu-mpi opmd-mpi clean
+</code></pre>
+
+<p>
+    With <code>LucretiaTT_OPENPMD_MPI=ON</code>, openPMD-api links against
+    parallel HDF5 and a future <code>BeamIO</code> rewrite can use collective
+    parallel writes (each rank stores its local chunk to a global offset, with
+    a single collective <code>flush</code>). Until that refactor lands,
+    <code>BeamIO</code> still uses the rank-0 gather path even with
+    <code>opmd-mpi</code> &mdash; so the build switch alone doesn't change I/O
+    perf, it just unblocks the follow-up. Watch the issue tracker or ping the
+    maintainers if you hit I/O as a bottleneck.
+</p>
+
+
+<h2 id="testing">Testing</h2>
+
+<p>
+    The <code>tests/</code> directory holds a regression suite. Each test is
+    a MATLAB function returning a single boolean <code>ok</code>.
+</p>
+
+<pre><code>cd Lucretia/src/TimeTracking/tests
+
+% Run them all (skipping the slow trackthru_handoff cross-check):
+results = run_all_tests('exclude', {'test_trackthru_handoff'});
+
+% Or run one:
+ok = test_cyclotron();
+ok = test_uniform_sphere();      % SC validation
+ok = test_freezeplane_handoff(); % Phase 5 round-trip
+</code></pre>
+
+<p>
+    For MPI builds, <code>test_mpi_smoke</code> runs cyclotron, uniform-sphere,
+    and freezeplane both at <code>np=1</code> and <code>np=2</code> and
+    confirms the two give bit-for-bit identical results.
+</p>
+
+
+<h2 id="repo">Repository layout</h2>
+
+<pre><code>external/lucretia-tt/
+&#9500;&#9472;&#9472; CMakeLists.txt                   top-level superbuild
+&#9500;&#9472;&#9472; cmake/
+&#9474;   &#9500;&#9472;&#9472; LucretiaTTFunctions.cmake    helper macros
+&#9474;   &#9500;&#9472;&#9472; dependencies/
+&#9474;   &#9474;   &#9492;&#9472;&#9472; ABLASTR.cmake            FetchContent ABLASTR (pulls AMReX + openPMD)
+&#9474;   &#9492;&#9472;&#9472; patches/
+&#9474;       &#9492;&#9472;&#9472; disable_openpmd_mpi.cmake patch openPMD-api to use serial HDF5 even with MPI
+&#9500;&#9472;&#9472; src/
+&#9474;   &#9500;&#9472;&#9472; main.cpp                     entry point
+&#9474;   &#9500;&#9472;&#9472; particles/                   TimeBunch (extends amrex::ParticleContainerPureSoA)
+&#9474;   &#9500;&#9472;&#9472; elements/                    Drift3D, SWCavity, Solenoid3D, etc.
+&#9474;   &#9500;&#9472;&#9472; tracking/                    Boris pusher, time-stepping loop
+&#9474;   &#9500;&#9472;&#9472; spacecharge/                 ABLASTR IGF Poisson, co-moving mesh
+&#9474;   &#9492;&#9472;&#9472; io/                          openPMD field-map reader + beam dumps
+&#9492;&#9472;&#9472; tests/                           per-phase validation cases
+
+src/TimeTracking/                    MATLAB front-end
+&#9500;&#9472;&#9472; @TimeTrack/                      TimeTrack class (run, readDumps, freezePlaneOut)
+&#9500;&#9472;&#9472; +timetracking/                   element constructors + helpers
+&#9500;&#9472;&#9472; build_tt.m                       build driver
+&#9492;&#9472;&#9472; tests/                           MATLAB regression suite
+</code></pre>
+
+
+<h2>Troubleshooting</h2>
+
+<h3 id="trouble-libomp">macOS &mdash; <code>libomp not found</code></h3>
+<p>
+    AppleClang has no built-in OpenMP. Run <code>brew install libomp</code>.
+    <code>build_tt</code> looks under <code>/opt/homebrew/opt/libomp</code>
+    (Apple Silicon) or <code>/usr/local/opt/libomp</code> (Intel).
+</p>
+
+<h3 id="trouble-mpicxx">macOS MPI build &mdash; <code>MPI compiler wrappers not found</code></h3>
+<p>
+    Run <code>brew install open-mpi</code>. The wrappers <code>mpicc</code>
+    and <code>mpicxx</code> need to be in <code>/opt/homebrew/bin</code> or
+    <code>/usr/local/bin</code>.
+</p>
+
+<h3 id="trouble-omp-mpi">MPI launch warning &mdash; <code>oversubscribing CPU cores with OMP threads</code></h3>
+<p>
+    AMReX warns when <code>(num_ranks &times; OMP_NUM_THREADS) &gt; num_cores</code>.
+    Set <code>OMP_NUM_THREADS</code> in the shell that launches MATLAB so each
+    rank gets a fair share, e.g. <code>OMP_NUM_THREADS=4 matlab&hellip;</code>
+    for an 8-core box with <code>mpi_nranks=2</code>.
+</p>
+
+<h3 id="trouble-mpi-binary">MPI run &mdash; <code>no MPI binary found</code></h3>
+<p>
+    You set <code>tt.mpi_nranks &gt; 1</code> but <code>lucretia-tt_mpi</code>
+    isn't in <code>src/TimeTracking/</code>. Build it: <code>build_tt cpu-mpi</code>
+    on Mac, <code>build_tt gpu-mpi</code> on Linux.
+</p>
+
+<h3 id="trouble-cuda-arch">Linux GPU build &mdash; wrong CUDA arch</h3>
+<p>
+    <code>build_tt gpu</code> defaults to whatever AMReX's CMake picks
+    automatically. For the 8&times;A100 box explicitly pass
+    <code>-DCMAKE_CUDA_ARCHITECTURES=80</code> via the direct CMake invocation,
+    or update <code>build_tt.m</code> to inject it for the gpu targets.
+</p>
+
+<h3 id="trouble-empty-dump">Run completes but <code>readDumps</code> returns empty</h3>
+<p>
+    The most common cause is a particle bunch that drifts past the
+    BeamMonitor without ever overlapping its time window, or an emission
+    pulse that fires entirely outside the simulation window. Check
+    <code>tt.last_log</code> for the per-step particle count printed by the
+    BeamMonitor.
+</p>
+
+
+<h2>See also</h2>
+
+<ul>
+    <li><a href="tracking.html">s-based tracking</a> &mdash; Lucretia's <code>TrackThru</code> and <code>Track</code> class. <code>freezePlaneOut</code> bridges to here.</li>
+    <li><a href="LSC.html">Longitudinal space charge</a> &mdash; the s-based LSC model, useful for regions where 3D space charge isn't needed.</li>
+    <li><a href="fieldmap.html">Field maps</a> &mdash; s-based field-map elements. For 3D field maps in the time-based world see <code>FieldMap3D</code> and <code>ImpactTField</code>.</li>
+    <li><a href="beam_generation.html">Beam generation</a> &mdash; Lucretia tools that produce <code>Beam</code> structs. lucretia-tt accepts a similar struct via the <code>beam</code> property, or an HDF5 seed file via <code>SeedBeam</code>.</li>
+</ul>
+
+
+<footer class="site-footer">
+    <p>
+        Source on <a href="https://github.com/slaclab/Lucretia.git">GitHub</a>
+        &mdash; lucretia-tt lives in <code>external/lucretia-tt/</code>;
+        the MATLAB front-end is in <code>src/TimeTracking/</code>.
+    </p>
+</footer>
+
+</body>
+</html>

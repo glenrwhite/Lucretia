@@ -1,6 +1,6 @@
 # Patch WarpX/cmake/dependencies/openPMD.cmake so that openPMD-api is
-# always built without MPI support, even when WarpX/AMReX are built with
-# MPI. This lets the rest of the application use MPI for compute while
+# built without MPI support, even when WarpX/AMReX are built with MPI.
+# This lets the rest of the application use MPI for compute while
 # openPMD-api uses serial HDF5 (rank 0 writes after an MPI gather).
 #
 # Reason: openPMD-api built with MPI requires *parallel* HDF5
@@ -10,9 +10,22 @@
 # from WarpX's MPI sidesteps the dependency conflict at zero physics
 # cost (BeamIO already gathers to rank 0 before writing).
 #
+# Opt out: pass -D LUCTT_OPENPMD_MPI=ON when invoking this script (the
+# parent CMakeLists does this when LucretiaTT_OPENPMD_MPI=ON, typically
+# on Linux boxes with parallel HDF5 installed). In that mode the patch
+# is a no-op and openPMD-api keeps WarpX's default openPMD_USE_MPI =
+# WarpX_MPI behaviour.
+#
 # Run with:
-#   cmake -P disable_openpmd_mpi.cmake
+#   cmake -D LUCTT_OPENPMD_MPI=OFF -P disable_openpmd_mpi.cmake
 # from the WarpX source root (FetchContent_Declare PATCH_COMMAND).
+
+if(LUCTT_OPENPMD_MPI)
+    message(STATUS "[lucretia-tt patch] LUCTT_OPENPMD_MPI=ON; "
+                   "skipping openPMD-MPI disable patch -- collective "
+                   "parallel HDF5 will be used")
+    return()
+endif()
 
 set(_target "cmake/dependencies/openPMD.cmake")
 if(NOT EXISTS "${_target}")
