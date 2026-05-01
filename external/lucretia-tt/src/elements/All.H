@@ -11,6 +11,7 @@
 #include "SWCavity.H"
 #include "TWCavity.H"
 #include "UniformB.H"
+#include "WakeField.H"
 
 #include <variant>
 #include <vector>
@@ -35,7 +36,8 @@ using KnownElements = std::variant<
     Solenoid3D,
     FieldMap3D,
     CathodeSource,
-    ImpactTField
+    ImpactTField,
+    WakeField
 >;
 
 /** A lattice is an ordered sequence of elements. */

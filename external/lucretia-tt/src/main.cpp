@@ -257,6 +257,27 @@ lucretiatt::elements::Lattice build_lattice ()
                 pulse_alpha, pulse_slope,
                 transverse_alpha, transverse_truncate));
         }
+        else if (type == "wakefield") {
+            amrex::Real z_start  = 0.0;
+            amrex::Real z_end    = 0.0;
+            amrex::Real iris_a   = 0.0;
+            amrex::Real gap_g    = 0.0;
+            amrex::Real period_L = 0.0;
+            int         long_on  = 1;
+            int         trans_on = 1;
+            int         n_slices = 200;
+            pp_el.query("z_start",      z_start);
+            pp_el.query("z_end",        z_end);
+            pp_el.query("iris_a",       iris_a);
+            pp_el.query("gap_g",        gap_g);
+            pp_el.query("period_L",     period_L);
+            pp_el.query("longitudinal", long_on);
+            pp_el.query("transverse",   trans_on);
+            pp_el.query("n_slices",     n_slices);
+            lattice.emplace_back(WakeField(
+                name, z_start, z_end, iris_a, gap_g, period_L,
+                long_on != 0, trans_on != 0, n_slices));
+        }
         else {
             amrex::Abort("Unknown element type: '" + type
                          + "' for element '" + name + "'");

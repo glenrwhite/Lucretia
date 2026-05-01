@@ -2,6 +2,7 @@
 
 #include "Boris.H"
 #include "elements/CathodeSource.H"
+#include "elements/WakeField.H"
 #include "particles/TimeBunch.H"
 #include "spacecharge/SpaceCharge.H"
 
@@ -233,6 +234,19 @@ void TrackingLoop::step (
             ptd.rdata(RealSoA::py)[ip] = uy;
             ptd.rdata(RealSoA::pz)[ip] = uz;
         }
+    }
+
+    // ---- 5. Wake-field impulse (post-push, Strang splitting) ----
+    // Applied to whatever particles ended up in each WakeField's
+    // [z_start, z_end] range after the Boris push. Bane analytic
+    // short-range wake; slice convolution; explicit per-step impulse.
+    for (auto const& el : lattice) {
+        std::visit([&] (auto const& e) {
+            using T = std::decay_t<decltype(e)>;
+            if constexpr (std::is_same_v<T, elements::WakeField>) {
+                e.apply_wake(bunch, dt);
+            }
+        }, el);
     }
 }
 

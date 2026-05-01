@@ -4,4 +4,5 @@ target_sources(app
         FieldMap3D.cpp
         ImpactTField.cpp
         Solenoid3D.cpp
+        WakeField.cpp
 )
