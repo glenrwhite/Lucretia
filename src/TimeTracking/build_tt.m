@@ -216,6 +216,12 @@ if exist(binSrc, 'file')
   else
     fileattrib(binDst, '+x') ;
   end
+  if ismac
+    % Strip macOS provenance/quarantine xattrs and re-ad-hoc-sign so
+    % Gatekeeper doesn't SIGKILL the freshly-built binary on first run.
+    system(sprintf('xattr -c "%s" 2>/dev/null', binDst)) ;
+    system(sprintf('codesign --force --sign - "%s" 2>/dev/null', binDst)) ;
+  end
   fprintf('\nbuild_tt: built %s\n', binDst) ;
 else
   warning('build_tt:noBinary', ...

@@ -516,6 +516,15 @@ int main (int argc, char* argv[])
         // Step 0 = initial state (pre-push).
         maybe_dump(writer.get(), lattice, bunch, 0, t);
 
+        // Progress reports every 10% of steps (or every step if n_steps < 10).
+        // Includes wall time and ETA so long Injector / production runs are
+        // monitorable without enabling per-step BeamMonitor dumps.
+        const int    prog_every    = std::max(1, n_steps / 10);
+        const double t_wall_start  = amrex::second();
+        amrex::Print() << "[tracking] starting " << n_steps
+                       << " steps; reporting every " << prog_every
+                       << " step(s)\n";
+
         for (int s = 1; s <= n_steps; ++s) {
             const amrex::Real cur_dt = (t >= dt_change_t) ? dt_after : dt;
             if (!switched && t >= dt_change_t) {
@@ -527,6 +536,20 @@ int main (int argc, char* argv[])
             tracker.step(bunch, lattice, t, cur_dt, sc.get());
             t += cur_dt;
             maybe_dump(writer.get(), lattice, bunch, s, t);
+
+            if (s % prog_every == 0 || s == n_steps) {
+                const long n_now      = bunch.TotalNumberOfParticles(true, false);
+                const int  pct        = int(std::lround(100.0 * double(s) / double(n_steps)));
+                const double t_wall   = amrex::second() - t_wall_start;
+                const double t_per    = t_wall / double(s);
+                const double eta_s    = t_per * double(n_steps - s);
+                amrex::Print() << "[tracking] " << pct << "%  step " << s
+                               << "/" << n_steps
+                               << "  t = " << t << " s"
+                               << "  N = " << n_now
+                               << "  wall = " << t_wall << " s"
+                               << "  ETA = " << eta_s << " s\n";
+            }
         }
 
         amrex::Print() << "Done after " << n_steps
