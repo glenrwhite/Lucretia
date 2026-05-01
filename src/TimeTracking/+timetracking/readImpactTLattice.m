@@ -130,6 +130,10 @@ gun_path = '';
 % lucretia-tt (which uses t-based dt switching) we estimate the time
 % the bunch centroid reaches each z and translate.
 dt_schedule = struct('z', {}, 'dt', {});
+% End-of-run z plane extracted from a type-(-99) STOP element. Used to
+% size n_steps so the bunch reaches the ImpactT exit plane (rather than
+% running the lucretia-tt-default 18000 steps blindly).
+z_stop      = NaN;
 
 for k = 1:numel(lat_lines)
     v = lat_lines{k}.vals;
@@ -190,7 +194,38 @@ for k = 1:numel(lat_lines)
             warnings{end+1} = sprintf( ...
                 'skipping %s (type -4 with too few fields)', nm); %#ok<AGROW>
         end
-    case {-2, -5, -6, -11, -99}
+    case -99
+        % End-of-run plane: ImpactT terminates tracking when the bunch
+        % reaches z_stop. lucretia-tt has no z-trigger yet (run length
+        % is set by n_steps), so we extract z_stop here and use it
+        % below to compute n_steps that gets the bunch to that plane.
+        if numel(v) >= 5
+            z_stop_now = v(5);
+            % Take the latest (largest z) STOP element if multiple are
+            % present in the lattice -- matches ImpactT's "first stop wins"
+            % semantics if the user only intends one, and falls back
+            % gracefully for files with multiple commented-in stops.
+            if isnan(z_stop) || z_stop_now > z_stop
+                z_stop = z_stop_now;
+            end
+        else
+            warnings{end+1} = sprintf( ...
+                'skipping %s (type -99 with too few fields)', nm); %#ok<AGROW>
+        end
+    case -11
+        % Collimator / backward-particle filter. ImpactT format:
+        %   "0 0 0 -11 z dz xmin xmax ymin ymax /!name:..."
+        % NOT YET IMPLEMENTED in lucretia-tt -- particles that would be
+        % killed by this collimator (e.g. backward-bouncing electrons
+        % off the gun field, or particles outside the rectangular
+        % aperture) remain in the simulation. For typical photoinjector
+        % runs with well-tuned guns the effect is small (few-particle
+        % contamination at the bunch tail), but for stop_bkw configurations
+        % with significant gun-field reflection it would matter.
+        % TODO: add a Collimator element type (z, z-thickness, x/y aperture)
+        % and a particle-removal step in TrackingLoop.
+        warnings{end+1} = sprintf('skipping %s (type -11, collimator/stop -- not yet implemented)', nm); %#ok<AGROW>
+    case {-2, -5, -6}
         warnings{end+1} = sprintf('skipping %s (type %d, control element)', ...
                                   nm, Bnpstp); %#ok<AGROW>
     otherwise
@@ -255,17 +290,24 @@ geom.ncell = ncellH;       % from ImpactT header (Nx Ny Nz)
 % z_switch -> t_switch using a half-c estimate for the cathode->gun-exit
 % transit (avg beta ~ 0.5 from beta=0 at cathode to beta~0.997 just
 % past gun), then add Tini for the wall-clock origin.
+% Use the END-of-run z plane from the type-(-99) STOP element when
+% present (matches ImpactT semantics); fall back to the furthest-
+% downstream lattice element edge.
+z_target = elem_z_max;
+if ~isnan(z_stop)
+    z_target = z_stop;
+end
+
 if isempty(dt_schedule)
     tracking.dt        = max(dt0, 0.5e-12);
-    tracking.n_steps   = max(1000, round(n_steps0 / 100));
+    % Steps to reach z_target at average c (relativistic post-cathode).
+    c_light            = 299792458.0;
+    n_to_target        = ceil((z_target / (0.5 * c_light)) / tracking.dt);
+    tracking.n_steps   = max(1000, n_to_target + 200);
     tracking.dt_change = [];
     tracking.dt_after  = [];
 else
-    % Use ImpactT's initial dt (much smaller than the ImpactT n_steps
-    % we'd back out, so use the actual dt0).
     tracking.dt = dt0;
-    % Take the first switch (most common ImpactT use); if multiple are
-    % present we warn and use the first.
     if numel(dt_schedule) > 1
         warnings{end+1} = sprintf( ...
             'multiple dt-change schedules (%d); using only the first (z=%g, dt=%g)', ...
@@ -279,9 +321,9 @@ else
     tracking.dt_change = Tini + t_to_z;
     tracking.dt_after  = dt_after;
     % n_steps suggestion: enough small-dt steps to reach the switch,
-    % plus enough big-dt steps to traverse the rest of the lattice at c.
+    % plus enough big-dt steps to reach z_target at c after that.
     n_pre  = ceil(t_to_z / tracking.dt);
-    z_post = max(elem_z_max - z_switch, 0);
+    z_post = max(z_target - z_switch, 0);
     n_post = ceil((z_post / c_light) / tracking.dt_after);
     tracking.n_steps = n_pre + n_post + 200;  % small slack
 end
@@ -295,6 +337,7 @@ info.gun_path    = gun_path;
 info.total_charge = total_charge;
 info.t_emission   = t_em;
 info.RF_freq      = Bfreq;
+info.z_stop       = z_stop;       % NaN if no -99 element seen
 
 if ~isempty(warnings)
     fprintf('readImpactTLattice: %d warnings:\n', numel(warnings));
