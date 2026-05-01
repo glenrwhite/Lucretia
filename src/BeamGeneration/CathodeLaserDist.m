@@ -159,6 +159,81 @@ classdef CathodeLaserDist < handle
               [B.x(:) B.px(:) B.y(:) B.py(:) B.z(:) B.pz(:)]');
     end
 
+    function cs = toCathodeSource(obj, z_cathode, pulse_t0)
+    % Return a configured timetracking.CathodeSource element struct that
+    % reproduces this CathodeLaserDist's emission profile inside lucretia-tt
+    % proper (i.e. as a CathodeSource element in the lattice, with
+    % image-charge causality and time-staggered emission), rather than as
+    % a pre-generated SeedBeam.
+    %
+    %   z_cathode : lab-frame z of the cathode plane (m)
+    %   pulse_t0  : centre time of the emission pulse (s, often = Tini)
+    %
+    % Distribution-shape mapping caveat: lucretia-tt's CathodeSource
+    % currently supports only 'gaussian'/'flat_top' temporal and
+    % 'gaussian'/'uniform_disk' transverse profiles, while CathodeLaserDist
+    % also supports 'super_gaussian'. Super-Gaussian is mapped to the
+    % closest available shape:
+    %   t_type='super_gaussian' (alpha~0.5) -> 'gaussian' (small flat-top
+    %                                          bias is lost)
+    %   r_type='super_gaussian'              -> 'gaussian'
+    % If you need exact distribution-shape match against an external code,
+    % seed via writeBunchSeedH5 + SeedBeam instead -- at the cost of losing
+    % time-staggered cathode emission and image-charge causality.
+        if nargin < 2 || isempty(z_cathode), z_cathode = 0.0;        end
+        if nargin < 3 || isempty(pulse_t0),  pulse_t0  = 0.0;        end
+
+        % Temporal: convert RMS sigma_t to FWHM (gaussian) or full width
+        % (flat_top -- uniform [-W,W] with RMS sigma_t has W = sigma_t*sqrt(3),
+        % so full width = 2*sigma_t*sqrt(3)).
+        switch lower(obj.t_type)
+            case 'gaussian'
+                t_pulse_shape = 'gaussian';
+                t_dur         = 2 * sqrt(2*log(2)) * obj.sigma_t;
+            case 'super_gaussian'
+                t_pulse_shape = 'gaussian';
+                t_dur         = 2 * sqrt(2*log(2)) * obj.sigma_t;
+            case 'uniform'
+                t_pulse_shape = 'flat_top';
+                t_dur         = 2 * sqrt(3) * obj.sigma_t;
+            otherwise
+                error('CathodeLaserDist:toCathodeSource:badTType', ...
+                      'unrecognised t_type ''%s''', obj.t_type);
+        end
+
+        % Transverse: spot_size is the parameter consumed by CathodeSource.
+        % For 'gaussian' it's interpreted as the RMS of each transverse
+        % component (matches sigma_xy directly). For 'uniform_disk' it's
+        % the disc radius, which we take as sigma_xy (matches the
+        % CathodeLaserDist 'uniform' radial convention).
+        switch lower(obj.r_type)
+            case 'gaussian'
+                r_profile = 'gaussian';
+                spot      = obj.sigma_xy;
+            case 'super_gaussian'
+                r_profile = 'gaussian';
+                spot      = obj.sigma_xy;
+            case 'uniform'
+                r_profile = 'uniform_disk';
+                spot      = obj.sigma_xy;
+            otherwise
+                error('CathodeLaserDist:toCathodeSource:badRType', ...
+                      'unrecognised r_type ''%s''', obj.r_type);
+        end
+
+        cs = timetracking.CathodeSource('name', 'cat', ...
+            'z_cathode',              z_cathode, ...
+            'image_charge',           true, ...
+            'n_macroparticles_total', round(obj.n_particles), ...
+            'total_charge',           abs(obj.Q_total), ...
+            'pulse_shape',            t_pulse_shape, ...
+            'pulse_duration',         t_dur, ...
+            'pulse_t0',               pulse_t0, ...
+            'transverse_profile',     r_profile, ...
+            'spot_size',              spot, ...
+            'mte',                    obj.MTE);
+    end
+
     function writeBunchSeedH5(obj, path)
     % Write lucretia-tt HDF5 seed (positions + proper velocities + per-
     % particle weight). Wraps timetracking.writeBunchSeed.
