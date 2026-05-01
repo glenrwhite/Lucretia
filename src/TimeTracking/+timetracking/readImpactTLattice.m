@@ -135,14 +135,23 @@ for k = 1:numel(lat_lines)
 
     switch Bnpstp
     case 105
-        % RF cavity / solenoid via rfdata file
+        % RF cavity / solenoid via rfdata file.
+        % scale_B position depends on how many misalignment slots the
+        % ImpactT line carries before the trailing B-field scale:
+        %   RF cavity:   6 misal + optional scale_B at v(17) (often 0.0)
+        %   Solenoid:    5 misal + scale_B at v(end), e.g. the LCLS-style
+        %                sprintf("... 105 z 0.0 0.0 0.0 102 0.15 mx my mzx mzy mzz scale_B")
         z_edge   = v(5);
         scale_E  = v(6);
         f_RF     = v(7);
         phase_dg = v(8);
         file_id  = round(v(9));
         scale_B  = 0.0;
-        if numel(v) >= 17
+        if scale_E == 0 && numel(v) >= 11
+            % Pure solenoid: last token is the field scale (Tesla scale).
+            scale_B = v(end);
+        elseif numel(v) >= 17
+            % RF cavity with explicit B scale (rare; usually 0).
             scale_B = v(17);
         end
         path = fullfile(impactt_dir, sprintf('rfdata%d', file_id));
