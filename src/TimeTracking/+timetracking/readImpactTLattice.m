@@ -125,6 +125,11 @@ elem_z_max = 0;          % furthest downstream lab z (for geom suggestion)
 gun_z_edge = NaN;
 gun_field_zmin = NaN;
 gun_path = '';
+% Variable-dt schedule extracted from any type-(-4) "change_timestep"
+% control elements. ImpactT specifies these as z-based switches; for
+% lucretia-tt (which uses t-based dt switching) we estimate the time
+% the bunch centroid reaches each z and translate.
+dt_schedule = struct('z', {}, 'dt', {});
 
 for k = 1:numel(lat_lines)
     v = lat_lines{k}.vals;
@@ -174,7 +179,18 @@ for k = 1:numel(lat_lines)
                 'z', z_edge, 'length', L, 'gradient', gradient); %#ok<AGROW>
         end
         elem_z_max = max(elem_z_max, z_edge + L);
-    case {-2, -4, -5, -6, -11, -99}
+    case -4
+        % Change-timestep control element. ImpactT format:
+        %   "0 0 0 -4 0.0 0.0 z_switch new_dt /!name:..."
+        % i.e. v(7)=z_switch (m), v(8)=new_dt (s).
+        if numel(v) >= 8
+            dt_schedule(end+1).z  = v(7); %#ok<AGROW>
+            dt_schedule(end).dt   = v(8);
+        else
+            warnings{end+1} = sprintf( ...
+                'skipping %s (type -4 with too few fields)', nm); %#ok<AGROW>
+        end
+    case {-2, -5, -6, -11, -99}
         warnings{end+1} = sprintf('skipping %s (type %d, control element)', ...
                                   nm, Bnpstp); %#ok<AGROW>
     otherwise
@@ -233,8 +249,42 @@ geom.hi    = [ margin_xy,  margin_xy, margin_z_high];
 geom.ncell = ncellH;       % from ImpactT header (Nx Ny Nz)
 
 % --- Tracking suggestion ---
-tracking.dt      = max(dt0, 0.5e-12);   % bump up if ImpactT used very small dt
-tracking.n_steps = max(1000, round(n_steps0 / 100));   % scale down
+% Honour ImpactT's variable-dt schedule when present. ImpactT typically
+% starts with a small dt (~1e-13 s) for the cathode/gun region and
+% bumps to a larger dt (~4e-12 s) past the gun for speed. We translate
+% z_switch -> t_switch using a half-c estimate for the cathode->gun-exit
+% transit (avg beta ~ 0.5 from beta=0 at cathode to beta~0.997 just
+% past gun), then add Tini for the wall-clock origin.
+if isempty(dt_schedule)
+    tracking.dt        = max(dt0, 0.5e-12);
+    tracking.n_steps   = max(1000, round(n_steps0 / 100));
+    tracking.dt_change = [];
+    tracking.dt_after  = [];
+else
+    % Use ImpactT's initial dt (much smaller than the ImpactT n_steps
+    % we'd back out, so use the actual dt0).
+    tracking.dt = dt0;
+    % Take the first switch (most common ImpactT use); if multiple are
+    % present we warn and use the first.
+    if numel(dt_schedule) > 1
+        warnings{end+1} = sprintf( ...
+            'multiple dt-change schedules (%d); using only the first (z=%g, dt=%g)', ...
+            numel(dt_schedule), dt_schedule(1).z, dt_schedule(1).dt);
+    end
+    z_switch  = dt_schedule(1).z;
+    dt_after  = dt_schedule(1).dt;
+    c_light   = 299792458.0;
+    beta_avg  = 0.5;                          % cathode -> gun exit average
+    t_to_z    = z_switch / (beta_avg * c_light);
+    tracking.dt_change = Tini + t_to_z;
+    tracking.dt_after  = dt_after;
+    % n_steps suggestion: enough small-dt steps to reach the switch,
+    % plus enough big-dt steps to traverse the rest of the lattice at c.
+    n_pre  = ceil(t_to_z / tracking.dt);
+    z_post = max(elem_z_max - z_switch, 0);
+    n_post = ceil((z_post / c_light) / tracking.dt_after);
+    tracking.n_steps = n_pre + n_post + 200;  % small slack
+end
 tracking.t_start = Tini;     % match ImpactT's wall-clock start
 
 % --- Info / warnings ---
