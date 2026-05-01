@@ -74,6 +74,7 @@ for case_idx = 1:2
     tt.n_steps    = n_steps;
     tt.enable_space_charge = true;
     tt.sc_comoving         = is_comoving;
+    tt.sc_verbose          = 1;     % so recenter events appear in tt.last_log
 
     t_start = tic;
     tt.run();

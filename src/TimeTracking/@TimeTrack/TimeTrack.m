@@ -36,6 +36,7 @@ properties
     binary     = ''                                              % '' -> which('lucretia-tt')
     enable_space_charge = false                                  % toggles ParmParse space_charge.enabled
     sc_comoving         = false                                  % SC mesh follows the bunch in z
+    sc_verbose          = 0                                      % space_charge.verbose: 0 = quiet, 1 = print recenter / per-step diagnostics
     target              = 'cpu'                                  % 'cpu' | 'gpu'  -- combined with mpi_nranks selects the binary
     mpi_nranks          = 1                                      % >1 -> mpirun -np N (requires MPI-enabled binary)
     mpi_binary          = ''                                     % deprecated (use target+mpi_nranks); '' -> autodetect

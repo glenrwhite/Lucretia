@@ -100,6 +100,9 @@ if obj.enable_space_charge
     if isprop(obj, 'sc_comoving') && obj.sc_comoving
         fprintf(f, 'space_charge.comoving = 1\n');
     end
+    if isprop(obj, 'sc_verbose') && ~isempty(obj.sc_verbose) && obj.sc_verbose > 0
+        fprintf(f, 'space_charge.verbose = %d\n', round(obj.sc_verbose));
+    end
 end
 
 fprintf(f, '\nout_dir = %s\n', obj.output_dir);

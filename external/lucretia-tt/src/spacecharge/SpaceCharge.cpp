@@ -154,10 +154,16 @@ void SpaceCharge::recenter (amrex::Real z_new)
 
     ++m_n_recenters;
 
-    // Recenter events are significant (mesh moved, may indicate
-    // bunch outrunning the static box) -- always print one line.
-    amrex::Print() << "[SpaceCharge] recenter: z -> " << z_new
-                   << " m (recenter #" << m_n_recenters << ")\n";
+    // Recenter events used to print one line each, but with a co-moving
+    // mesh through a 5 m injector + small box you get hundreds of them
+    // and they swamp the verbose output. Gate behind space_charge.verbose
+    // so it's still available for debugging when explicitly requested.
+    int verbose = 0;
+    amrex::ParmParse("space_charge").query("verbose", verbose);
+    if (verbose > 0) {
+        amrex::Print() << "[SpaceCharge] recenter: z -> " << z_new
+                       << " m (recenter #" << m_n_recenters << ")\n";
+    }
 }
 
 
