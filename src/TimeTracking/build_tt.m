@@ -14,7 +14,10 @@ function build_tt(varargin)
 %   build_tt gpu-mpi      % CUDA + MPI multi-GPU (Linux only)
 %
 % Modifiers (any combination):
-%   clean      - rm -rf build/ before configuring
+%   clean      - rm -rf the target's build dir before configuring. With
+%                NO target given (`build_tt clean`), removes every
+%                existing build dir under external/lucretia-tt/ and exits
+%                (does not rebuild anything).
 %   debug      - CMAKE_BUILD_TYPE=Debug (default Release)
 %   nofft      - LucretiaTT_FFT=OFF (skip FFT-based Poisson; for early bring-up)
 %   noopmd     - LucretiaTT_OPENPMD=OFF (skip openPMD I/O; for early bring-up)
@@ -33,17 +36,19 @@ function build_tt(varargin)
 %
 % Also invokable as `build tt cpu`, `build tt clean`, etc. via build.m.
 
-target   = 'cpu' ;
-doClean  = false ;
-debug    = false ;
-nofft    = false ;
-noopmd   = false ;
-opmdMPI  = false ;
-verbose  = false ;
+target    = 'cpu' ;
+targetSet = false ;     % was a target explicitly given on the command line?
+doClean   = false ;
+debug     = false ;
+nofft     = false ;
+noopmd    = false ;
+opmdMPI   = false ;
+verbose   = false ;
 for iarg = 1:nargin
   switch lower(varargin{iarg})
     case {'cpu','cpu-mpi','gpu','gpu-mpi'}
-      target = lower(varargin{iarg}) ;
+      target    = lower(varargin{iarg}) ;
+      targetSet = true ;
     case 'clean',    doClean  = true ;
     case 'debug',    debug    = true ;
     case 'nofft',    nofft    = true ;
@@ -55,6 +60,32 @@ for iarg = 1:nargin
       warning('build_tt:unknownArg', 'Ignoring unknown argument: %s', ...
               varargin{iarg}) ;
   end
+end
+
+% `build_tt clean` (with no target) -> nuke every existing build dir
+% under external/lucretia-tt/ and stop. This matches the colloquial
+% meaning of "clean everything"; pair clean with a target (e.g.
+% `build_tt cpu clean`) to clean ONE build dir and rebuild it.
+if doClean && ~targetSet
+  thisDir  = fileparts(mfilename('fullpath')) ;
+  ttRoot   = fullfile(fileparts(fileparts(thisDir)), 'external', 'lucretia-tt') ;
+  if ~exist(ttRoot, 'dir')
+    error('build_tt:missing', 'lucretia-tt source not found at %s', ttRoot) ;
+  end
+  candidates = {'build', 'build_mpi', 'build_gpu', 'build_gpu_mpi'} ;
+  removed    = false ;
+  for ic = 1:numel(candidates)
+    bd = fullfile(ttRoot, candidates{ic}) ;
+    if exist(bd, 'dir')
+      fprintf('build_tt: removing %s\n', bd) ;
+      rmdir(bd, 's') ;
+      removed = true ;
+    end
+  end
+  if ~removed
+    fprintf('build_tt: nothing to clean (no build dirs under %s)\n', ttRoot) ;
+  end
+  return ;
 end
 
 % Resolve paths.  This file lives at src/TimeTracking/build_tt.m; lucretia-tt
