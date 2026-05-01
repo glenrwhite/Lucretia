@@ -235,20 +235,34 @@ for k = 1:numel(lat_lines)
 end
 
 % --- Build cathode source from beam params + first gun ---
+%
+% ImpactT convention for type-105 RF cavity (and our ImpactTField C++
+% element): the lattice-line z value (gun_z_edge here) corresponds to
+% file z = 0, and the field map's [zmin, zmax] maps to lab
+% [gun_z_edge + zmin, gun_z_edge + zmax]. For the LCLS / SLAC-style
+% 1.5-cell S-band gun the rfdata file is symmetric about file z=0
+% with zmin ~ -0.15 m and zmax ~ +0.15 m, AND the physical cathode
+% plane is at file z=0 (the peak-field point at the cathode surface).
+% So cathode_z = gun_z_edge, NOT gun_z_edge + zmin.
+%
+% (Earlier versions of this parser placed the cathode at gun_z_edge +
+% zmin -- the upstream end of the field map -- which left ~150 mm of
+% pre-cathode drift before particles encountered the gun field, and
+% the resulting RF-phase mismatch produced misleading low energies.)
 if isnan(gun_z_edge)
     warnings{end+1} = 'no gun found; cathode placed at z=0';
     cathode_z = 0.0;
 else
-    % Read first 4 lines of gun rfdata to get zmin
+    cathode_z = gun_z_edge;
+    % Optionally fall back to the legacy convention if the file is
+    % bizarrely shaped (kept for diagnostics only).
     try
         ffid = fopen(gun_path, 'r');
         h = textscan(ffid, '%f', 4);
         fclose(ffid);
-        gun_field_zmin = h{1}(2);
-        cathode_z = gun_z_edge + gun_field_zmin;
+        gun_field_zmin = h{1}(2); %#ok<NASGU>
     catch
-        warnings{end+1} = sprintf('cannot read gun rfdata %s; cathode at z=0', gun_path);
-        cathode_z = 0.0;
+        warnings{end+1} = sprintf('cannot read gun rfdata %s', gun_path);
     end
 end
 
