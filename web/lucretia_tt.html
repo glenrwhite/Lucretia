@@ -7,7 +7,7 @@
     <meta name="description" content="lucretia-tt is a standalone C++/CUDA time-based particle-in-cell tracker for the Lucretia accelerator-physics codebase, designed for photoinjector and capture-section simulation.">
     <link rel="stylesheet" href="lucretia.css">
 </head>
-<body>
+<body class="wide">
 
 <nav class="lucretia-nav">
     <div class="nav-inner">
@@ -27,9 +27,49 @@
     </div>
 </nav>
 
-
 <h1>lucretia-tt &mdash; time-based 3D PIC tracker</h1>
 
+<div class="docs-layout">
+
+    <aside class="docs-sidebar" aria-label="Page sections">
+        <p class="sidebar-title">On this page</p>
+        <ul class="sidebar-nav" id="sidebar-nav">
+            <li><a href="#overview">Overview</a></li>
+            <li><a href="#features">What it does</a></li>
+            <li><a href="#setup">Setup</a></li>
+            <li class="sub"><a href="#setup-mac">macOS</a></li>
+            <li class="sub"><a href="#setup-linux">Linux CPU</a></li>
+            <li class="sub"><a href="#setup-gpu">Linux GPU</a></li>
+            <li><a href="#building">Building</a></li>
+            <li><a href="#running">Running</a></li>
+            <li><a href="#mpi-numa">MPI &amp; NUMA</a></li>
+            <li><a href="#parallel-hdf5">Parallel HDF5</a></li>
+            <li><a href="#elements">Lattice elements</a></li>
+            <li class="sub"><a href="#elem-cathode">CathodeSource</a></li>
+            <li class="sub"><a href="#elem-monitor">BeamMonitor</a></li>
+            <li class="sub"><a href="#elem-drift">Drift3D</a></li>
+            <li class="sub"><a href="#elem-quad">QuadAnalytic</a></li>
+            <li class="sub"><a href="#elem-solenoid-an">SolenoidAnalytic</a></li>
+            <li class="sub"><a href="#elem-solenoid-3d">Solenoid3D</a></li>
+            <li class="sub"><a href="#elem-uniformb">UniformB</a></li>
+            <li class="sub"><a href="#elem-sw">SWCavity</a></li>
+            <li class="sub"><a href="#elem-tw">TWCavity</a></li>
+            <li class="sub"><a href="#elem-impactt">ImpactTField</a></li>
+            <li class="sub"><a href="#elem-fieldmap3d">FieldMap3D</a></li>
+            <li class="sub"><a href="#elem-seedbeam">SeedBeam</a></li>
+            <li><a href="#cathode-gen">Cathode beam generation</a></li>
+            <li><a href="#output">Output &amp; handoff</a></li>
+            <li><a href="#testing">Testing</a></li>
+            <li><a href="#repo">Repository layout</a></li>
+            <li><a href="#trouble">Troubleshooting</a></li>
+            <li><a href="#see-also">See also</a></li>
+        </ul>
+    </aside>
+
+    <main class="docs-main" id="docs-main">
+
+<section class="docs-section" id="overview">
+<h2>Overview <a class="section-link" href="#overview">#</a></h2>
 <p>
     <code>lucretia-tt</code> is a standalone C++/CUDA particle-in-cell tracker
     designed for the parts of an accelerator that Lucretia's <a href="tracking.html">s-based
@@ -39,7 +79,6 @@
     It lives in <code>external/lucretia-tt/</code> and is invoked from
     MATLAB via the <code>TimeTrack</code> class.
 </p>
-
 <p>
     Built on <a href="https://amrex-codes.github.io/amrex/">AMReX</a> +
     <a href="https://blast.lbl.gov/codes-ablastr/">ABLASTR</a> (the BSD-licensed
@@ -49,9 +88,10 @@
     <code>freezePlaneOut</code>, ready for the standard <code>TrackThru</code>
     pipeline.
 </p>
+</section>
 
-<h2>What it does</h2>
-
+<section class="docs-section" id="features">
+<h2>What it does <a class="section-link" href="#features">#</a></h2>
 <ul>
     <li><strong>Cathode emission</strong> with thermal MTE and image-charge return force</li>
     <li><strong>3D space charge</strong> via FFT-based open-BC Poisson (ABLASTR's IGF solver) with a precomputed self-force lookup table; co-moving SC mesh that follows the bunch in z</li>
@@ -60,7 +100,6 @@
     <li><strong>openPMD HDF5</strong> beam dumps; conversion to Lucretia <code>Beam</code> structs via <code>freezePlaneOut</code></li>
     <li><strong>ImpactT compatibility</strong>: <code>readImpactTLattice</code> parses an <code>ImpactT.in</code> file (incl. <code>rfdata*</code> field maps and variable-dt schedule) into a lucretia-tt setup; <code>CathodeLaserDist</code> generates ImpactT-format <code>partcl.data</code> from a Hammersley low-discrepancy sampler (no clumping)</li>
 </ul>
-
 <p>
     Target scale: 10<sup>7</sup> macroparticles routine, 10<sup>8</sup>
     occasional, on a multi-GPU workstation; CPU-MPI also supported and
@@ -68,27 +107,23 @@
     a 5&times;10<sup>7</sup>-macro / 1000-step run with space charge
     in roughly 15 minutes).
 </p>
+</section>
 
-
-<h2 id="setup">Setup</h2>
+<section class="docs-section" id="setup">
+<h2>Setup <a class="section-link" href="#setup">#</a></h2>
 
 <h3 id="setup-mac">macOS &mdash; development box</h3>
-
 <p>
     macOS is the supported authoring environment. Single-rank CPU-OpenMP
     runs are perfectly usable for tests and small physics experiments;
     multi-rank CPU-MPI also works for benchmarking the MPI path before
     you deploy. CUDA is Linux-only.
 </p>
-
 <p>Install the toolchain via Homebrew:</p>
-
 <pre><code>brew install cmake hdf5 ccache libomp
 brew install open-mpi      # only if you want to build the cpu-mpi target
 </code></pre>
-
 <p>Notes:</p>
-
 <ul>
     <li><code>libomp</code> is required because AppleClang doesn't ship native OpenMP. <code>build_tt</code> auto-detects it under <code>/opt/homebrew/opt/libomp</code> (Apple Silicon) or <code>/usr/local/opt/libomp</code> (Intel).</li>
     <li>Homebrew's <code>hdf5</code> formula provides serial HDF5. <code>hdf5-mpi</code> conflicts with <code>hdf5</code> &mdash; do <em>not</em> install it. The MPI build of lucretia-tt patches openPMD-api to use serial HDF5 (<code>BeamIO</code> MPI-gathers to rank 0 then writes serially), so the parallel HDF5 package is not needed.</li>
@@ -97,13 +132,11 @@ brew install open-mpi      # only if you want to build the cpu-mpi target
 </ul>
 
 <h3 id="setup-linux">Linux &mdash; CPU production / dev</h3>
-
 <p>
     For pure-CPU production runs (any modern x86-64 Linux distribution; tested
     on Ubuntu 22.04+) the dependency stack is the standard distro packages,
     plus a recent CMake.
 </p>
-
 <pre><code># CMake -- Kitware repo if your distro ships < 3.24
 sudo apt install -y ca-certificates gpg wget
 wget -O - https://apt.kitware.com/keys/kitware-archive-latest.asc 2&gt;/dev/null \
@@ -116,7 +149,6 @@ sudo apt update &amp;&amp; sudo apt install -y cmake
 sudo apt install -y build-essential git ccache pkg-config \
                     libhdf5-dev libopenmpi-dev openmpi-bin libomp-dev
 </code></pre>
-
 <p>
     Verify versions: <code>cmake --version</code> &ge; 3.24,
     <code>mpirun --version</code> shows OpenMPI 4.x or 5.x.
@@ -125,17 +157,12 @@ sudo apt install -y build-essential git ccache pkg-config \
 </p>
 
 <h3 id="setup-gpu">Linux &mdash; GPU build</h3>
-
 <p>
     For GPU runs, you additionally need a CUDA toolkit (12.x), a CUDA-aware
     MPI implementation (for multi-GPU runs with GPU-direct), and compatible
     NVIDIA drivers.
 </p>
-
-<p>
-    The two well-trodden paths:
-</p>
-
+<p>The two well-trodden paths:</p>
 <dl>
     <dt><strong>NVIDIA HPC SDK</strong> (apt repo)</dt>
     <dd>
@@ -154,16 +181,13 @@ sudo apt install -y build-essential git ccache pkg-config \
         target <code>cuda_arch=&lt;sm_NN&gt;</code>.
     </dd>
 </dl>
-
 <p>Verify CUDA-aware MPI is enabled before relying on multi-GPU runs:</p>
-
 <pre><code>nvidia-smi                                # GPUs visible, drivers OK
 nvcc --version                            # CUDA 12.x
 ompi_info --parsable --all | grep mpi_built_with_cuda_support:value
 # expected:
 # mca:mpi:base:param:mpi_built_with_cuda_support:value:true
 </code></pre>
-
 <p>
     Pass the appropriate CUDA architecture flag to CMake when building &mdash;
     e.g. <code>-DCMAKE_CUDA_ARCHITECTURES=80</code> for Ampere, <code>=90</code>
@@ -172,10 +196,10 @@ ompi_info --parsable --all | grep mpi_built_with_cuda_support:value
     time; pass the flag explicitly via direct CMake (see Building) if you need
     to target a specific arch.
 </p>
+</section>
 
-
-<h2 id="building">Building</h2>
-
+<section class="docs-section" id="building">
+<h2>Building <a class="section-link" href="#building">#</a></h2>
 <p>
     Builds are driven from MATLAB via <code>build_tt</code>, which lives at
     <code>src/TimeTracking/build_tt.m</code>. It runs CMake under the hood,
@@ -183,79 +207,34 @@ ompi_info --parsable --all | grep mpi_built_with_cuda_support:value
     stages the resulting binary into <code>src/TimeTracking/</code> for
     <code>which()</code>-based discovery.
 </p>
-
 <h3>Build targets</h3>
-
 <table>
     <thead>
-        <tr>
-            <th>Command</th>
-            <th>Backend</th>
-            <th>MPI</th>
-            <th>Build dir</th>
-            <th>Staged binary</th>
-            <th>Platform</th>
-        </tr>
+        <tr><th>Command</th><th>Backend</th><th>MPI</th><th>Build dir</th><th>Staged binary</th><th>Platform</th></tr>
     </thead>
     <tbody>
-        <tr>
-            <td><code>build_tt cpu</code></td>
-            <td>OpenMP</td>
-            <td>off</td>
-            <td><code>build/</code></td>
-            <td><code>lucretia-tt</code></td>
-            <td>Mac, Linux</td>
-        </tr>
-        <tr>
-            <td><code>build_tt cpu-mpi</code></td>
-            <td>OpenMP</td>
-            <td>on</td>
-            <td><code>build_mpi/</code></td>
-            <td><code>lucretia-tt_mpi</code></td>
-            <td>Mac, Linux</td>
-        </tr>
-        <tr>
-            <td><code>build_tt gpu</code></td>
-            <td>CUDA</td>
-            <td>off</td>
-            <td><code>build_gpu/</code></td>
-            <td><code>lucretia-tt_gpu</code></td>
-            <td>Linux</td>
-        </tr>
-        <tr>
-            <td><code>build_tt gpu-mpi</code></td>
-            <td>CUDA</td>
-            <td>on</td>
-            <td><code>build_gpu_mpi/</code></td>
-            <td><code>lucretia-tt_gpu_mpi</code></td>
-            <td>Linux</td>
-        </tr>
+        <tr><td><code>build_tt cpu</code></td>     <td>OpenMP</td><td>off</td><td><code>build/</code></td>         <td><code>lucretia-tt</code></td>        <td>Mac, Linux</td></tr>
+        <tr><td><code>build_tt cpu-mpi</code></td> <td>OpenMP</td><td>on</td> <td><code>build_mpi/</code></td>     <td><code>lucretia-tt_mpi</code></td>    <td>Mac, Linux</td></tr>
+        <tr><td><code>build_tt gpu</code></td>     <td>CUDA</td>  <td>off</td><td><code>build_gpu/</code></td>     <td><code>lucretia-tt_gpu</code></td>    <td>Linux</td></tr>
+        <tr><td><code>build_tt gpu-mpi</code></td> <td>CUDA</td>  <td>on</td> <td><code>build_gpu_mpi/</code></td> <td><code>lucretia-tt_gpu_mpi</code></td><td>Linux</td></tr>
     </tbody>
 </table>
-
 <p>Modifiers (any combination):</p>
-
 <ul>
     <li><code>clean</code> &mdash; <code>rm -rf</code> the target's build dir before configuring. With <em>no</em> target given (<code>build_tt clean</code>), removes every existing build dir under <code>external/lucretia-tt/</code> and exits without rebuilding.</li>
     <li><code>debug</code> &mdash; <code>CMAKE_BUILD_TYPE=Debug</code> (default Release)</li>
     <li><code>nofft</code> &mdash; skip the FFT-based Poisson solver (early bring-up only)</li>
     <li><code>noopmd</code> &mdash; skip openPMD I/O (early bring-up only)</li>
-    <li><code>opmd-mpi</code> &mdash; build openPMD-api with parallel HDF5 (<code>LucretiaTT_OPENPMD_MPI=ON</code>). Requires <code>hdf5-mpi</code> installed. Default off; see <a href="#parallel-hdf5">Parallel HDF5 (opt-in)</a>.</li>
+    <li><code>opmd-mpi</code> &mdash; build openPMD-api with parallel HDF5 (<code>LucretiaTT_OPENPMD_MPI=ON</code>). See <a href="#parallel-hdf5">Parallel HDF5 (opt-in)</a>.</li>
     <li><code>verbose</code> &mdash; pass <code>--verbose</code> to <code>cmake --build</code></li>
 </ul>
-
 <h3>Examples</h3>
-
-<p>From the MATLAB prompt, with Lucretia on the path:</p>
-
 <pre><code>build_tt cpu                   % macOS dev: fastest path to a working binary
 build_tt cpu-mpi clean         % full CPU+MPI rebuild from scratch
 build_tt gpu-mpi               % Linux: GPU production target
 build_tt clean                 % nuke every build dir; no rebuild
 </code></pre>
-
 <p>Equivalent direct CMake invocation (for CI or shell-only environments):</p>
-
 <pre><code>cd external/lucretia-tt
 cmake -S . -B build_gpu_mpi \
       -DLucretiaTT_COMPUTE=CUDA \
@@ -265,25 +244,22 @@ cmake -S . -B build_gpu_mpi \
       -DCMAKE_BUILD_TYPE=Release
 cmake --build build_gpu_mpi -j
 </code></pre>
-
 <p>
     On the first build, AMReX, ABLASTR, and openPMD-api are fetched and built
     via FetchContent &mdash; expect 15&ndash;25 minutes. Subsequent rebuilds
     are incremental and ccache-accelerated; touching one source file usually
     takes &lt; 30 seconds.
 </p>
+</section>
 
-
-<h2 id="running">Running</h2>
-
+<section class="docs-section" id="running">
+<h2>Running <a class="section-link" href="#running">#</a></h2>
 <p>
     Driving lucretia-tt from MATLAB uses the <code>TimeTrack</code> class
     (<code>src/TimeTracking/@TimeTrack</code>). It writes a ParmParse input
     file, invokes the staged binary, and reads back the openPMD dumps.
 </p>
-
 <h3>Minimal example: cyclotron in a uniform B<sub>z</sub></h3>
-
 <pre><code>tt = TimeTrack();
 tt.lattice = { ...
     timetracking.UniformB('name','B','Bz',1e-3), ...
@@ -299,13 +275,11 @@ tt.n_steps = 1000;
 tt.run();
 bunches = tt.readDumps();   % cell array of per-step structs
 </code></pre>
-
 <h3>Key TimeTrack properties</h3>
-
 <table>
     <thead><tr><th>Property</th><th>Default</th><th>Meaning</th></tr></thead>
     <tbody>
-        <tr><td><code>lattice</code></td><td><code>{}</code></td><td>Cell of element structs (see <a href="#elements">elements</a>)</td></tr>
+        <tr><td><code>lattice</code></td><td><code>{}</code></td><td>Cell of element structs (see <a href="#elements">Lattice elements</a>)</td></tr>
         <tr><td><code>beam</code></td><td>1 particle at origin</td><td>Initial particles. Use a <code>SeedBeam</code> with a pre-written HDF5 seed for non-trivial bunches.</td></tr>
         <tr><td><code>dt</code></td><td><code>1e-12</code></td><td>Initial time step (s)</td></tr>
         <tr><td><code>n_steps</code></td><td><code>100</code></td><td>Number of time steps</td></tr>
@@ -322,10 +296,10 @@ bunches = tt.readDumps();   % cell array of per-step structs
         <tr><td><code>output_dir</code></td><td><code>'diags'</code></td><td>openPMD output dir, relative to <code>work_dir</code></td></tr>
     </tbody>
 </table>
+</section>
 
-
-<h2 id="mpi-numa">MPI &amp; NUMA setup</h2>
-
+<section class="docs-section" id="mpi-numa">
+<h2>MPI &amp; NUMA setup <a class="section-link" href="#mpi-numa">#</a></h2>
 <p>
     On any multi-socket / multi-NUMA machine, getting MPI ranks pinned to
     NUMA domains and OpenMP threads bound to physical cores is essential
@@ -333,29 +307,20 @@ bunches = tt.readDumps();   % cell array of per-step structs
     harness (<code>tests/bench_scaling.m</code>) does this automatically;
     for production runs you set it up yourself.
 </p>
-
 <h3>Inspect the host first</h3>
-
 <pre><code>lscpu | grep -E "^(Socket|Core|NUMA node\(s\)|Model name|Thread)"</code></pre>
-
-<p>
-    What to look for:
-</p>
-
+<p>What to look for:</p>
 <ul>
     <li><strong>Sockets &times; Cores per socket</strong> &mdash; total physical cores</li>
     <li><strong>Thread(s) per core</strong> &mdash; usually 2 (hyperthreading); we want OpenMP to use only physical cores</li>
     <li><strong>NUMA node(s)</strong> &mdash; can exceed the socket count if Sub-NUMA Clustering (SNC) is enabled. On Intel Xeon Platinum SKUs each socket is often split into 2 NUMA domains, so a 2-socket box reports 4 NUMA nodes</li>
 </ul>
-
 <h3>Pick a (ranks, threads) combination</h3>
-
 <p>
     The general rule: <strong>one MPI rank per NUMA node</strong>, with
     <code>OMP_NUM_THREADS = (physical cores per NUMA)</code>. So on a box
     with N NUMA nodes of K cores each:
 </p>
-
 <pre><code>tt.mpi_nranks         = N;
 tt.mpirun_extra_args  = '--bind-to numa --map-by numa';
 % In the shell that launches MATLAB:
@@ -363,11 +328,7 @@ tt.mpirun_extra_args  = '--bind-to numa --map-by numa';
 %   export OMP_PLACES=cores
 %   export OMP_PROC_BIND=close
 </code></pre>
-
-<p>
-    Concrete examples for common Linux machine layouts:
-</p>
-
+<p>Concrete examples for common Linux machine layouts:</p>
 <table>
     <thead>
         <tr><th>Box</th><th>Sockets &times; cores</th><th>NUMA nodes</th><th>Recommended <code>(mpi_nranks, OMP_NUM_THREADS)</code></th></tr>
@@ -380,9 +341,7 @@ tt.mpirun_extra_args  = '--bind-to numa --map-by numa';
         <tr><td>8-GPU node (one rank per GPU)</td><td>&mdash;</td><td>&mdash;</td><td>(8, 1) for compute, OMP small</td></tr>
     </tbody>
 </table>
-
 <h3>Why these env vars matter</h3>
-
 <dl>
     <dt><code>OMP_PLACES=cores</code></dt>
     <dd>
@@ -410,20 +369,13 @@ tt.mpirun_extra_args  = '--bind-to numa --map-by numa';
         is what each rank's thread team gets.
     </dd>
 </dl>
-
 <h3>Strong-scaling sweep with <code>bench_scaling</code></h3>
-
-<p>
-    To answer "am I making full use of this machine?" on a fresh box, run
-    a strong-scaling sweep:
-</p>
-
+<p>To answer "am I making full use of this machine?" on a fresh box, run a strong-scaling sweep:</p>
 <pre><code>cd src/TimeTracking/tests
 results = bench_scaling('numa_bind', true);
 % Or with a bigger problem to expose the push-bound regime:
 results = bench_scaling('macros', 5e7, 'n_steps', 200, 'numa_bind', true);
 </code></pre>
-
 <p>
     The harness sweeps several <code>(nranks, threads)</code> combinations
     on the same problem, sets <code>OMP_PLACES</code> /
@@ -433,10 +385,10 @@ results = bench_scaling('macros', 5e7, 'n_steps', 200, 'numa_bind', true);
     one-rank-per-NUMA configuration (e.g. <code>(4, 24)</code> on a
     96-core 4-NUMA machine) at the top.
 </p>
+</section>
 
-
-<h2 id="parallel-hdf5">Parallel HDF5 (opt-in)</h2>
-
+<section class="docs-section" id="parallel-hdf5">
+<h2>Parallel HDF5 (opt-in) <a class="section-link" href="#parallel-hdf5">#</a></h2>
 <p>
     By default, lucretia-tt builds openPMD-api with serial HDF5 even when the
     application itself is built with MPI. <code>BeamIO</code> MPI-gathers every
@@ -444,23 +396,19 @@ results = bench_scaling('macros', 5e7, 'n_steps', 200, 'numa_bind', true);
     that works on macOS (Homebrew's serial <code>hdf5</code> conflicts with
     <code>hdf5-mpi</code>) and is the safest default everywhere.
 </p>
-
 <p>
     The cost is rank-0 serial I/O on every dump. For the design scale (10<sup>7</sup>
     macros, infrequent dumps) this is a fraction of a second per dump.
     At 10<sup>9</sup>+ macros with frequent dumps, the rank-0 serial path
     becomes a real bottleneck.
 </p>
-
 <p>
     On Linux with parallel HDF5 already installed (Spack <code>hdf5+mpi</code>,
     or apt <code>libhdf5-mpi-dev</code>), build with <code>opmd-mpi</code>
     to skip the patch and let openPMD-api use parallel HDF5:
 </p>
-
 <pre><code>build_tt gpu-mpi opmd-mpi clean
 </code></pre>
-
 <p>
     With <code>LucretiaTT_OPENPMD_MPI=ON</code>, openPMD-api links against
     parallel HDF5 and a future <code>BeamIO</code> rewrite can use collective
@@ -470,36 +418,354 @@ results = bench_scaling('macros', 5e7, 'n_steps', 200, 'numa_bind', true);
     <code>opmd-mpi</code>, so the build switch alone doesn't change I/O perf
     &mdash; it just unblocks the follow-up.
 </p>
+</section>
 
-
-<h2 id="elements">Lattice elements</h2>
-
+<section class="docs-section" id="elements">
+<h2>Lattice elements <a class="section-link" href="#elements">#</a></h2>
 <p>
     Lattice elements are MATLAB structs created by helper functions in the
     <code>+timetracking</code> package. A lattice is a cell array of such
-    structs, evaluated in order at each time step.
+    structs, evaluated in z-order at each time step. Each element specifies
+    its lab-frame z position; the integrator gates the field contribution to
+    the active region.
 </p>
 
-<table>
-    <thead><tr><th>Element</th><th>Helper</th><th>Notes</th></tr></thead>
-    <tbody>
-        <tr><td>Drift (3D)</td><td><code>timetracking.Drift3D</code></td><td>Field-free region; only the geometry matters.</td></tr>
-        <tr><td>Cathode emission</td><td><code>timetracking.CathodeSource</code></td><td>Gaussian temporal profile, thermal MTE; optional image-charge return force.</td></tr>
-        <tr><td>Quadrupole (analytic)</td><td><code>timetracking.QuadAnalytic</code></td><td>Linear field; thin-lens limit accurate to within a few percent for short quads.</td></tr>
-        <tr><td>Solenoid (analytic)</td><td><code>timetracking.SolenoidAnalytic</code></td><td>Paraxial off-axis Maxwell expansion of an on-axis B<sub>z</sub>(z) profile.</td></tr>
-        <tr><td>Solenoid (3D map)</td><td><code>timetracking.Solenoid3D</code></td><td>Reads a 2D (r,z) HDF5 field map and expands paraxially.</td></tr>
-        <tr><td>SW cavity</td><td><code>timetracking.SWCavity</code></td><td>Pure-sine standing-wave; sufficient for capture-section tests, not for cold-cathode emission (use <code>ImpactTField</code> + a real gun map for that).</td></tr>
-        <tr><td>TW cavity</td><td><code>timetracking.TWCavity</code></td><td>Travelling-wave structure with phase drift.</td></tr>
-        <tr><td>3D field map</td><td><code>timetracking.FieldMap3D</code></td><td>Trilinear interpolation of a 3D Cartesian E/B map.</td></tr>
-        <tr><td>ImpactT field</td><td><code>timetracking.ImpactTField</code></td><td>Reads ImpactT-format <code>rfdata*</code> Fourier-series field files. Handles both RF cavities (gun, linac) and pure-B solenoids (omega = 0 case).</td></tr>
-        <tr><td>Uniform B</td><td><code>timetracking.UniformB</code></td><td>Constant B field; useful for cyclotron tests.</td></tr>
-        <tr><td>Beam monitor</td><td><code>timetracking.BeamMonitor</code></td><td>Dump the bunch to openPMD every N steps.</td></tr>
-    </tbody>
-</table>
+<article class="elem-card" id="elem-cathode">
+    <h3>CathodeSource <a class="section-link" href="#elem-cathode">#</a></h3>
+    <p class="elem-purpose">Photoinjector emission source &mdash; emits macroparticles from a planar cathode at a given z, with optional self-image-charge plane.</p>
+    <table>
+        <thead><tr><th>Param</th><th>Default</th><th>Units</th><th>Meaning</th></tr></thead>
+        <tbody>
+            <tr><td><code>name</code></td><td><code>'CAT'</code></td><td>&mdash;</td><td>Element label</td></tr>
+            <tr><td><code>z_cathode</code></td><td><code>0.0</code></td><td>m</td><td>Lab-frame z of the cathode plane</td></tr>
+            <tr><td><code>image_charge</code></td><td><code>true</code></td><td>bool</td><td>Enable image-charge E<sub>z</sub> contribution from the conducting plane</td></tr>
+            <tr><td><code>n_macroparticles_total</code></td><td><code>0</code></td><td>&mdash;</td><td>Total macroparticles to emit (0 disables)</td></tr>
+            <tr><td><code>total_charge</code></td><td><code>0.0</code></td><td>C</td><td>Total bunch charge (sign included)</td></tr>
+            <tr><td><code>pulse_shape</code></td><td><code>'gaussian'</code></td><td>&mdash;</td><td><code>'gaussian'</code> (FWHM = pulse_duration) or <code>'flat_top'</code></td></tr>
+            <tr><td><code>pulse_duration</code></td><td><code>0.0</code></td><td>s</td><td>Temporal pulse width</td></tr>
+            <tr><td><code>pulse_t0</code></td><td><code>0.0</code></td><td>s</td><td>Centre time of the emission pulse</td></tr>
+            <tr><td><code>transverse_profile</code></td><td><code>'gaussian'</code></td><td>&mdash;</td><td><code>'gaussian'</code> (RMS = spot_size) or <code>'uniform_disk'</code></td></tr>
+            <tr><td><code>spot_size</code></td><td><code>0.0</code></td><td>m</td><td>Transverse spot-size parameter</td></tr>
+            <tr><td><code>mte</code></td><td><code>0.0</code></td><td>eV</td><td>Mean transverse energy of emitted electrons</td></tr>
+        </tbody>
+    </table>
+    <p>
+        Emission is gated by the temporal pulse profile; the optional
+        image-charge plane adds the standard E<sub>z</sub> contribution from
+        the conducting cathode surface. The MTE sets the initial thermal
+        transverse momentum spread. Set
+        <code>n_macroparticles_total = 0</code> to use the element purely as
+        an image-charge plane (with no emission).
+    </p>
+<pre><code>cat = timetracking.CathodeSource('z_cathode', 0, ...
+    'n_macroparticles_total', 1000, 'total_charge', 1e-9, ...
+    'pulse_shape', 'gaussian', 'pulse_duration', 10e-12, ...
+    'pulse_t0', 30e-12, 'transverse_profile', 'gaussian', ...
+    'spot_size', 0.5e-3, 'mte', 0.5);
+</code></pre>
+</article>
+
+<article class="elem-card" id="elem-monitor">
+    <h3>BeamMonitor <a class="section-link" href="#elem-monitor">#</a></h3>
+    <p class="elem-purpose">Diagnostic element that writes the full bunch state to an openPMD dump every N integrator steps.</p>
+    <table>
+        <thead><tr><th>Param</th><th>Default</th><th>Units</th><th>Meaning</th></tr></thead>
+        <tbody>
+            <tr><td><code>name</code></td><td><code>'mon'</code></td><td>&mdash;</td><td>Element label (used in the openPMD output filename)</td></tr>
+            <tr><td><code>dump_every</code></td><td><code>1</code></td><td>steps</td><td>Write a dump every N integrator steps (must be &ge; 1)</td></tr>
+        </tbody>
+    </table>
+    <p>
+        A monitor records only &mdash; it has no field, no length, and does
+        not modify the beam. Cadence is in integrator steps, not time or
+        distance. Multiple monitors with different <code>dump_every</code>
+        can coexist.
+    </p>
+<pre><code>mon = timetracking.BeamMonitor('name', 'm1', 'dump_every', 10);
+</code></pre>
+</article>
+
+<article class="elem-card" id="elem-drift">
+    <h3>Drift3D <a class="section-link" href="#elem-drift">#</a></h3>
+    <p class="elem-purpose">Field-free drift segment of fixed length.</p>
+    <table>
+        <thead><tr><th>Param</th><th>Default</th><th>Units</th><th>Meaning</th></tr></thead>
+        <tbody>
+            <tr><td><code>name</code></td><td><code>'drift'</code></td><td>&mdash;</td><td>Element label</td></tr>
+            <tr><td><code>length</code></td><td><code>1.0</code></td><td>m</td><td>Drift length along z</td></tr>
+        </tbody>
+    </table>
+    <p>
+        No field, no aperture &mdash; particles propagate purely under their
+        existing momentum. Used to set the spacing between active elements
+        in the z-ordered lattice.
+    </p>
+<pre><code>d1 = timetracking.Drift3D('name', 'd1', 'length', 1.0);
+</code></pre>
+</article>
+
+<article class="elem-card" id="elem-quad">
+    <h3>QuadAnalytic <a class="section-link" href="#elem-quad">#</a></h3>
+    <p class="elem-purpose">Hard-edge magnetic quadrupole with a linear analytic field profile.</p>
+    <table>
+        <thead><tr><th>Param</th><th>Default</th><th>Units</th><th>Meaning</th></tr></thead>
+        <tbody>
+            <tr><td><code>name</code></td><td><code>'Q'</code></td><td>&mdash;</td><td>Element label</td></tr>
+            <tr><td><code>z</code></td><td><code>0.0</code></td><td>m</td><td>Lab-frame z of the upstream face</td></tr>
+            <tr><td><code>length</code></td><td><code>0.1</code></td><td>m</td><td>Active length along z</td></tr>
+            <tr><td><code>gradient</code></td><td><code>0.0</code></td><td>T/m</td><td>Quadrupole gradient G</td></tr>
+        </tbody>
+    </table>
+    <p>
+        Inside the active region the field is
+        <code>B_x = G&middot;y</code>, <code>B_y = G&middot;x</code>. Hard
+        edges: the field is exactly zero outside <code>[z, z+length]</code>;
+        no fringe-field model. Sign of <code>gradient</code> sets focusing /
+        defocusing plane.
+    </p>
+<pre><code>q1 = timetracking.QuadAnalytic('z', 0.5, 'length', 0.1, 'gradient', 5.0);
+</code></pre>
+</article>
+
+<article class="elem-card" id="elem-solenoid-an">
+    <h3>SolenoidAnalytic <a class="section-link" href="#elem-solenoid-an">#</a></h3>
+    <p class="elem-purpose">Solenoid with a Gaussian on-axis B<sub>z</sub> profile, with paraxial off-axis extension.</p>
+    <table>
+        <thead><tr><th>Param</th><th>Default</th><th>Units</th><th>Meaning</th></tr></thead>
+        <tbody>
+            <tr><td><code>name</code></td><td><code>'SOL'</code></td><td>&mdash;</td><td>Element label</td></tr>
+            <tr><td><code>z</code></td><td><code>0.0</code></td><td>m</td><td>Lab-frame z of the upstream face</td></tr>
+            <tr><td><code>length</code></td><td><code>0.2</code></td><td>m</td><td>Active length along z</td></tr>
+            <tr><td><code>peak_Bz</code></td><td><code>0.0</code></td><td>T</td><td>Peak on-axis longitudinal field</td></tr>
+            <tr><td><code>sigma</code></td><td><code>0.03</code></td><td>m</td><td>Gaussian sigma of the longitudinal profile</td></tr>
+            <tr><td><code>z_peak</code></td><td><code>length/2</code></td><td>m</td><td>Peak position relative to element start (default = midpoint)</td></tr>
+        </tbody>
+    </table>
+    <p>
+        On-axis field is
+        <code>B_z = peak_Bz &middot; exp(-((z_local - z_peak)/sigma)<sup>2</sup>)</code>.
+        Off-axis the radial component uses the paraxial approximation
+        <code>B_r = -(r/2) dB_z/dz</code>, which holds for <code>r &lt;&lt; sigma</code>.
+        <code>z_peak</code> is measured from the element's upstream face.
+    </p>
+<pre><code>sol = timetracking.SolenoidAnalytic('z', 0.5, 'length', 0.2, ...
+    'peak_Bz', 0.1, 'sigma', 0.03, 'z_peak', 0.1);
+</code></pre>
+</article>
+
+<article class="elem-card" id="elem-solenoid-3d">
+    <h3>Solenoid3D <a class="section-link" href="#elem-solenoid-3d">#</a></h3>
+    <p class="elem-purpose">Solenoid driven by a measured/simulated 2D B<sub>z</sub>(r,z) map loaded from HDF5.</p>
+    <table>
+        <thead><tr><th>Param</th><th>Default</th><th>Units</th><th>Meaning</th></tr></thead>
+        <tbody>
+            <tr><td><code>name</code></td><td><code>'SOL3D'</code></td><td>&mdash;</td><td>Element label</td></tr>
+            <tr><td><code>z</code></td><td><code>0.0</code></td><td>m</td><td>Lab-frame z of the upstream face</td></tr>
+            <tr><td><code>length</code></td><td><code>0.2</code></td><td>m</td><td>Active length along z</td></tr>
+            <tr><td><code>path</code></td><td><em>required</em></td><td>&mdash;</td><td>Path to HDF5 field map</td></tr>
+        </tbody>
+    </table>
+    <p>
+        The HDF5 file (lucretia-tt schema) supplies <code>/Bz</code> shape
+        <code>(Nz, Nr)</code>, <code>/grid_spacing = [dr, dz]</code>, and
+        <code>/grid_origin = [r0, z0]</code> (relative to element start;
+        <code>r0</code> is typically 0). <code>B_r</code> is reconstructed
+        paraxially from <code>dB_z/dz</code> at gather time, so accuracy
+        degrades for large r/sigma. Use
+        <code>timetracking.writeFieldMap2D</code> to author test files.
+    </p>
+<pre><code>sol3d = timetracking.Solenoid3D('z', 0.5, 'length', 0.2, ...
+    'path', 'sol_map.h5');
+</code></pre>
+</article>
+
+<article class="elem-card" id="elem-uniformb">
+    <h3>UniformB <a class="section-link" href="#elem-uniformb">#</a></h3>
+    <p class="elem-purpose">Uniform constant magnetic field &mdash; primarily a unit-test / debug element.</p>
+    <table>
+        <thead><tr><th>Param</th><th>Default</th><th>Units</th><th>Meaning</th></tr></thead>
+        <tbody>
+            <tr><td><code>name</code></td><td><code>'UB'</code></td><td>&mdash;</td><td>Element label</td></tr>
+            <tr><td><code>Bx</code></td><td><code>0.0</code></td><td>T</td><td>x-component of field</td></tr>
+            <tr><td><code>By</code></td><td><code>0.0</code></td><td>T</td><td>y-component of field</td></tr>
+            <tr><td><code>Bz</code></td><td><code>0.0</code></td><td>T</td><td>z-component of field</td></tr>
+        </tbody>
+    </table>
+    <p>
+        Returns a constant field everywhere this element is queried by the
+        integrator. No spatial or temporal variation. Useful for cyclotron
+        regression tests and quick sanity checks.
+    </p>
+<pre><code>ub = timetracking.UniformB('name', 'sol1', 'Bz', 0.01);
+</code></pre>
+</article>
+
+<article class="elem-card" id="elem-sw">
+    <h3>SWCavity <a class="section-link" href="#elem-sw">#</a></h3>
+    <p class="elem-purpose">Analytic N-cell &pi;-mode standing-wave RF cavity (paraxial 3D extension of the on-axis E<sub>z</sub>).</p>
+    <table>
+        <thead><tr><th>Param</th><th>Default</th><th>Units</th><th>Meaning</th></tr></thead>
+        <tbody>
+            <tr><td><code>name</code></td><td><code>'SW'</code></td><td>&mdash;</td><td>Element label</td></tr>
+            <tr><td><code>z</code></td><td><code>0.0</code></td><td>m</td><td>Lab-frame z of the upstream face</td></tr>
+            <tr><td><code>length</code></td><td><code>0.1</code></td><td>m</td><td>Active length</td></tr>
+            <tr><td><code>n_cells</code></td><td><code>1</code></td><td>&mdash;</td><td>Number of &pi;-mode cells (&ge; 1)</td></tr>
+            <tr><td><code>f_RF</code></td><td><code>2.856e9</code></td><td>Hz</td><td>RF frequency</td></tr>
+            <tr><td><code>peak_field</code></td><td><code>0.0</code></td><td>V/m</td><td>Peak on-axis E<sub>z</sub></td></tr>
+            <tr><td><code>phase</code></td><td><code>0.0</code></td><td>rad</td><td>RF phase offset</td></tr>
+        </tbody>
+    </table>
+    <p>
+        On-axis
+        <code>E_z = peak_field &middot; sin(N&pi; z<sub>local</sub>/length) &middot; cos(&omega; t + phase)</code>;
+        transverse E and B are reconstructed paraxially from Maxwell's
+        equations. Note: the pure-sine longitudinal envelope cannot extract
+        cold electrons from a cathode (no E<sub>z</sub> at z<sub>local</sub> = 0).
+        For gun-quality field profiles use
+        <a href="#elem-impactt"><code>ImpactTField</code></a> or
+        <a href="#elem-fieldmap3d"><code>FieldMap3D</code></a>.
+    </p>
+<pre><code>sw = timetracking.SWCavity('z', 0, 'length', 0.1, 'n_cells', 1, ...
+    'f_RF', 2.856e9, 'peak_field', 100e6, 'phase', 0);
+</code></pre>
+</article>
+
+<article class="elem-card" id="elem-tw">
+    <h3>TWCavity <a class="section-link" href="#elem-tw">#</a></h3>
+    <p class="elem-purpose">Forward-propagating TM travelling-wave RF cavity at constant amplitude.</p>
+    <table>
+        <thead><tr><th>Param</th><th>Default</th><th>Units</th><th>Meaning</th></tr></thead>
+        <tbody>
+            <tr><td><code>name</code></td><td><code>'TW'</code></td><td>&mdash;</td><td>Element label</td></tr>
+            <tr><td><code>z</code></td><td><code>0.0</code></td><td>m</td><td>Lab-frame z of the upstream face</td></tr>
+            <tr><td><code>length</code></td><td><code>0.1</code></td><td>m</td><td>Active length</td></tr>
+            <tr><td><code>f_RF</code></td><td><code>2.856e9</code></td><td>Hz</td><td>RF frequency</td></tr>
+            <tr><td><code>peak_field</code></td><td><code>0.0</code></td><td>V/m</td><td>On-axis E<sub>z</sub> amplitude</td></tr>
+            <tr><td><code>phase</code></td><td><code>0.0</code></td><td>rad</td><td>RF phase offset</td></tr>
+            <tr><td><code>v_phase</code></td><td><code>c</code></td><td>m/s</td><td>Phase velocity along z</td></tr>
+        </tbody>
+    </table>
+    <p>
+        On-axis
+        <code>E_z = peak_field &middot; cos(&omega; t - k_z z<sub>local</sub> + phase)</code>
+        with <code>k_z = &omega;/v_phase</code>. Constant amplitude (no
+        envelope/taper). For <code>v_phase = c</code> the wave is matched to
+        a relativistic beam; deviation from c is the only handle for
+        synchronous-phase tuning here.
+    </p>
+<pre><code>tw = timetracking.TWCavity('z', 0, 'length', 0.1, ...
+    'f_RF', 2.856e9, 'peak_field', 100e6, 'phase', 0);
+</code></pre>
+</article>
+
+<article class="elem-card" id="elem-impactt">
+    <h3>ImpactTField <a class="section-link" href="#elem-impactt">#</a></h3>
+    <p class="elem-purpose">Element backed by an ImpactT-format <code>rfdata</code> Fourier field map (E<sub>z</sub> and/or B<sub>z</sub>) &mdash; used for both RF cavities and DC solenoids.</p>
+    <table>
+        <thead><tr><th>Param</th><th>Default</th><th>Units</th><th>Meaning</th></tr></thead>
+        <tbody>
+            <tr><td><code>name</code></td><td><code>'IT'</code></td><td>&mdash;</td><td>Element label</td></tr>
+            <tr><td><code>z</code></td><td><code>0.0</code></td><td>m</td><td>Lab-frame z that maps to the file's intrinsic z = 0</td></tr>
+            <tr><td><code>path</code></td><td><em>required</em></td><td>&mdash;</td><td>Path to the ImpactT rfdata file</td></tr>
+            <tr><td><code>scale_E</code></td><td><code>0.0</code></td><td>V/m</td><td>Scale on the on-axis E<sub>z</sub> Fourier sum</td></tr>
+            <tr><td><code>scale_B</code></td><td><code>0.0</code></td><td>T</td><td>Scale on the on-axis B<sub>z</sub> Fourier sum</td></tr>
+            <tr><td><code>f_RF</code></td><td><code>0.0</code></td><td>Hz</td><td>RF frequency (0 &rarr; static field)</td></tr>
+            <tr><td><code>phase_deg</code></td><td><code>0.0</code></td><td>deg</td><td>RF phase offset (converted to radians for the kernel)</td></tr>
+        </tbody>
+    </table>
+    <p>
+        The rfdata file contains two Fourier blocks (E<sub>z</sub> then
+        B<sub>z</sub>). The element is gated to
+        <code>z<sub>lab</sub> &isin; [z + z<sub>min</sub>, z + z<sub>max</sub>]</code>,
+        where z<sub>min</sub>/z<sub>max</sub> come from the file. Time
+        dependence is <code>cos(2&pi; f_RF t + phase_rad)</code> on both
+        fields; with <code>f_RF = 0</code> it collapses to a constant
+        <code>cos(phase_rad)</code> &mdash; that's how solenoids work.
+        Note that <code>z</code> maps the file's intrinsic z = 0, so to place
+        a gun cathode you set
+        <code>z_cathode = z + z<sub>min</sub></code>, not <code>z</code>.
+    </p>
+<pre><code>% RF gun (2.856 GHz)
+gun = timetracking.ImpactTField('z', 0, 'path', 'rfdata201', ...
+    'scale_E', 4.75282e7, 'f_RF', 2.856e9, 'phase_deg', 304.668);
+
+% DC bucking solenoid
+buck = timetracking.ImpactTField('z', 0.0422, 'path', 'rfdata102', ...
+    'scale_B', 0.219982);
+</code></pre>
+</article>
+
+<article class="elem-card" id="elem-fieldmap3d">
+    <h3>FieldMap3D <a class="section-link" href="#elem-fieldmap3d">#</a></h3>
+    <p class="elem-purpose">Generic 3D Cartesian field-map element loaded from a lucretia-tt-schema HDF5 file, optionally RF-modulated.</p>
+    <table>
+        <thead><tr><th>Param</th><th>Default</th><th>Units</th><th>Meaning</th></tr></thead>
+        <tbody>
+            <tr><td><code>name</code></td><td><code>'FM3D'</code></td><td>&mdash;</td><td>Element label</td></tr>
+            <tr><td><code>z</code></td><td><code>0.0</code></td><td>m</td><td>Lab-frame z of the upstream face</td></tr>
+            <tr><td><code>length</code></td><td><code>0.1</code></td><td>m</td><td>Active length</td></tr>
+            <tr><td><code>path</code></td><td><em>required</em></td><td>&mdash;</td><td>Path to HDF5 field map</td></tr>
+            <tr><td><code>rf_modulated</code></td><td><code>false</code></td><td>bool</td><td>Multiply field by <code>cos(&omega; t + phase)</code></td></tr>
+            <tr><td><code>f_RF</code></td><td><code>0.0</code></td><td>Hz</td><td>RF frequency (used if <code>rf_modulated</code>)</td></tr>
+            <tr><td><code>phase</code></td><td><code>0.0</code></td><td>rad</td><td>RF phase offset</td></tr>
+        </tbody>
+    </table>
+    <p>
+        The HDF5 file provides at least one of
+        <code>/Bx /By /Bz</code> or <code>/Ex /Ey /Ez</code> as datasets
+        shaped <code>(Nz, Ny, Nx)</code> (matches MATLAB's natural axis
+        order &mdash; C++ readers consume the same), plus
+        <code>/grid_spacing = [dx, dy, dz]</code> and
+        <code>/grid_origin = [x0, y0, z0]</code> relative to the element
+        start z. With <code>rf_modulated = true</code> the entire static
+        map is multiplied by a single time-harmonic factor. Use
+        <code>timetracking.writeFieldMap3D</code> to author test files.
+    </p>
+<pre><code>% Static map
+fm = timetracking.FieldMap3D('z', 0, 'length', 0.1, 'path', 'fields.h5');
+
+% RF-modulated cavity map
+rfm = timetracking.FieldMap3D('z', 0, 'length', 0.1, ...
+    'path', 'rf_cavity.h5', 'rf_modulated', true, ...
+    'f_RF', 2.856e9, 'phase', 0);
+</code></pre>
+</article>
+
+<article class="elem-card" id="elem-seedbeam">
+    <h3>SeedBeam <a class="section-link" href="#elem-seedbeam">#</a></h3>
+    <p class="elem-purpose">Initial bunch specification &mdash; not a lattice element, but the input particle source for <code>TimeTrack</code>. Two modes: simple colocated bunch, or a custom HDF5 seed.</p>
+    <table>
+        <thead><tr><th>Param</th><th>Default</th><th>Units</th><th>Meaning</th></tr></thead>
+        <tbody>
+            <tr><td><code>n_particles</code></td><td><code>1</code></td><td>&mdash;</td><td>Macroparticle count for the colocated mode</td></tr>
+            <tr><td><code>x</code> / <code>y</code> / <code>z</code></td><td><code>0.0</code></td><td>m</td><td>Initial position</td></tr>
+            <tr><td><code>ux</code> / <code>uy</code> / <code>uz</code></td><td><code>0.0</code></td><td>m/s</td><td>Proper-velocity components (<code>u = &gamma; v</code>)</td></tr>
+            <tr><td><code>weight</code></td><td><code>1.0</code></td><td>&mdash;</td><td>Per-macroparticle weight</td></tr>
+            <tr><td><code>seed_file</code></td><td><code>''</code></td><td>&mdash;</td><td>Path to HDF5 bunch file (custom mode)</td></tr>
+        </tbody>
+    </table>
+    <p>
+        Components are <em>proper velocities</em>
+        (<code>u = &gamma; v</code>), not lab velocities. The beamline
+        direction is +z, so a forward beam has nonzero <code>uz</code>.
+        Charge and mass default to electron values inside the kernel. Pass
+        <code>seed_file</code> to override the colocated mode with a fully
+        custom bunch authored by <code>timetracking.writeBunchSeed</code>
+        or <code>CathodeLaserDist.writeBunchSeedH5</code>.
+    </p>
+<pre><code>% Simple colocated bunch
+b = timetracking.SeedBeam('n_particles', 1, 'uz', 1e7);
+
+% Custom bunch from HDF5
+b = timetracking.SeedBeam('seed_file', '/tmp/bunch.h5');
+</code></pre>
+</article>
+
+</section>
 
 
-<h2 id="cathode">Cathode beam generation</h2>
-
+<section class="docs-section" id="cathode-gen">
+<h2>Cathode beam generation <a class="section-link" href="#cathode-gen">#</a></h2>
 <p>
     For photoinjector simulations, <code>CathodeLaserDist</code>
     (<code>src/BeamGeneration/</code>) generates the initial particle
@@ -508,17 +774,13 @@ results = bench_scaling('macros', 5e7, 'n_steps', 200, 'numa_bind', true);
     macroparticles are quasi-uniformly spaced (no clumping that would
     otherwise drive micro-bunch instabilities in PIC simulation).
 </p>
-
 <p>Distributions supported, independently for transverse and longitudinal:</p>
-
 <ul>
     <li><strong>Gaussian</strong> &mdash; standard Normal, sigma controls scale</li>
     <li><strong>Super-Gaussian</strong> &mdash; <code>alpha=0.5</code> Gaussian-like with mild flat-top, <code>alpha&rarr;0</code> uniform-with-edges (matches distgen's deformable convention)</li>
     <li><strong>Uniform</strong> &mdash; flat in [-W, W] (transverse: disc r in [0, R])</li>
 </ul>
-
 <p>Cathode emission adds Maxwell-Boltzmann transverse momenta with mean transverse energy MTE [eV]; <code>pz</code> is half-Maxwell with a min cutoff to avoid trapped particles.</p>
-
 <pre><code>c = CathodeLaserDist();
 c.n_particles = 1e5;
 c.sigma_xy    = 475e-6;        c.r_type = 'super_gaussian';  c.r_alpha = 0.5;
@@ -530,27 +792,23 @@ Beam = c.generate();
 c.writePartclData('partcl.data');     % ImpactT-format text
 c.writeBunchSeedH5('seed.h5');        % lucretia-tt HDF5 seed
 </code></pre>
+</section>
 
-
-<h2 id="output">Output and handoff to Lucretia</h2>
-
+<section class="docs-section" id="output">
+<h2>Output and handoff to Lucretia <a class="section-link" href="#output">#</a></h2>
 <h3>Reading dumps</h3>
-
 <pre><code>bunches = tt.readDumps();
 % bunches{k}.x  - x positions (m)
 % bunches{k}.px - px momenta (kg.m/s)
 % bunches{k}.q, .w - charge and weight per macroparticle
 % bunches{k}.time, .step - simulation time and step index
 </code></pre>
-
 <h3>Freeze-plane handoff to TrackThru</h3>
-
 <p>
     To convert a captured time-based dump into a Lucretia <code>Beam</code>
     struct that <a href="tracking.html"><code>TrackThru</code></a> can
     consume:
 </p>
-
 <pre><code>beam = tt.freezePlaneOut('last');     % use the last dump
 % beam.Bunch.x is the standard 6 x N matrix:
 %   row 1: x   (m)
@@ -564,7 +822,6 @@ c.writeBunchSeedH5('seed.h5');        % lucretia-tt HDF5 seed
 % Hand off to standard Lucretia tracking:
 [stat, beam_out] = TrackThru(elem1, elem2, beam, 1, 1);
 </code></pre>
-
 <p>
     The conversion takes the dump at a fixed <em>time</em>, not a fixed
     <em>s</em>. For bunches that are short longitudinally compared to their
@@ -572,15 +829,14 @@ c.writeBunchSeedH5('seed.h5');        % lucretia-tt HDF5 seed
     exact. A truly z-triggered freeze plane that drift-corrects each particle
     to a common s is a future refinement.
 </p>
+</section>
 
-
-<h2 id="testing">Testing</h2>
-
+<section class="docs-section" id="testing">
+<h2>Testing <a class="section-link" href="#testing">#</a></h2>
 <p>
     The <code>tests/</code> directory holds a regression suite. Each test is
     a MATLAB function returning a single boolean <code>ok</code>.
 </p>
-
 <pre><code>cd Lucretia/src/TimeTracking/tests
 
 % Run them all (skipping the slow trackthru_handoff cross-check):
@@ -591,16 +847,15 @@ ok = test_cyclotron();
 ok = test_uniform_sphere();      % SC validation
 ok = test_freezeplane_handoff(); % cathode -> drift -> freezePlaneOut
 </code></pre>
-
 <p>
     For MPI builds, <code>test_mpi_smoke</code> runs cyclotron, uniform-sphere,
     and freezeplane both at <code>np=1</code> and <code>np=2</code> and
     confirms the two give bit-for-bit identical results.
 </p>
+</section>
 
-
-<h2 id="repo">Repository layout</h2>
-
+<section class="docs-section" id="repo">
+<h2>Repository layout <a class="section-link" href="#repo">#</a></h2>
 <pre><code>external/lucretia-tt/
 &#9500;&#9472;&#9472; CMakeLists.txt                   top-level superbuild
 &#9500;&#9472;&#9472; cmake/
@@ -627,25 +882,26 @@ src/TimeTracking/                    MATLAB front-end
 src/BeamGeneration/
 &#9492;&#9472;&#9472; CathodeLaserDist.m               native cold-start cathode distribution
 </code></pre>
+</section>
 
+<section class="docs-section" id="trouble">
+<h2>Troubleshooting <a class="section-link" href="#trouble">#</a></h2>
 
-<h2 id="trouble">Troubleshooting</h2>
-
-<h3 id="trouble-libomp">macOS &mdash; <code>libomp not found</code></h3>
+<h3>macOS &mdash; <code>libomp not found</code></h3>
 <p>
     AppleClang has no built-in OpenMP. Run <code>brew install libomp</code>.
     <code>build_tt</code> looks under <code>/opt/homebrew/opt/libomp</code>
     (Apple Silicon) or <code>/usr/local/opt/libomp</code> (Intel).
 </p>
 
-<h3 id="trouble-mpicxx">macOS MPI build &mdash; <code>MPI compiler wrappers not found</code></h3>
+<h3>macOS MPI build &mdash; <code>MPI compiler wrappers not found</code></h3>
 <p>
     Run <code>brew install open-mpi</code>. The wrappers <code>mpicc</code>
     and <code>mpicxx</code> need to be in <code>/opt/homebrew/bin</code> or
     <code>/usr/local/bin</code>.
 </p>
 
-<h3 id="trouble-cmake-glibcxx">Linux &mdash; <code>cmake: GLIBCXX_3.4.32 not found</code></h3>
+<h3>Linux &mdash; <code>cmake: GLIBCXX_3.4.32 not found</code></h3>
 <p>
     MATLAB on Linux ships its own (older) <code>libstdc++</code> /
     <code>libcurl</code> in <code>$matlabroot/sys/os/glnxa64</code> and
@@ -654,18 +910,18 @@ src/BeamGeneration/
     <code>build_tt</code> handles this automatically by stripping
     MATLAB-rooted entries from <code>LD_LIBRARY_PATH</code> when spawning
     cmake / make / the lucretia-tt binary itself. If you hit the error,
-    pull a recent <code>build_tt.m</code> &mdash; the fix is in the helper
+    pull a recent <code>build_tt.m</code> &mdash; the fix lives in the helper
     <code>+timetracking/linux_matlab_env_prefix.m</code>.
 </p>
 
-<h3 id="trouble-omp-mpi">MPI launch warning &mdash; <code>oversubscribing CPU cores with OMP threads</code></h3>
+<h3>MPI launch warning &mdash; <code>oversubscribing CPU cores with OMP threads</code></h3>
 <p>
     AMReX warns when <code>(num_ranks &times; OMP_NUM_THREADS) &gt; num_cores</code>.
     Set <code>OMP_NUM_THREADS</code> in the shell that launches MATLAB so each
     rank gets a fair share. See <a href="#mpi-numa">MPI &amp; NUMA setup</a>.
 </p>
 
-<h3 id="trouble-mpi-binary">MPI run &mdash; <code>no MPI binary found</code></h3>
+<h3>MPI run &mdash; <code>no MPI binary found</code></h3>
 <p>
     You set <code>tt.mpi_nranks &gt; 1</code> but the corresponding MPI
     binary isn't in <code>src/TimeTracking/</code>. Build it: <code>build_tt cpu-mpi</code>
@@ -673,7 +929,7 @@ src/BeamGeneration/
     <code>build_tt</code> command for the requested target+MPI combination.
 </p>
 
-<h3 id="trouble-perm">MPI run &mdash; <code>Permission denied</code> / <code>cannot execute binary</code></h3>
+<h3>MPI run &mdash; <code>Permission denied</code> / <code>cannot execute binary</code></h3>
 <p>
     The staged binary is missing <code>+x</code>, or it's a binary built
     for a different architecture (e.g. an arm64 macOS build copied onto
@@ -682,7 +938,7 @@ src/BeamGeneration/
     <code>build_tt cpu clean</code>.
 </p>
 
-<h3 id="trouble-empty-dump">Run completes but <code>readDumps</code> returns empty</h3>
+<h3>Run completes but <code>readDumps</code> returns empty</h3>
 <p>
     The most common cause is a particle bunch that drifts past the
     BeamMonitor without ever overlapping its time window, or an emission
@@ -692,17 +948,20 @@ src/BeamGeneration/
     bunch's expected emission time when seeding from
     <code>CathodeLaserDist</code> or an ImpactT-derived configuration.
 </p>
+</section>
 
-
-<h2>See also</h2>
-
+<section class="docs-section" id="see-also">
+<h2>See also <a class="section-link" href="#see-also">#</a></h2>
 <ul>
     <li><a href="tracking.html">s-based tracking</a> &mdash; Lucretia's <code>TrackThru</code> and <code>Track</code> class. <code>freezePlaneOut</code> bridges to here.</li>
     <li><a href="LSC.html">Longitudinal space charge</a> &mdash; the s-based LSC model, useful for regions where 3D space charge isn't needed.</li>
     <li><a href="fieldmap.html">Field maps</a> &mdash; s-based field-map elements. For 3D field maps in the time-based world see <code>FieldMap3D</code> and <code>ImpactTField</code>.</li>
     <li><a href="beam_generation.html">Beam generation</a> &mdash; Lucretia tools that produce <code>Beam</code> structs. lucretia-tt accepts a similar struct via the <code>beam</code> property, or an HDF5 seed file via <code>SeedBeam</code>.</li>
 </ul>
+</section>
 
+    </main>
+</div>
 
 <footer class="site-footer">
     <p>
@@ -711,6 +970,38 @@ src/BeamGeneration/
         the MATLAB front-end is in <code>src/TimeTracking/</code>.
     </p>
 </footer>
+
+<script>
+(function () {
+    var sidebarLinks = document.querySelectorAll('#sidebar-nav a');
+    // Observe top-level docs-sections AND each elem-card so the sidebar
+    // tracks element subsections too.
+    var sections = document.querySelectorAll('.docs-section, .elem-card, .docs-section h3[id]');
+
+    function setActive(id) {
+        sidebarLinks.forEach(function (a) {
+            if (a.getAttribute('href') === '#' + id) a.classList.add('active');
+            else                                     a.classList.remove('active');
+        });
+    }
+
+    if ('IntersectionObserver' in window) {
+        var observer = new IntersectionObserver(function (entries) {
+            var visible = entries.filter(function (e) { return e.isIntersecting; });
+            if (visible.length === 0) return;
+            visible.sort(function (a, b) { return a.boundingClientRect.top - b.boundingClientRect.top; });
+            setActive(visible[0].target.id);
+        }, {
+            rootMargin: '-80px 0px -60% 0px',
+            threshold: 0
+        });
+        sections.forEach(function (s) { if (s.id) observer.observe(s); });
+    }
+
+    var initial = (location.hash || '#overview').slice(1);
+    setActive(initial);
+})();
+</script>
 
 </body>
 </html>

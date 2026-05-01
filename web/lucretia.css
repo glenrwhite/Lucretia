@@ -394,6 +394,43 @@ img[src="SLAC_whitebkgd.jpg"] {
     color: var(--lucretia-pink-dark);
     font-weight: 600;
 }
+.docs-sidebar ul.sidebar-nav li.sub a {
+    padding-left: 24px;
+    font-size: 0.88em;
+    color: var(--muted);
+}
+.docs-sidebar ul.sidebar-nav li.sub a.active {
+    color: var(--lucretia-pink-dark);
+}
+
+/* Element-detail card on the lucretia-tt page */
+.elem-card {
+    border: 1px solid var(--rule);
+    border-radius: 6px;
+    padding: 14px 18px 8px;
+    margin: 1.2em 0;
+    background: var(--bg);
+    scroll-margin-top: 72px;
+}
+.elem-card h3 {
+    margin-top: 0;
+    font-size: 1.05em;
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+}
+.elem-card h3 a.section-link {
+    font-size: 0.8em;
+    font-weight: 500;
+    color: var(--muted);
+}
+.elem-card h3 a.section-link:hover { color: var(--lucretia-pink); }
+.elem-card .elem-purpose {
+    margin: 0 0 0.6em 0;
+    color: var(--text);
+    font-size: 0.95em;
+}
+.elem-card table { margin: 0.4em 0; font-size: 0.9em; }
 
 .docs-main { min-width: 0; }
 .docs-main h1 {
