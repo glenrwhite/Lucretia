@@ -18,12 +18,125 @@ constexpr amrex::Real kElectronCharge = -1.602176634e-19;  // C
 constexpr amrex::Real kElectronMass   =  9.1093837015e-31; // kg
 constexpr amrex::Real kPi             =  3.14159265358979323846;
 constexpr amrex::Real kSqrt2          =  1.41421356237309504880;
-constexpr amrex::Real kFwhmToSigma    =  1.0 / (2.0 * 1.17741002251547469);  // 1/(2 sqrt(2 ln 2))
+constexpr amrex::Real kFwhmToSigma    =  1.0 / (2.0 * 1.17741002251547469);
 
-// Mid-point-rule estimate for arbitrary cdfs. We use closed forms below
-// for the supported pulse shapes, but this is the fallback.
+constexpr int kSGTableN = 4096;     // matches the MATLAB CathodeLaserDist sampler
 
 } // anonymous
+
+
+void CathodeSource::build_lookup_tables ()
+{
+    using amrex::Real;
+
+    // ---- Temporal SuperGaussian: forward CDF on a uniform t-grid ----
+    if (m_pulse_shape == PulseShape::SuperGaussian && m_pulse_duration > 0.0) {
+        const Real sigma = m_pulse_duration;          // sigma (not FWHM) for SG
+        const Real alpha = std::max(m_pulse_alpha, Real(1e-3));
+        const Real p     = Real(1.0) / alpha;
+        const Real T_max = Real(4.0) * sigma;
+
+        m_pulse_cdf_t_lo = m_pulse_t0 - T_max;
+        m_pulse_cdf_t_hi = m_pulse_t0 + T_max;
+        m_pulse_cdf_table.assign(kSGTableN, Real(0.0));
+
+        // Compute pdf on the uniform grid, then cumsum & normalise.
+        std::vector<Real> pdf(kSGTableN);
+        for (int i = 0; i < kSGTableN; ++i) {
+            const Real t_grid = m_pulse_cdf_t_lo
+                + (m_pulse_cdf_t_hi - m_pulse_cdf_t_lo) * Real(i) / Real(kSGTableN - 1);
+            const Real arg    = std::abs(t_grid - m_pulse_t0) / (kSqrt2 * sigma);
+            const Real env    = std::exp(-std::pow(arg, p));
+            const Real ramp   = Real(1.0) + m_pulse_slope * (t_grid - m_pulse_t0) / T_max;
+            pdf[i] = env * std::max(ramp, Real(0.0));
+        }
+        Real sum = 0.0;
+        for (int i = 0; i < kSGTableN; ++i) {
+            sum += pdf[i];
+            m_pulse_cdf_table[i] = sum;
+        }
+        if (sum > 0.0) {
+            for (int i = 0; i < kSGTableN; ++i) m_pulse_cdf_table[i] /= sum;
+        }
+    } else {
+        m_pulse_cdf_table.clear();
+    }
+
+    // ---- Transverse SuperGaussian: inverse CDF table (r at uniform u) ----
+    if (m_transverse_profile == TransverseProfile::SuperGaussian && m_spot_size > 0.0) {
+        const Real sigma = m_spot_size;
+        const Real alpha = std::max(m_transverse_alpha, Real(1e-3));
+        const Real p     = Real(1.0) / alpha;
+        const Real R_max = (m_transverse_truncate > 0.0)
+                           ? (m_transverse_truncate * sigma)
+                           : (Real(4.0) * sigma);
+
+        // Build pdf(r) ~ r * exp(-(r/(sqrt(2)*sigma))^p), integrate to a CDF
+        // on the uniform r-grid, then invert to get r(u) at uniform u in [0,1].
+        std::vector<Real> r_grid(kSGTableN), pdf(kSGTableN), cdf(kSGTableN);
+        for (int i = 0; i < kSGTableN; ++i) {
+            r_grid[i] = R_max * Real(i) / Real(kSGTableN - 1);
+            const Real arg = r_grid[i] / (kSqrt2 * sigma);
+            pdf[i] = r_grid[i] * std::exp(-std::pow(arg, p));
+        }
+        Real sum = 0.0;
+        for (int i = 0; i < kSGTableN; ++i) { sum += pdf[i]; cdf[i] = sum; }
+        if (sum > 0.0) for (int i = 0; i < kSGTableN; ++i) cdf[i] /= sum;
+
+        // Tabulated inverse: r at uniform u_grid in [0, 1].
+        m_radial_inv_cdf_table.assign(kSGTableN, Real(0.0));
+        int j = 0;
+        for (int i = 0; i < kSGTableN; ++i) {
+            const Real u = Real(i) / Real(kSGTableN - 1);
+            while (j + 1 < kSGTableN && cdf[j + 1] < u) ++j;
+            if (j + 1 >= kSGTableN || cdf[j + 1] <= cdf[j]) {
+                m_radial_inv_cdf_table[i] = r_grid[kSGTableN - 1];
+            } else {
+                const Real frac = (u - cdf[j]) / (cdf[j + 1] - cdf[j]);
+                m_radial_inv_cdf_table[i] = r_grid[j] + frac * (r_grid[j + 1] - r_grid[j]);
+            }
+        }
+    } else {
+        m_radial_inv_cdf_table.clear();
+    }
+}
+
+
+void CathodeSource::sample_xy (amrex::Real& x, amrex::Real& y) const
+{
+    using amrex::Real;
+    switch (m_transverse_profile) {
+    case TransverseProfile::Gaussian: {
+        x = m_spot_size * Real(amrex::RandomNormal(0.0, 1.0));
+        y = m_spot_size * Real(amrex::RandomNormal(0.0, 1.0));
+        break;
+    }
+    case TransverseProfile::UniformDisk: {
+        const Real r  = m_spot_size * std::sqrt(Real(amrex::Random()));
+        const Real th = Real(2.0) * kPi * Real(amrex::Random());
+        x = r * std::cos(th);
+        y = r * std::sin(th);
+        break;
+    }
+    case TransverseProfile::SuperGaussian: {
+        // Inverse-CDF table lookup
+        const Real u  = Real(amrex::Random());
+        const Real fi = u * Real(kSGTableN - 1);
+        int        i  = int(fi);
+        if (i < 0)               i = 0;
+        if (i >= kSGTableN - 1)  i = kSGTableN - 2;
+        const Real frac = fi - Real(i);
+        const Real r    = m_radial_inv_cdf_table.empty()
+            ? Real(0.0)
+            : m_radial_inv_cdf_table[i]
+              + frac * (m_radial_inv_cdf_table[i + 1] - m_radial_inv_cdf_table[i]);
+        const Real th = Real(2.0) * kPi * Real(amrex::Random());
+        x = r * std::cos(th);
+        y = r * std::sin(th);
+        break;
+    }
+    }
+}
 
 
 amrex::Real CathodeSource::pulse_cdf (amrex::Real t) const
@@ -41,6 +154,19 @@ amrex::Real CathodeSource::pulse_cdf (amrex::Real t) const
         if (f <= 0.0) { return 0.0; }
         if (f >= 1.0) { return 1.0; }
         return f;
+    }
+    case PulseShape::SuperGaussian: {
+        if (m_pulse_cdf_table.empty()) {
+            return (t >= m_pulse_t0) ? amrex::Real(1.0) : amrex::Real(0.0);
+        }
+        if (t <= m_pulse_cdf_t_lo) return amrex::Real(0.0);
+        if (t >= m_pulse_cdf_t_hi) return amrex::Real(1.0);
+        const amrex::Real fi = (t - m_pulse_cdf_t_lo)
+            / (m_pulse_cdf_t_hi - m_pulse_cdf_t_lo) * amrex::Real(kSGTableN - 1);
+        const int i = std::min(int(fi), kSGTableN - 2);
+        const amrex::Real frac = fi - amrex::Real(i);
+        return m_pulse_cdf_table[i]
+             + frac * (m_pulse_cdf_table[i + 1] - m_pulse_cdf_table[i]);
     }
     }
     return 0.0;
@@ -95,25 +221,12 @@ int CathodeSource::emit_new_particles (
 
     for (int i = 0; i < n_emit; ++i)
     {
-        // Transverse position
-        amrex::ParticleReal xi = 0.0, yi = 0.0;
-        switch (m_transverse_profile) {
-        case TransverseProfile::Gaussian: {
-            xi = m_spot_size * amrex::ParticleReal(amrex::RandomNormal(0.0, 1.0));
-            yi = m_spot_size * amrex::ParticleReal(amrex::RandomNormal(0.0, 1.0));
-            break;
-        }
-        case TransverseProfile::UniformDisk: {
-            // Uniform on disk of radius m_spot_size: r = R*sqrt(rand), theta = 2*pi*rand
-            const amrex::Real r = m_spot_size * std::sqrt(amrex::Random());
-            const amrex::Real th = amrex::Real(2.0) * kPi * amrex::Random();
-            xi = r * std::cos(th);
-            yi = r * std::sin(th);
-            break;
-        }
-        }
-        xs[i] = xi;
-        ys[i] = yi;
+        // Transverse position via the configured profile (Gaussian,
+        // UniformDisk, or SuperGaussian via inverse-CDF table).
+        amrex::Real xi = 0.0, yi = 0.0;
+        sample_xy(xi, yi);
+        xs[i] = amrex::ParticleReal(xi);
+        ys[i] = amrex::ParticleReal(yi);
         zs[i] = m_z_cathode + z_offset;
 
         // Thermal momentum (proper-velocity units)

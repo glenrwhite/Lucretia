@@ -14,8 +14,19 @@ function s = CathodeSource(varargin)
 % Use 'image_charge', false to disable the self-image E_z contribution.
 % Use 'n_macroparticles_total', 0 to disable emission entirely.
 %
-% Pulse shape options: 'gaussian' (FWHM = pulse_duration), 'flat_top'.
-% Transverse profile options: 'gaussian' (RMS = spot_size), 'uniform_disk'.
+% Pulse shape options:
+%   'gaussian'        FWHM = pulse_duration (RMS = pulse_duration / 2.355)
+%   'flat_top'        full width = pulse_duration
+%   'super_gaussian'  pulse_duration is sigma (NOT FWHM); pulse_alpha sets
+%                     the shape (alpha=1 -> Gaussian, alpha=0.5 mild flat-
+%                     top, alpha->0 uniform-with-edges); pulse_slope adds
+%                     a deformable linear ramp matching distgen
+% Transverse profile options:
+%   'gaussian'        RMS = spot_size (each transverse component)
+%   'uniform_disk'    radius = spot_size, uniform on the disk
+%   'super_gaussian'  spot_size is sigma; transverse_alpha sets the shape;
+%                     transverse_truncate (units of sigma; 0 -> 4*sigma)
+%                     bounds the radial support
 % mte (mean transverse energy) is in eV.
 
 p = inputParser;
@@ -24,12 +35,18 @@ p.addParameter('z_cathode',              0.0,    @isnumeric);
 p.addParameter('image_charge',           true,   @(x) islogical(x) || isnumeric(x));
 p.addParameter('n_macroparticles_total', 0,      @(x) isnumeric(x) && isscalar(x));
 p.addParameter('total_charge',           0.0,    @isnumeric);
-p.addParameter('pulse_shape',            'gaussian', @(x) any(strcmp(x, {'gaussian','flat_top'})));
+p.addParameter('pulse_shape',            'gaussian', @(x) any(strcmp(x, {'gaussian','flat_top','super_gaussian'})));
 p.addParameter('pulse_duration',         0.0,    @isnumeric);
 p.addParameter('pulse_t0',               0.0,    @isnumeric);
-p.addParameter('transverse_profile',     'gaussian', @(x) any(strcmp(x, {'gaussian','uniform_disk'})));
+p.addParameter('transverse_profile',     'gaussian', @(x) any(strcmp(x, {'gaussian','uniform_disk','super_gaussian'})));
 p.addParameter('spot_size',              0.0,    @isnumeric);
 p.addParameter('mte',                    0.0,    @isnumeric);
+% SuperGaussian-only params (ignored unless the corresponding shape is
+% 'super_gaussian').
+p.addParameter('pulse_alpha',            1.0,    @isnumeric);
+p.addParameter('pulse_slope',            0.0,    @isnumeric);
+p.addParameter('transverse_alpha',       1.0,    @isnumeric);
+p.addParameter('transverse_truncate',    0.0,    @isnumeric);
 p.parse(varargin{:});
 r = p.Results;
 
@@ -44,5 +61,9 @@ s = struct('type',                   'cathode_source', ...
            'pulse_t0',               r.pulse_t0, ...
            'transverse_profile',     char(r.transverse_profile), ...
            'spot_size',              r.spot_size, ...
-           'mte',                    r.mte);
+           'mte',                    r.mte, ...
+           'pulse_alpha',            r.pulse_alpha, ...
+           'pulse_slope',            r.pulse_slope, ...
+           'transverse_alpha',       r.transverse_alpha, ...
+           'transverse_truncate',    r.transverse_truncate);
 end

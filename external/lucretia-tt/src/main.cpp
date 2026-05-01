@@ -219,31 +219,43 @@ lucretiatt::elements::Lattice build_lattice ()
             std::string xy_profile_str = "gaussian";
             amrex::Real spot_size = 0.0;
             amrex::Real mte = 0.0;
-            pp_el.query("z_cathode",      z_cathode);
-            pp_el.query("image_charge",   image_charge);
+            // SuperGaussian extras (ignored unless shape == super_gaussian)
+            amrex::Real pulse_alpha         = 1.0;
+            amrex::Real pulse_slope         = 0.0;
+            amrex::Real transverse_alpha    = 1.0;
+            amrex::Real transverse_truncate = 0.0;
+            pp_el.query("z_cathode",            z_cathode);
+            pp_el.query("image_charge",         image_charge);
             pp_el.query("n_macroparticles_total", n_total);
-            pp_el.query("total_charge",   total_charge);
-            pp_el.query("pulse_shape",    pulse_shape_str);
-            pp_el.query("pulse_duration", pulse_duration);
-            pp_el.query("pulse_t0",       pulse_t0);
-            pp_el.query("transverse_profile", xy_profile_str);
-            pp_el.query("spot_size",      spot_size);
-            pp_el.query("mte",            mte);
+            pp_el.query("total_charge",         total_charge);
+            pp_el.query("pulse_shape",          pulse_shape_str);
+            pp_el.query("pulse_duration",       pulse_duration);
+            pp_el.query("pulse_t0",             pulse_t0);
+            pp_el.query("transverse_profile",   xy_profile_str);
+            pp_el.query("spot_size",            spot_size);
+            pp_el.query("mte",                  mte);
+            pp_el.query("pulse_alpha",          pulse_alpha);
+            pp_el.query("pulse_slope",          pulse_slope);
+            pp_el.query("transverse_alpha",     transverse_alpha);
+            pp_el.query("transverse_truncate",  transverse_truncate);
 
-            CathodeSource::PulseShape pulse_shape =
-                (pulse_shape_str == "flat_top")
-                    ? CathodeSource::PulseShape::FlatTop
-                    : CathodeSource::PulseShape::Gaussian;
-            CathodeSource::TransverseProfile xy_profile =
-                (xy_profile_str == "uniform_disk")
-                    ? CathodeSource::TransverseProfile::UniformDisk
-                    : CathodeSource::TransverseProfile::Gaussian;
+            CathodeSource::PulseShape pulse_shape;
+            if      (pulse_shape_str == "flat_top")       pulse_shape = CathodeSource::PulseShape::FlatTop;
+            else if (pulse_shape_str == "super_gaussian") pulse_shape = CathodeSource::PulseShape::SuperGaussian;
+            else                                          pulse_shape = CathodeSource::PulseShape::Gaussian;
+
+            CathodeSource::TransverseProfile xy_profile;
+            if      (xy_profile_str == "uniform_disk")    xy_profile = CathodeSource::TransverseProfile::UniformDisk;
+            else if (xy_profile_str == "super_gaussian")  xy_profile = CathodeSource::TransverseProfile::SuperGaussian;
+            else                                          xy_profile = CathodeSource::TransverseProfile::Gaussian;
 
             lattice.emplace_back(CathodeSource(
                 name, z_cathode, image_charge != 0,
                 n_total, total_charge,
                 pulse_shape, pulse_duration, pulse_t0,
-                xy_profile, spot_size, mte));
+                xy_profile, spot_size, mte,
+                pulse_alpha, pulse_slope,
+                transverse_alpha, transverse_truncate));
         }
         else {
             amrex::Abort("Unknown element type: '" + type

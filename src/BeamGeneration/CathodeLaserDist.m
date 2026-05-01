@@ -169,53 +169,44 @@ classdef CathodeLaserDist < handle
     %   z_cathode : lab-frame z of the cathode plane (m)
     %   pulse_t0  : centre time of the emission pulse (s, often = Tini)
     %
-    % Distribution-shape mapping caveat: lucretia-tt's CathodeSource
-    % currently supports only 'gaussian'/'flat_top' temporal and
-    % 'gaussian'/'uniform_disk' transverse profiles, while CathodeLaserDist
-    % also supports 'super_gaussian'. Super-Gaussian is mapped to the
-    % closest available shape:
-    %   t_type='super_gaussian' (alpha~0.5) -> 'gaussian' (small flat-top
-    %                                          bias is lost)
-    %   r_type='super_gaussian'              -> 'gaussian'
-    % If you need exact distribution-shape match against an external code,
-    % seed via writeBunchSeedH5 + SeedBeam instead -- at the cost of losing
-    % time-staggered cathode emission and image-charge causality.
+    % Distribution-shape mapping (CathodeSource now supports all three
+    % temporal and transverse shapes that CathodeLaserDist does):
+    %   gaussian       -> CathodeSource 'gaussian' (pulse_duration = FWHM)
+    %   uniform        -> CathodeSource 'flat_top' / 'uniform_disk'
+    %   super_gaussian -> CathodeSource 'super_gaussian' with alpha + slope
+    %                     pulse_duration / spot_size = sigma directly
+    % All four super-Gaussian extras (pulse_alpha, pulse_slope,
+    % transverse_alpha, transverse_truncate) are forwarded.
         if nargin < 2 || isempty(z_cathode), z_cathode = 0.0;        end
         if nargin < 3 || isempty(pulse_t0),  pulse_t0  = 0.0;        end
 
-        % Temporal: convert RMS sigma_t to FWHM (gaussian) or full width
-        % (flat_top -- uniform [-W,W] with RMS sigma_t has W = sigma_t*sqrt(3),
-        % so full width = 2*sigma_t*sqrt(3)).
+        % Temporal pulse: shape + size convention
         switch lower(obj.t_type)
             case 'gaussian'
                 t_pulse_shape = 'gaussian';
-                t_dur         = 2 * sqrt(2*log(2)) * obj.sigma_t;
+                t_dur         = 2 * sqrt(2*log(2)) * obj.sigma_t;   % FWHM
             case 'super_gaussian'
-                t_pulse_shape = 'gaussian';
-                t_dur         = 2 * sqrt(2*log(2)) * obj.sigma_t;
+                t_pulse_shape = 'super_gaussian';
+                t_dur         = obj.sigma_t;                        % sigma
             case 'uniform'
                 t_pulse_shape = 'flat_top';
-                t_dur         = 2 * sqrt(3) * obj.sigma_t;
+                t_dur         = 2 * sqrt(3) * obj.sigma_t;          % full width
             otherwise
                 error('CathodeLaserDist:toCathodeSource:badTType', ...
                       'unrecognised t_type ''%s''', obj.t_type);
         end
 
-        % Transverse: spot_size is the parameter consumed by CathodeSource.
-        % For 'gaussian' it's interpreted as the RMS of each transverse
-        % component (matches sigma_xy directly). For 'uniform_disk' it's
-        % the disc radius, which we take as sigma_xy (matches the
-        % CathodeLaserDist 'uniform' radial convention).
+        % Transverse: spot + profile
         switch lower(obj.r_type)
             case 'gaussian'
                 r_profile = 'gaussian';
-                spot      = obj.sigma_xy;
+                spot      = obj.sigma_xy;                           % per-component RMS
             case 'super_gaussian'
-                r_profile = 'gaussian';
-                spot      = obj.sigma_xy;
+                r_profile = 'super_gaussian';
+                spot      = obj.sigma_xy;                           % sigma
             case 'uniform'
                 r_profile = 'uniform_disk';
-                spot      = obj.sigma_xy;
+                spot      = obj.sigma_xy;                           % disc radius
             otherwise
                 error('CathodeLaserDist:toCathodeSource:badRType', ...
                       'unrecognised r_type ''%s''', obj.r_type);
@@ -231,7 +222,11 @@ classdef CathodeLaserDist < handle
             'pulse_t0',               pulse_t0, ...
             'transverse_profile',     r_profile, ...
             'spot_size',              spot, ...
-            'mte',                    obj.MTE);
+            'mte',                    obj.MTE, ...
+            'pulse_alpha',            obj.t_alpha, ...
+            'pulse_slope',            obj.t_slope, ...
+            'transverse_alpha',       obj.r_alpha, ...
+            'transverse_truncate',    obj.r_truncate);
     end
 
     function writeBunchSeedH5(obj, path)

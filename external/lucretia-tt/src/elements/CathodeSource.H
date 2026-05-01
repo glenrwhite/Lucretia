@@ -11,6 +11,7 @@
 
 #include <string>
 #include <utility>
+#include <vector>
 
 
 namespace lucretiatt {
@@ -44,8 +45,8 @@ struct CathodeSource
     , public Position3D
     , public TimeWindow
 {
-    enum class PulseShape       { Gaussian, FlatTop };
-    enum class TransverseProfile { Gaussian, UniformDisk };
+    enum class PulseShape       { Gaussian, FlatTop, SuperGaussian };
+    enum class TransverseProfile { Gaussian, UniformDisk, SuperGaussian };
 
     CathodeSource () = default;
 
@@ -60,11 +61,15 @@ struct CathodeSource
         amrex::Real  pulse_t0,
         TransverseProfile transverse_profile,
         amrex::Real  spot_size,
-        amrex::Real  mte)
+        amrex::Real  mte,
+        // SuperGaussian-only extras (ignored unless the corresponding
+        // shape is SuperGaussian). alpha matches the distgen "deformable"
+        // convention: alpha=1 -> Gaussian, alpha->0 -> uniform-with-edges.
+        amrex::Real  pulse_alpha          = amrex::Real(1.0),
+        amrex::Real  pulse_slope          = amrex::Real(0.0),
+        amrex::Real  transverse_alpha     = amrex::Real(1.0),
+        amrex::Real  transverse_truncate  = amrex::Real(0.0))   // 0 -> 4*sigma fallback
         : Named(std::move(n))
-        // Position3D extends from z_cathode upstream-edge by pulse_duration*c worth
-        // of margin; however emission positions are set explicitly so this is just
-        // for bookkeeping. Use a generous length.
         , Position3D(0.0, 0.0, z_cathode, amrex::Real(1.0))
         , TimeWindow()
         , m_z_cathode(z_cathode)
@@ -77,7 +82,13 @@ struct CathodeSource
         , m_transverse_profile(transverse_profile)
         , m_spot_size(spot_size)
         , m_mte(mte)
-    {}
+        , m_pulse_alpha(pulse_alpha)
+        , m_pulse_slope(pulse_slope)
+        , m_transverse_alpha(transverse_alpha)
+        , m_transverse_truncate(transverse_truncate)
+    {
+        build_lookup_tables();
+    }
 
     /** Emit particles for the time window [t, t + dt]. Returns count. */
     int emit_new_particles (particles::TimeBunch& bunch,
@@ -85,6 +96,15 @@ struct CathodeSource
 
     /** Cumulative fraction of total particles emitted by time `t`. */
     amrex::Real pulse_cdf (amrex::Real t) const;
+
+    /** Sample a transverse position (x, y) consistent with the chosen
+     *  TransverseProfile. Used internally by emit_new_particles; exposed
+     *  here for tests. */
+    void sample_xy (amrex::Real& x, amrex::Real& y) const;
+
+    /** Build the tabulated CDFs used by SuperGaussian sampling. Called
+     *  by the constructor; safe to re-call (rebuilds from scratch). */
+    void build_lookup_tables ();
 
     /** No external field contribution. Image-charge handled by TrackingLoop. */
     AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
@@ -106,8 +126,29 @@ struct CathodeSource
     amrex::Real        m_pulse_duration         = 0.0;   // s (FWHM Gaussian, full flat-top)
     amrex::Real        m_pulse_t0               = 0.0;   // s (centre Gaussian, start flat-top)
     TransverseProfile  m_transverse_profile     = TransverseProfile::Gaussian;
-    amrex::Real        m_spot_size              = 0.0;   // m (RMS Gaussian, radius disk)
+    amrex::Real        m_spot_size              = 0.0;   // m (RMS Gaussian, radius disk, sigma_xy SuperGaussian)
     amrex::Real        m_mte                    = 0.0;   // eV (mean transverse energy)
+
+    // SuperGaussian-only shape parameters.
+    //
+    // Temporal: pdf(t) ~ exp(-(|t-t0|/(sqrt(2)*sigma))^p) * max(1+slope*t/T_max, 0)
+    //   pulse_duration is interpreted as sigma (NOT FWHM) when shape is
+    //   SuperGaussian. p = 1/alpha. T_max = 4*sigma is the support.
+    // Transverse: pdf(r) ~ r * exp(-(r/(sqrt(2)*sigma))^p)
+    //   spot_size is sigma. p = 1/alpha. R_max = transverse_truncate * sigma
+    //   (or 4*sigma when transverse_truncate <= 0).
+    amrex::Real m_pulse_alpha          = 1.0;
+    amrex::Real m_pulse_slope          = 0.0;
+    amrex::Real m_transverse_alpha     = 1.0;
+    amrex::Real m_transverse_truncate  = 0.0;
+
+    // Tabulated cdfs for SuperGaussian. Built by build_lookup_tables().
+    // 4096 points each, matching the MATLAB CathodeLaserDist sampler so
+    // the two produce statistically-identical distributions.
+    std::vector<amrex::Real> m_pulse_cdf_table;        // cdf at uniform t in [t0-T_max, t0+T_max]
+    amrex::Real              m_pulse_cdf_t_lo = 0.0;
+    amrex::Real              m_pulse_cdf_t_hi = 0.0;
+    std::vector<amrex::Real> m_radial_inv_cdf_table;   // r at uniform u in [0,1]
 };
 
 } // namespace elements
