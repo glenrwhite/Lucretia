@@ -285,11 +285,12 @@ else
 end
 
 % Insert CathodeSource at the FRONT of the lattice. Emission window
-% starts at Tini in lab time so that the wall-clock instant at which
-% each particle is emitted matches ImpactT, and the bunch sees the same
-% RF phase history during transit. tracking.t_start (set below) makes
-% the simulation actually begin at Tini so that t = pulse_t0 is the
-% first emission step.
+% is centered on Tini (matches ImpactT's RF reference), so the wall-
+% clock instant of each emission matches ImpactT, and the bunch sees
+% the same RF phase history during transit. The simulation begins at
+% Tini - half_emission_window (set below in tracking.t_start), so the
+% LEADING half of the emission pulse is also captured -- otherwise we
+% would emit only the trailing half (~50% loss).
 cathode = timetracking.CathodeSource('name', 'cat', ...
     'z_cathode', cathode_z, 'image_charge', true, ...
     'n_macroparticles_total', opts.n_macros, ...
@@ -359,7 +360,33 @@ else
     n_post = ceil((z_post / c_light) / tracking.dt_after);
     tracking.n_steps = n_pre + n_post + 200;  % small slack
 end
-tracking.t_start = Tini;     % match ImpactT's wall-clock start
+% Add the steps needed to cover the pre-emission window we just shifted
+% t_start back by (so the bunch still reaches z_target at the end of
+% the run). Computed once we know the pulse_shape below.
+% Start tracking BEFORE the leading edge of the cathode emission pulse
+% so all particles get emitted (otherwise the half of the pulse with
+% t < Tini gets dropped because tracking has not started yet). Per-shape
+% half-window:
+%   gaussian       FWHM/2 + 2*sigma  ~  3*sigma   (covers ~99.7% of pulse)
+%   super_gaussian 4*sigma                          (CathodeSource SG support)
+%   flat_top       full_width / 2
+% Then dt_change_t and n_steps below also shift to absorb the extra
+% pre-emission time, so the same z_target is still reached.
+switch lower(pulse_shape)
+    case 'gaussian'
+        emission_half_window = 1.5 * t_em;     % FWHM/2 + 2*sigma ~ 1.5*FWHM
+    case 'super_gaussian'
+        emission_half_window = 4.0 * t_em;     % CathodeSource SG support is ±4*sigma
+    case 'flat_top'
+        emission_half_window = 0.5 * t_em;
+    otherwise
+        emission_half_window = 0.5 * t_em;
+end
+tracking.t_start = Tini - emission_half_window;
+% Bump n_steps to cover the pre-emission window with the SMALL dt
+% (so the bunch still reaches z_target at the end of the run despite
+% the earlier t_start).
+tracking.n_steps = tracking.n_steps + ceil(emission_half_window / tracking.dt);
 
 % --- Info / warnings ---
 info.warnings    = warnings;
