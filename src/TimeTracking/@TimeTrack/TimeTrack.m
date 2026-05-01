@@ -41,6 +41,7 @@ properties
     mpi_binary          = ''                                     % deprecated (use target+mpi_nranks); '' -> autodetect
     mpirun_bin          = ''                                     % '' -> /opt/homebrew/bin/mpirun, /usr/local/bin/mpirun, or PATH
     mpirun_extra_args   = ''                                     % e.g. '--bind-to socket --map-by socket' for NUMA-aware placement
+    verbose_run         = false                                  % stream lucretia-tt stdout to Command Window during the run
 
     last_input_file = ''
     last_log        = ''

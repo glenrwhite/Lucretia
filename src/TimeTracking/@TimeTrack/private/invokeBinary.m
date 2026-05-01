@@ -39,5 +39,15 @@ else
     cmd = sprintf('cd "%s" && %s"%s" %s-np %d "%s" "%s" 2>&1', ...
                   obj.work_dir, envP, mpirun, extra, nranks, obj.binary, in_file);
 end
-[status, log] = system(cmd);
+
+% '-echo' streams stdout to the MATLAB Command Window AS THE BINARY
+% RUNS while still capturing the full transcript into `log`. Useful for
+% long Injector / production runs (BeamMonitor lines, AMReX milestones).
+% For batch / regression tests we keep the run quiet (default).
+verbose = isprop(obj, 'verbose_run') && ~isempty(obj.verbose_run) && obj.verbose_run;
+if verbose
+    [status, log] = system(cmd, '-echo');
+else
+    [status, log] = system(cmd);
+end
 end
