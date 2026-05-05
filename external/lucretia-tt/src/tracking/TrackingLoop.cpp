@@ -160,57 +160,49 @@ void TrackingLoop::step (
             const Real q  = ptd.rdata(RealSoA::q)[ip];
             const Real qm = ptd.rdata(RealSoA::qm)[ip];
 
-            // Per-particle effective dt and field-gather time (sub-step
-            // emission). For freshly emitted particles (t_birth in
-            // (t, t+dt]) the first-push interval is [t_birth, t+dt], not
-            // [t, t+dt]. Gathering the lattice field at the MIDPOINT of
-            // that interval — t_field = (t_birth + t + dt) / 2 — gives
-            // each new particle a different RF phase exposure on its
-            // first step, breaking the per-emission-step coherence that
-            // was producing P-spikes in the gun output. Uniform-random
-            // t_birth alone is not enough: without per-particle t_field,
-            // every particle in step k still sees field(k*dt), so all
-            // first-step energy gains cluster around a single value per
-            // emission step (~180 keV inter-step spacing at 1 ps dt and
-            // 100 MV/m cathode field at 2856 MHz). Old particles
-            // (t_birth <= t) keep gathering at t to preserve existing
-            // gun-phase calibration.
+            // Per-particle effective dt and field-gather time. For freshly
+            // emitted particles (t_birth in (t, t+dt]) the first-push
+            // interval is [t_birth, t+dt]; gathering the lattice field at
+            // the MIDPOINT of that interval gives each new particle its
+            // own RF phase exposure on its first step. Old particles
+            // (t_birth <= t) gather at t.
             const Real t_birth = ptd.rdata(RealSoA::t_birth)[ip];
             const Real dt_eff  = std::min(dt, std::max(Real(0.0), t + dt - t_birth));
             const Real t_field = (t_birth > t)
                 ? Real(0.5) * (t_birth + t + dt)
                 : t;
 
-            // ImpactT-style behind-cathode drift. Particles with
-            // z < cathode_z that have NEVER yet crossed cathode
-            // (emerged == 0) advance at the universal speed betazini*c
-            // (independent of their own pz) -- mirroring ImpactT's
-            // `driftemission_BeamBunch`. No field gather, no Boris push,
-            // no SC contribution to themselves on this step.
+            // ImpactT-style behind-cathode drift. Particles with z < cathode_z
+            // that have NEVER yet crossed (emerged == 0) advance at the
+            // universal speed betazini*c (no field, Boris, or SC) -- mirror
+            // of ImpactT's `driftemission_BeamBunch`.
             //
-            // Once a particle has crossed cathode (emerged == 1), it
-            // is committed to normal Boris dynamics. If a bad RF phase
-            // kicks uz negative and pushes z back below cathode_z, the
-            // particle gets KILLED (alive = 0). This prevents the
-            // re-crossing ratchet that produced ~15 outlier particles
-            // (out of 50000) at extreme gammas. Without the kill the
-            // particle would be re-drifted forward at betazini, re-cross
-            // cathode at a new RF phase, and accumulate uncorrelated
-            // kicks until reaching gamma 50-2500 (runaways) or staying
-            // stuck at gamma 1-10 (stragglers) -- both blow up the
-            // bulk sigma_gamma. Killed particles are still in the SC
-            // mesh for charge conservation but their alive=0 flag
-            // signals analysis tools to skip them.
+            // Particles already emerged (emerged == 1) that get pushed back
+            // behind cathode by a decelerating Boris kick are KILLED and
+            // PARKED at z=-1e9 -- the kill prevents the re-crossing ratchet
+            // that otherwise produces ~15 outlier particles at extreme
+            // gammas; the park keeps dead particles out of analysis-time
+            // stats without breaking openPMD output.
+            //
+            // Known limitation (2026-05-05): the simple "drift then mark
+            // emerged" transition strips the natural chirp the cathode RF
+            // would otherwise induce -- all post-cross particles in step k
+            // see field at the same simulation t regardless of their actual
+            // cross-time within the step. In a no-SC partcl-seed run,
+            // sigma_gamma collapses to 0.0003 vs ImpactT's 0.032 (chirp
+            // correlation +0.25 vs -0.96). Tested adding a fractional
+            // first-kick (snap z to cross point + dt_post-of-step Boris)
+            // and own-velocity post-cross advance: neither closed the gap
+            // for the partcl-seed case. The chirp generation appears to
+            // require something more subtle in the cross-cathode logic,
+            // possibly tied to per-particle transit-time integration of
+            // the field. Future work.
             if (m_behind_cathode_drift_on && z < m_cathode_z) {
                 if (ptd.idata(IntSoA::emerged)[ip] == 0) {
                     z += dt_eff * m_behind_cathode_betazini * kSpeedOfLight;
                     ptd.rdata(RealSoA::z)[ip] = z;
                 } else {
-                    // Already emerged once, now back behind cathode -- kill.
-                    // Mark dead AND park the particle far below the simulation
-                    // domain so its (x, y, z) never re-enters mesh statistics
-                    // or downstream visualization. SC deposit also skips
-                    // alive==0 particles.
+                    // Already emerged, now back behind cathode -- kill+park.
                     ptd.idata(IntSoA::alive)[ip] = 0;
                     ptd.rdata(RealSoA::x)[ip]  = Real(0.0);
                     ptd.rdata(RealSoA::y)[ip]  = Real(0.0);

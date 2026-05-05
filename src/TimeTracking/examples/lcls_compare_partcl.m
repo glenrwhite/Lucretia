@@ -1,14 +1,18 @@
 function res = lcls_compare_partcl(varargin)
 % Optional name/value pairs:
-%   'slice_sc'  (true) -- enable 1D longitudinal slice SC
-%   'mesh_sc'   (true) -- enable 3D mesh SC
-%   'tag'       ('')   -- suffix for /tmp/partcl_seed_run_<tag>
-%   'n_steps'   (1500)
+%   'slice_sc'      (true)
+%   'mesh_sc'       (true)
+%   'sc_adaptive'   (false)
+%   'tag'           ('')
+%   'n_steps'       (1500)
+%   'impactt_dir'   ('common/ImpactT')
 p = inputParser;
-p.addParameter('slice_sc', true,  @islogical);
-p.addParameter('mesh_sc',  true,  @islogical);
-p.addParameter('tag',      '',    @(x) ischar(x) || isstring(x));
-p.addParameter('n_steps',  1500,  @isnumeric);
+p.addParameter('slice_sc',     true,  @islogical);
+p.addParameter('mesh_sc',      true,  @islogical);
+p.addParameter('sc_adaptive',  false, @islogical);
+p.addParameter('tag',          '',    @(x) ischar(x) || isstring(x));
+p.addParameter('n_steps',      1500,  @isnumeric);
+p.addParameter('impactt_dir',  '/Users/glenwhite/Documents/GitHub/Lattices/common/ImpactT', @(x) ischar(x) || isstring(x));
 p.parse(varargin{:});
 opts = p.Results;
 % LCLS_COMPARE_PARTCL  Cross-code calibration: lucretia-tt seeded directly
@@ -24,7 +28,7 @@ opts = p.Results;
 % from partcl.data, run the gun region, see if sigma_x ratio drops from
 % 2.2x to ~1.0x". This driver implements that test.
 
-impactt_dir = '/Users/glenwhite/Documents/GitHub/Lattices/common/ImpactT';
+impactt_dir = char(opts.impactt_dir);
 
 fprintf('=== LCLS gun: partcl.data seed comparison ===\n\n');
 
@@ -79,15 +83,29 @@ tt.t_start = Tini;
 tt.dt      = 0.5e-12;
 tt.n_steps = opts.n_steps;
 
-% SC config: full mesh + slice (matches the LCLS injector "candidate 1"
-% setup that was the baseline for the 2.2x discrepancy)
+% SC config
 tt.enable_space_charge = opts.mesh_sc;
 tt.sc_image_plane      = opts.mesh_sc;
 tt.sc_image_plane_z    = 0.0;
 tt.sc_image_cutoff     = 0.05;
+tt.sc_adaptive         = opts.sc_adaptive;
+tt.sc_pad_factor       = 5.0;
+tt.sc_min_pad_xy       = 1e-3;
+tt.sc_min_pad_z        = 1e-3;
 tt.enable_slice_sc     = opts.slice_sc;
 tt.slice_sc_n          = 256;
 tt.slice_sc_radius_factor = 2.0;
+
+% ImpactT-style behind-cathode drift. partcl.data particles are at
+% z slightly negative (~-7 um) -- same as ImpactT's loaded state.
+% Drift them at universal betazini until z=0 just like ImpactT's
+% driftemission_BeamBunch does. Plus the kill-on-recross from
+% TrackingLoop guards against ratcheting.
+% betazini = sqrt(1 - 1/(1 + Bkenergy/Bmass)^2), Bkenergy=h9(2)=1eV,
+% Bmass=h9(3)=511005eV.
+Bkenergy = h9(2);  Bmass = h9(3);
+tt.behind_cathode_z        = 0.0;
+tt.behind_cathode_betazini = sqrt(1.0 - 1.0/(1.0 + Bkenergy/Bmass)^2);
 
 % Keep dumps in a known location so re-analysis doesn't require a re-run.
 if isempty(opts.tag)
@@ -121,16 +139,19 @@ me_kg = 9.1093837015e-31;
 c     = 299792458.0;
 for k = 1:n
     b = bunches{k};
-    % particle uz / px / py are momentum (kg m/s) per readBeamOpenPMD
-    % convention. gamma = sqrt(1 + (p/(m c))^2)
-    p2  = double(b.px).^2 + double(b.py).^2 + double(b.pz).^2;
+    % Filter out parked dead particles (TrackingLoop kill-on-recross
+    % parks them at z=-1e9). Anything below z=-1m is the dead pool.
+    keep = double(b.z) > -1.0;
+    xx_k = double(b.x(keep));  yy_k = double(b.y(keep));  zz_k = double(b.z(keep));
+    px_k = double(b.px(keep)); py_k = double(b.py(keep)); pz_k = double(b.pz(keep));
+    p2  = px_k.^2 + py_k.^2 + pz_k.^2;
     gam = sqrt(1 + p2 / (me_kg*c)^2);
-    ltt.z(k)     = mean(double(b.z));
-    ltt.sx(k)    = std(double(b.x));
-    ltt.sy(k)    = std(double(b.y));
-    ltt.sz(k)    = std(double(b.z));
+    ltt.z(k)     = mean(zz_k);
+    ltt.sx(k)    = std(xx_k);
+    ltt.sy(k)    = std(yy_k);
+    ltt.sz(k)    = std(zz_k);
     ltt.gamma(k) = mean(gam);
-    ltt.N(k)     = numel(b.x);
+    ltt.N(k)     = numel(zz_k);
 end
 
 % --- ImpactT reference ---

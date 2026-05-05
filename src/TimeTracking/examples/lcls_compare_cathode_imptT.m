@@ -23,10 +23,15 @@ p.addParameter('sc_adaptive',   false,           @islogical);
 p.addParameter('sc_pad_factor', 5.0,             @isnumeric);
 p.addParameter('mte_eV',        [],              @(x) isempty(x) || isnumeric(x));
 p.addParameter('geom_ncell',    [],              @(x) isempty(x) || (isnumeric(x) && numel(x)==3));
+% Custom ImpactT reference directory (for no-SC sanity checks, etc.).
+% Must contain ImpactT.in, partcl.data, rfdata*, and fort.18+24-26 from
+% a completed ImpactT run.
+p.addParameter('impactt_dir',   '/Users/glenwhite/Documents/GitHub/Lattices/common/ImpactT', ...
+                                                 @(x) ischar(x) || isstring(x));
 p.parse(varargin{:});
 opts = p.Results;
 
-impactt_dir = '/Users/glenwhite/Documents/GitHub/Lattices/common/ImpactT';
+impactt_dir = char(opts.impactt_dir);
 
 fprintf('=== LCLS gun: CathodeSource + ImpactT-style emission ===\n\n');
 
@@ -58,9 +63,27 @@ lattice{cat_idx}.z_init_spread        = opts.z_init_spread;
 if ~isempty(opts.mte_eV)
     lattice{cat_idx}.mte = opts.mte_eV;
 end
-fprintf('  CathodeSource augmented: longitudinal_thermal=%d, z_init_spread=%g m, mte=%g eV\n', ...
+% When ImpactT.in has Flagdist=16, ImpactT IGNORES the header sigx/sigy
+% and uses partcl.data positions directly. readImpactTLattice currently
+% takes the (header) sigx as spot_size, which gave 0.6 mm here vs the
+% partcl.data actual 0.286 mm -- a 2x mismatch in initial bunch size.
+% Compute the partcl.data-actual sigma_x and override.
+partcl_path = fullfile(impactt_dir, 'partcl.data');
+if exist(partcl_path, 'file')
+    fid = fopen(partcl_path, 'r');
+    fscanf(fid, '%d', 1);  % header: N
+    A = fscanf(fid, '%g', [6, Inf])';
+    fclose(fid);
+    partcl_sigx = std(A(:,1));
+    partcl_sigy = std(A(:,3));
+    spot_actual = max(partcl_sigx, partcl_sigy);
+    fprintf('  partcl.data actual: sigma_x=%g mm  sigma_y=%g mm  (header had %g mm)\n', ...
+            partcl_sigx*1e3, partcl_sigy*1e3, lattice{cat_idx}.spot_size*1e3);
+    lattice{cat_idx}.spot_size = spot_actual;
+end
+fprintf('  CathodeSource augmented: longitudinal_thermal=%d, z_init_spread=%g m, mte=%g eV, spot=%g mm\n', ...
         lattice{cat_idx}.longitudinal_thermal, lattice{cat_idx}.z_init_spread, ...
-        lattice{cat_idx}.mte);
+        lattice{cat_idx}.mte, lattice{cat_idx}.spot_size*1e3);
 
 % Trim to GUN + SOL1 + monitor for fast first-pass test
 keep = false(size(lattice));
