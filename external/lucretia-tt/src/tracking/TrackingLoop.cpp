@@ -216,14 +216,16 @@ void TrackingLoop::step (
             // the MIDPOINT of that interval gives each new particle its
             // own RF phase exposure on its first step. Old particles
             // (t_birth <= t) gather at t.
-            const Real t_birth = ptd.rdata(RealSoA::t_birth)[ip];
-            const Real dt_eff  = std::min(dt, std::max(Real(0.0), t + dt - t_birth));
-            // Field gather time: wallclock (default) or bunch-centroid-z/c
-            // (ImpactT compat). For freshly-emitted particles use the
-            // post-birth midpoint (sub-step emission), shifted to the
-            // centroid frame when applicable.
+            //
+            // dt_eff and t_field are MUTABLE because behind-cathode drift
+            // may detect a cross-cathode this step and shrink the Boris
+            // window to dt_post (= post-cross fraction), shifting t_field
+            // accordingly. Mirrors ImpactT's fractional first-step kick
+            // (AccSimulator.f90 lines 2154-2160).
+            Real t_birth = ptd.rdata(RealSoA::t_birth)[ip];
+            Real dt_eff  = std::min(dt, std::max(Real(0.0), t + dt - t_birth));
             const Real t_phase = m_use_centroid_phase ? t_centroid : t;
-            const Real t_field = (t_birth > t)
+            Real t_field = (t_birth > t)
                 ? Real(0.5) * (t_birth + t + dt) - (t - t_phase)
                 : t_phase;
 
@@ -232,31 +234,21 @@ void TrackingLoop::step (
             // universal speed betazini*c (no field, Boris, or SC) -- mirror
             // of ImpactT's `driftemission_BeamBunch`.
             //
+            // When a particle's drift carries z across cathode_z this step,
+            // we apply a FRACTIONAL Boris kick over only the post-cross
+            // remainder of the step. This mirrors ImpactT lines 2154-2160:
+            // dt_post = (post-drift z) / (drift speed), particle's own
+            // velocity is used for the post-cross position advance, and
+            // Boris fires with the reduced dt_eff = dt_post.
+            //
             // Particles already emerged (emerged == 1) that get pushed back
             // behind cathode by a decelerating Boris kick are KILLED and
             // PARKED at z=-1e9 -- the kill prevents the re-crossing ratchet
             // that otherwise produces ~15 outlier particles at extreme
             // gammas; the park keeps dead particles out of analysis-time
             // stats without breaking openPMD output.
-            //
-            // Known limitation (2026-05-05): the simple "drift then mark
-            // emerged" transition strips the natural chirp the cathode RF
-            // would otherwise induce -- all post-cross particles in step k
-            // see field at the same simulation t regardless of their actual
-            // cross-time within the step. In a no-SC partcl-seed run,
-            // sigma_gamma collapses to 0.0003 vs ImpactT's 0.032 (chirp
-            // correlation +0.25 vs -0.96). Tested adding a fractional
-            // first-kick (snap z to cross point + dt_post-of-step Boris)
-            // and own-velocity post-cross advance: neither closed the gap
-            // for the partcl-seed case. The chirp generation appears to
-            // require something more subtle in the cross-cathode logic,
-            // possibly tied to per-particle transit-time integration of
-            // the field. Future work.
             if (m_behind_cathode_drift_on && z < m_cathode_z) {
-                if (ptd.idata(IntSoA::emerged)[ip] == 0) {
-                    z += dt_eff * m_behind_cathode_betazini * kSpeedOfLight;
-                    ptd.rdata(RealSoA::z)[ip] = z;
-                } else {
+                if (ptd.idata(IntSoA::emerged)[ip] != 0) {
                     // Already emerged, now back behind cathode -- kill+park.
                     ptd.idata(IntSoA::alive)[ip] = 0;
                     ptd.rdata(RealSoA::x)[ip]  = Real(0.0);
@@ -265,13 +257,49 @@ void TrackingLoop::step (
                     ptd.rdata(RealSoA::px)[ip] = Real(0.0);
                     ptd.rdata(RealSoA::py)[ip] = Real(0.0);
                     ptd.rdata(RealSoA::pz)[ip] = Real(0.0);
+                    continue;
                 }
-                continue;   // skip field, SC, and Boris for this particle
-            }
-            // Mark first cathode crossing.
-            if (m_behind_cathode_drift_on
-                && ptd.idata(IntSoA::emerged)[ip] == 0
-                && z >= m_cathode_z) {
+                // Behind cathode, not yet emerged -- drift this step.
+                const Real z_drift = z + dt_eff * m_behind_cathode_betazini * kSpeedOfLight;
+                if (z_drift < m_cathode_z) {
+                    // Still behind after drift -- drift only, skip Boris.
+                    z = z_drift;
+                    ptd.rdata(RealSoA::z)[ip] = z;
+                    continue;
+                }
+                // Cross-cathode this step. Compute post-cross fraction;
+                // pre-advance position using particle's OWN velocity (not
+                // betazini); FALL THROUGH to apply Boris over the post-
+                // cross dt_post. Mirrors ImpactT lines 2154-2160.
+                const Real total_drift = z_drift - z;
+                const Real post_drift  = z_drift - m_cathode_z;
+                const Real post_frac   = (total_drift > Real(0.0))
+                    ? (post_drift / total_drift) : Real(0.0);
+                const Real dt_post = post_frac * dt_eff;
+                constexpr Real inv_c2_local = Real(1.0) / (kSpeedOfLight * kSpeedOfLight);
+                const Real recpgam = Real(1.0) /
+                    std::sqrt(Real(1.0) + (ux*ux + uy*uy + uz*uz) * inv_c2_local);
+                x += dt_post * ux * recpgam;
+                y += dt_post * uy * recpgam;
+                z  = m_cathode_z + dt_post * uz * recpgam;
+                // Override dt_eff for the partial step; shift t_birth so
+                // the existing field-gather machinery uses [t_cross, t+dt]
+                // as the Boris interval.
+                dt_eff  = dt_post;
+                t_birth = t + dt - dt_post;
+                ptd.rdata(RealSoA::t_birth)[ip] = t_birth;
+                const Real midpoint = Real(0.5) * (t_birth + t + dt);
+                t_field = m_use_centroid_phase
+                    ? midpoint - (t - t_phase)
+                    : midpoint;
+                ptd.idata(IntSoA::emerged)[ip] = 1;
+                // Fall through to field gather + Boris below.
+            } else if (m_behind_cathode_drift_on
+                       && ptd.idata(IntSoA::emerged)[ip] == 0
+                       && z >= m_cathode_z) {
+                // Edge case: emitted directly at z >= cathode (e.g.
+                // CathodeSource with z_init_spread = 0). Mark emerged
+                // without t_birth tweaks; normal Boris with full dt.
                 ptd.idata(IntSoA::emerged)[ip] = 1;
             }
 
