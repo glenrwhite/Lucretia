@@ -91,12 +91,25 @@ public:
     }
     bool centroid_field_phase_enabled () const noexcept { return m_use_centroid_phase; }
 
+    /** Use midstep particle position for external-field gather (ImpactT
+     *  compat). ImpactT's main loop does half_drift -> gather -> Boris ->
+     *  half_drift, so the field is evaluated at x_n+1/2 = x_n + 0.5*dt*v_n.
+     *  Lucretia-tt's default scheme gathers at x_n (start of step), then
+     *  Boris + full drift. The half-step position offset (~0.045 mm at
+     *  v=c, dt=0.3ps) times the field gradient can introduce a sub-percent
+     *  per-step error that accumulates over many steps -- a likely source
+     *  of the 3x chirp-slope residual vs ImpactT in the no-SC partcl-seed
+     *  test. Default off; enable via tracking.use_midstep_field = 1. */
+    void set_midstep_field (bool on) noexcept { m_use_midstep_field = on; }
+    bool midstep_field_enabled () const noexcept { return m_use_midstep_field; }
+
 private:
     bool        m_behind_cathode_drift_on = false;
     amrex::Real m_cathode_z               = 0.0;
     amrex::Real m_behind_cathode_betazini = 0.0;
     bool        m_use_centroid_phase      = false;
     amrex::Real m_centroid_t_offset       = 0.0;
+    bool        m_use_midstep_field       = false;
 };
 
 } // namespace tracking

@@ -731,6 +731,7 @@ int main (int argc, char* argv[])
         amrex::Real behind_cathode_betazini = 0.0;
         int         use_centroid_phase      = 0;
         amrex::Real centroid_t_offset       = 0.0;
+        int         use_midstep_field       = 0;
         {
             amrex::ParmParse pp_track("tracking");
             pp_track.query("dt", dt);
@@ -742,6 +743,7 @@ int main (int argc, char* argv[])
             pp_track.query("behind_cathode_betazini", behind_cathode_betazini);
             pp_track.query("use_centroid_phase",      use_centroid_phase);
             pp_track.query("centroid_t_offset",       centroid_t_offset);
+            pp_track.query("use_midstep_field",       use_midstep_field);
         }
         if (dt_after <= 0.0) { dt_after = dt; }
 
@@ -760,6 +762,10 @@ int main (int argc, char* argv[])
             amrex::Print() << "[tracking] centroid-z field phase enabled "
                            << "(t_eff = z_centroid/c + offset; offset = "
                            << centroid_t_offset << " s)\n";
+        }
+        if (use_midstep_field != 0) {
+            tracker.set_midstep_field(true);
+            amrex::Print() << "[tracking] midstep-position field gather enabled\n";
         }
         amrex::Real t = t_start;
         bool        switched = false;

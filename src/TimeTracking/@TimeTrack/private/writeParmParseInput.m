@@ -112,6 +112,9 @@ if isprop(obj, 'use_centroid_phase') && ~isempty(obj.use_centroid_phase) && obj.
         fprintf(f, 'tracking.centroid_t_offset  = %.10g\n', obj.centroid_t_offset);
     end
 end
+if isprop(obj, 'use_midstep_field') && ~isempty(obj.use_midstep_field) && obj.use_midstep_field
+    fprintf(f, 'tracking.use_midstep_field  = 1\n');
+end
 
 if obj.enable_space_charge
     fprintf(f, '\n# ---- Space charge ----\n');

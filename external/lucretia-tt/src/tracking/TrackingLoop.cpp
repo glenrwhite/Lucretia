@@ -303,7 +303,28 @@ void TrackingLoop::step (
                 ptd.idata(IntSoA::emerged)[ip] = 1;
             }
 
-            // External fields from elements
+            // External fields from elements. Optionally evaluate at
+            // midstep position (x + 0.5*dt_eff*v) to mirror ImpactT's
+            // half_drift -> gather -> half_drift centered scheme.
+            // Without this, our scheme is gather at start-of-step
+            // position, which is half a step behind ImpactT's gather
+            // point. The 0.045 mm offset (at v=c, dt=0.3ps) times the
+            // field gradient (~2 GV/m^2 in the gun) gives a ~0.1%
+            // per-step field error that accumulates over many steps,
+            // a likely source of the residual chirp-slope mismatch
+            // vs ImpactT in the no-SC partcl-seed test.
+            Real x_gather = x;
+            Real y_gather = y;
+            Real z_gather = z;
+            if (m_use_midstep_field) {
+                constexpr Real inv_c2_mid = Real(1.0) / (kSpeedOfLight * kSpeedOfLight);
+                const Real recpgam_mid = Real(1.0) /
+                    std::sqrt(Real(1.0) + (ux*ux + uy*uy + uz*uz) * inv_c2_mid);
+                const Real half_dt = Real(0.5) * dt_eff;
+                x_gather = x + half_dt * ux * recpgam_mid;
+                y_gather = y + half_dt * uy * recpgam_mid;
+                z_gather = z + half_dt * uz * recpgam_mid;
+            }
             Real Ex = 0.0, Ey = 0.0, Ez = 0.0;
             Real Bx = 0.0, By = 0.0, Bz = 0.0;
             for (auto const& el : lattice) {
@@ -311,7 +332,7 @@ void TrackingLoop::step (
                 Real Bx_e = 0.0, By_e = 0.0, Bz_e = 0.0;
                 std::visit([&] (auto const& e) {
                     if (e.active(t_field)) {
-                        e.gather_E_B(x, y, z, t_field,
+                        e.gather_E_B(x_gather, y_gather, z_gather, t_field,
                                      Ex_e, Ey_e, Ez_e,
                                      Bx_e, By_e, Bz_e);
                     }

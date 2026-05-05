@@ -32,6 +32,7 @@ properties
     behind_cathode_betazini = []                                 % dimensionless, universal v/c for behind-cathode drift
     use_centroid_phase      = []                                 % logical: use bunch z-centroid/c instead of wallclock t for external-field gather (ImpactT compat)
     centroid_t_offset       = []                                 % s, additive offset so t_eff = z_centroid/c + offset matches wallclock at bunch start
+    use_midstep_field       = []                                 % logical: gather external field at midstep particle position (ImpactT compat)
     geom_lo    = [-0.05, -0.05,  0.0]                            % m
     geom_hi    = [ 0.05,  0.05,  1.0]                            % m
     geom_ncell = [32, 32, 32]

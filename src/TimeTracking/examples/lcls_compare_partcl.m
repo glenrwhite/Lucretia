@@ -11,6 +11,7 @@ p.addParameter('slice_sc',     true,  @islogical);
 p.addParameter('mesh_sc',      true,  @islogical);
 p.addParameter('sc_adaptive',  false, @islogical);
 p.addParameter('use_centroid_phase', false, @islogical);
+p.addParameter('use_midstep_field',  false, @islogical);
 p.addParameter('tag',          '',    @(x) ischar(x) || isstring(x));
 p.addParameter('n_steps',      2500,  @isnumeric);   % matches ImpactT dt=0.3ps for ~750 ps
 p.addParameter('impactt_dir',  '/Users/glenwhite/Documents/GitHub/Lattices/common/ImpactT', @(x) ischar(x) || isstring(x));
@@ -121,6 +122,10 @@ tt.behind_cathode_betazini = sqrt(1.0 - 1.0/(1.0 + Bkenergy/Bmass)^2);
 if opts.use_centroid_phase
     tt.use_centroid_phase = true;
     tt.centroid_t_offset  = 0.0;
+end
+% ImpactT-style midstep position for field gather
+if opts.use_midstep_field
+    tt.use_midstep_field = true;
 end
 
 % Keep dumps in a known location so re-analysis doesn't require a re-run.
