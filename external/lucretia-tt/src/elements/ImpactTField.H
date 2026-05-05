@@ -121,6 +121,48 @@ struct ImpactTField
         return F;
     }
 
+    /** Evaluate F, dF/dz, d^2F/dz^2, d^3F/dz^3 at field-local zz.
+     *  Used by the higher-order paraxial expansion that ImpactT applies
+     *  in getfldtfour_SolRF lines 868-877:
+     *    f1  = -(d^2F + F*(omega/c)^2) / 4   (correction to E_z)
+     *    f1p = -(d^3F + dF*(omega/c)^2) / 4  (correction to E_x, E_y)
+     *  Then E_z gets +f1*r^2, E_x/E_y get an additional -x*(f1p*r^2/4),
+     *  and B_x/B_y get an additional contribution from f1*r^2/4.
+     *
+     *  These corrections are 2nd-order in r and matter most when the
+     *  field has large second derivative (transition between cells in
+     *  a multi-cell gun, where Ez changes rapidly with z). For LCLS
+     *  partcl-seed they account for the residual chirp-slope mismatch
+     *  vs ImpactT in the gun's second half (z=0.06-0.10m). */
+    AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
+    static void fourier_eval_higher (
+        const amrex::Real* coeffs, int nf,
+        amrex::Real zlen, amrex::Real zz,
+        amrex::Real& F, amrex::Real& dF, amrex::Real& ddF, amrex::Real& dddF)
+    {
+        F    = amrex::Real(0.5) * coeffs[0];
+        dF   = amrex::Real(0.0);
+        ddF  = amrex::Real(0.0);
+        dddF = amrex::Real(0.0);
+        if (nf > 1) {
+            constexpr amrex::Real two_pi = amrex::Real(6.28318530717958647692);
+            const amrex::Real wbase = two_pi / zlen;
+            const int n_modes = (nf - 1) / 2;
+            for (int n = 1; n <= n_modes; ++n) {
+                const amrex::Real k   = wbase * amrex::Real(n);
+                const amrex::Real arg = k * zz;
+                const amrex::Real ca  = std::cos(arg);
+                const amrex::Real sa  = std::sin(arg);
+                const amrex::Real an  = coeffs[2*n - 1];
+                const amrex::Real bn  = coeffs[2*n];
+                F    += an * ca + bn * sa;
+                dF   += k    * (-an * sa + bn * ca);
+                ddF  += k*k  * (-an * ca - bn * sa);
+                dddF += k*k*k* ( an * sa - bn * ca);
+            }
+        }
+    }
+
     AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
     void gather_E_B (amrex::Real x, amrex::Real y, amrex::Real z, amrex::Real t,
                      amrex::Real& Ex, amrex::Real& Ey, amrex::Real& Ez,
@@ -151,14 +193,32 @@ struct ImpactTField
         if (z_local < amrex::Real(0.0) || z_local > m_blength) {
             return;   // outside the element's lab-z extent: zero field
         }
+        // Higher-order paraxial f1, f1p corrections (ImpactT
+        // getfldtfour_SolRF lines 868-877). These add 2nd-order-in-r
+        // corrections that account for off-axis curvature of the
+        // standing-wave field. f1 corrects E_z by +f1*r^2; f1p
+        // corrects E_x/E_y by -x*f1p*r^2/4; both also contribute to
+        // B_x/B_y via the time-varying part. xlrep = omega/c.
+        amrex::Real f1     = amrex::Real(0.0);
+        amrex::Real f1p    = amrex::Real(0.0);
+        amrex::Real ez1    = amrex::Real(0.0);  // = scale_E * F
+        amrex::Real ezp1   = amrex::Real(0.0);  // = scale_E * dF/dz
         if (m_E_nf > 0) {
-            amrex::Real dF;
+            amrex::Real F, dF, ddF, dddF;
             const amrex::Real zz = z_local - m_E_zmin - amrex::Real(0.5) * m_E_zlen;
-            amrex::Real F = fourier_eval(m_E_coeffs.data(), m_E_nf,
-                                         m_E_zlen, zz, &dF);
-            Ez_axis = m_scale_E * F  * cos_t;
-            dEz_dz  = m_scale_E * dF * cos_t;
-            dEz_dt  = -m_omega  * m_scale_E * F * sin_t;
+            fourier_eval_higher(m_E_coeffs.data(), m_E_nf, m_E_zlen, zz,
+                                F, dF, ddF, dddF);
+            ez1   = m_scale_E * F;
+            ezp1  = m_scale_E * dF;
+            const amrex::Real ezpp1 = m_scale_E * ddF;
+            const amrex::Real ezppp = m_scale_E * dddF;
+            const amrex::Real xlrep = m_omega / c;
+            const amrex::Real xlrep2 = xlrep * xlrep;
+            f1  = -(ezpp1 + ez1  * xlrep2) * amrex::Real(0.25);
+            f1p = -(ezppp + ezp1 * xlrep2) * amrex::Real(0.25);
+            Ez_axis = ez1  * cos_t;
+            dEz_dz  = ezp1 * cos_t;
+            dEz_dt  = -m_omega * ez1 * sin_t;
         }
         if (m_B_nf > 0) {
             amrex::Real dF;
@@ -170,13 +230,27 @@ struct ImpactTField
             dBz_dt  = -m_omega  * m_scale_B * F * sin_t;
         }
 
-        Ez = Ez_axis;
+        // Higher-order corrections (in 1/m^2 effective at given r^2)
+        const amrex::Real r2     = x*x + y*y;
+        const amrex::Real f1_r2  = f1  * r2;
+        const amrex::Real f1p_r2 = f1p * r2;
+
+        Ez = (ez1 + f1_r2) * cos_t;
         Bz = Bz_axis;
 
-        Ex = amrex::Real(-0.5) * x * dEz_dz + amrex::Real( 0.5) * y * dBz_dt;
-        Ey = amrex::Real(-0.5) * y * dEz_dz - amrex::Real( 0.5) * x * dBz_dt;
-        Bx = amrex::Real(-0.5) * x * dBz_dz - inv_2c2 * y * dEz_dt;
-        By = amrex::Real(-0.5) * y * dBz_dz + inv_2c2 * x * dEz_dt;
+        // Ex, Ey: paraxial transverse with f1p correction (ImpactT line 873)
+        Ex = -x * (ezp1 * amrex::Real(0.5) + f1p_r2 * amrex::Real(0.25)) * cos_t
+           + amrex::Real(0.5) * y * dBz_dt;
+        Ey = -y * (ezp1 * amrex::Real(0.5) + f1p_r2 * amrex::Real(0.25)) * cos_t
+           - amrex::Real(0.5) * x * dBz_dt;
+
+        // Bx, By: dEz/dt-driven contribution with f1 correction (ImpactT line 876)
+        // tmpbx = pos(2)*xlrep/c * (ez1/2 + f1*r^2/4) * sin
+        const amrex::Real xlrep_over_c = m_omega / (c * c);
+        Bx = -amrex::Real(0.5) * x * dBz_dz
+           + y * xlrep_over_c * (ez1 * amrex::Real(0.5) + f1_r2 * amrex::Real(0.25)) * sin_t;
+        By = -amrex::Real(0.5) * y * dBz_dz
+           - x * xlrep_over_c * (ez1 * amrex::Real(0.5) + f1_r2 * amrex::Real(0.25)) * sin_t;
     }
 
     // Block 1: E_z Fourier
