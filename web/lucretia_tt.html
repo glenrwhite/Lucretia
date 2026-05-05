@@ -36,21 +36,6 @@
         <ul class="sidebar-nav" id="sidebar-nav">
             <li><a href="#overview">Overview</a></li>
             <li><a href="#features">What it does</a></li>
-            <li><a href="#physics-algorithms">Physics &amp; algorithms</a></li>
-            <li class="sub"><a href="#phys-integrator">Time integration (DKD)</a></li>
-            <li class="sub"><a href="#phys-boris">Boris kick</a></li>
-            <li class="sub"><a href="#phys-field-gather">External field gather</a></li>
-            <li class="sub"><a href="#phys-cathode-drift">Behind-cathode drift</a></li>
-            <li class="sub"><a href="#phys-emission">First-order emission</a></li>
-            <li class="sub"><a href="#phys-paraxial">Off-axis paraxial expansion</a></li>
-            <li class="sub"><a href="#phys-image">Cathode image charge</a></li>
-            <li class="sub"><a href="#phys-sc-3d">3D space charge (IGF Poisson)</a></li>
-            <li class="sub"><a href="#phys-sc-slice">Slice SC (1D mesh-free)</a></li>
-            <li class="sub"><a href="#phys-wake">Wakefields</a></li>
-            <li><a href="#impactt-compare">Comparison with ImpactT</a></li>
-            <li class="sub"><a href="#imp-shared">Shared algorithms</a></li>
-            <li class="sub"><a href="#imp-diff">Differences</a></li>
-            <li class="sub"><a href="#imp-calib">Calibration results</a></li>
             <li><a href="#setup">Setup</a></li>
             <li class="sub"><a href="#setup-mac">macOS</a></li>
             <li class="sub"><a href="#setup-linux">Linux CPU</a></li>
@@ -77,6 +62,21 @@
             <li><a href="#output">Output &amp; handoff</a></li>
             <li><a href="#testing">Testing</a></li>
             <li><a href="#repo">Repository layout</a></li>
+            <li><a href="#physics-algorithms">Physics &amp; algorithms</a></li>
+            <li class="sub"><a href="#phys-integrator">Time integration (DKD)</a></li>
+            <li class="sub"><a href="#phys-boris">Boris kick</a></li>
+            <li class="sub"><a href="#phys-field-gather">External field gather</a></li>
+            <li class="sub"><a href="#phys-cathode-drift">Behind-cathode drift</a></li>
+            <li class="sub"><a href="#phys-emission">First-order emission</a></li>
+            <li class="sub"><a href="#phys-paraxial">Off-axis paraxial expansion</a></li>
+            <li class="sub"><a href="#phys-image">Cathode image charge</a></li>
+            <li class="sub"><a href="#phys-sc-3d">3D space charge (IGF Poisson)</a></li>
+            <li class="sub"><a href="#phys-sc-slice">Slice SC (1D mesh-free)</a></li>
+            <li class="sub"><a href="#phys-wake">Wakefields</a></li>
+            <li><a href="#impactt-compare">Comparison with ImpactT</a></li>
+            <li class="sub"><a href="#imp-shared">Shared algorithms</a></li>
+            <li class="sub"><a href="#imp-diff">Differences</a></li>
+            <li class="sub"><a href="#imp-calib">Calibration results</a></li>
             <li><a href="#trouble">Troubleshooting</a></li>
             <li><a href="#see-also">See also</a></li>
         </ul>
@@ -126,493 +126,6 @@
     in roughly 15 minutes).
 </p>
 </section>
-
-<section class="docs-section" id="physics-algorithms">
-<h2>Physics &amp; algorithms <a class="section-link" href="#physics-algorithms">#</a></h2>
-<p>
-    Each integration step advances every alive particle through a six-stage
-    update derived from ImpactT's main loop in <code>AccSimulator.f90</code>
-    and verified to match it within a few percent on the LCLS injector
-    benchmark (see <a href="#impactt-compare">Comparison with ImpactT</a>).
-    The same kernel runs on CPU (OpenMP) and GPU (CUDA) via AMReX's
-    portability layer.
-</p>
-
-<h3 id="phys-integrator">Time integration: drift-kick-drift</h3>
-<p>
-    Each step is a second-order drift-kick-drift (DKD) leapfrog. For a
-    particle above the cathode (<code>z &gt; z<sub>cathode</sub></code>):
-</p>
-<ol>
-    <li><strong>Half-drift (old velocity)</strong> &mdash;
-        <code>x &larr; x + (dt/2) &middot; u/&gamma;</code>,
-        evaluated at the start-of-step momentum.</li>
-    <li><strong>Field gather</strong> at the new midstep position
-        <code>x<sub>n+1/2</sub></code> and midstep wall-clock time
-        <code>t + dt/2</code>. External RF/solenoid maps + cathode image
-        charge + 3D space charge + slice space charge contributions are
-        all summed into a single <code>(E, B)</code>.</li>
-    <li><strong>Boris kick (full dt)</strong> updates <code>u</code> from
-        the gathered field; details below.</li>
-    <li><strong>Half-drift (new velocity)</strong> &mdash;
-        <code>x &larr; x<sub>n+1/2</sub> + (dt/2) &middot; u<sub>new</sub>/&gamma;<sub>new</sub></code>.</li>
-</ol>
-<p>
-    Particles below the cathode follow a separate path
-    (<a href="#phys-cathode-drift">behind-cathode drift</a>) and get
-    <em>no</em> Boris kick &mdash; they only drift at the universal
-    cold-emission speed. Crossings are handled by a
-    <a href="#phys-emission">first-order emission reset</a> at the end of
-    the step.
-</p>
-<p>
-    DKD is the default
-    (<code>tt.use_dkd_integrator = true</code>). The legacy
-    kick-drift integrator (gather at start-of-step position, full Boris
-    including drift) is retained as <code>false</code> for back-compat
-    regression tests but should not be used for production runs.
-</p>
-
-<h3 id="phys-boris">Boris kick &mdash; relativistic, velocity-only</h3>
-<p>
-    Standard Birdsall-Langdon Boris kick that splits the Lorentz force
-    into half-electric &rarr; magnetic-rotation &rarr; half-electric.
-    Position drift is handled by the surrounding half-drifts, so this
-    routine touches <code>u</code> only:
-</p>
-<dl>
-    <dt>Half electric kick</dt>
-    <dd><code>u<sup>-</sup> = u<sup>n</sup> + (q/m)&middot;E&middot;(dt/2)</code></dd>
-    <dt>Magnetic rotation</dt>
-    <dd>
-        <code>&gamma;<sup>-</sup> = &radic;(1 + |u<sup>-</sup>|<sup>2</sup>/c<sup>2</sup>)</code><br>
-        <code>t = (q/m)&middot;B&middot;(dt/(2&gamma;<sup>-</sup>))</code><br>
-        <code>u' = u<sup>-</sup> + u<sup>-</sup> &times; t</code><br>
-        <code>s = 2t/(1 + |t|<sup>2</sup>)</code><br>
-        <code>u<sup>+</sup> = u<sup>-</sup> + u' &times; s</code>
-    </dd>
-    <dt>Half electric kick</dt>
-    <dd><code>u<sup>n+1</sup> = u<sup>+</sup> + (q/m)&middot;E&middot;(dt/2)</code></dd>
-</dl>
-<p>
-    The rotation is exact and norm-preserving (<code>|u<sup>+</sup>| = |u<sup>-</sup>|</code>),
-    so <code>&gamma;</code> is conserved across the magnetic stage to
-    machine precision regardless of <code>|B|&middot;dt</code>. The
-    second-order accuracy of the velocity kick is preserved by gathering
-    the field at the midstep position and time, which the surrounding
-    half-drifts make available.
-</p>
-
-<h3 id="phys-field-gather">External field gather and time reference</h3>
-<p>
-    For each lattice element overlapping the particle's z, the integrator
-    queries <code>gather_E_B(x, y, z, t<sub>field</sub>)</code> and
-    superposes the result into a per-particle <code>(E, B)</code>. Each
-    element computes its own time-harmonic factor from
-    <code>t<sub>field</sub></code>:
-</p>
-<pre><code>E_z(x,y,z,t) = scale &middot; F(z) &middot; cos(&omega; t<sub>field</sub> + phase)
-B_z(x,y,z,t) = scale &middot; F(z) &middot; cos(&omega; t<sub>field</sub> + phase)</code></pre>
-<p>
-    with <code>F(z)</code> from a Fourier sum (<code>ImpactTField</code>)
-    or analytic profile (<code>SWCavity</code>, <code>SolenoidAnalytic</code>,
-    &hellip;), and off-axis components reconstructed via the paraxial
-    expansion (see <a href="#phys-paraxial">Off-axis paraxial expansion</a>).
-    The choice of <code>t<sub>field</sub></code> is controlled by three
-    mutually-exclusive properties:
-</p>
-<table>
-    <thead><tr><th>Mode</th><th>t<sub>field</sub></th><th>Set via</th><th>Use</th></tr></thead>
-    <tbody>
-        <tr>
-            <td><strong>Wallclock</strong> (default)</td>
-            <td><code>t + dt/2</code></td>
-            <td>both flags off</td>
-            <td>Production. Mirrors ImpactT's <code>kick2t_BeamBunch</code> exactly (<code>pos(4) = tg = t</code>).</td>
-        </tr>
-        <tr>
-            <td><strong>Centroid-z</strong></td>
-            <td><code>z<sub>centroid</sub>/c + offset</code></td>
-            <td><code>tt.use_centroid_phase = true</code></td>
-            <td>Diagnostic. Was the historical default before May 2026; useful for studying phase-velocity effects in non-relativistic regions.</td>
-        </tr>
-        <tr>
-            <td><strong>Per-particle</strong></td>
-            <td><code>z<sub>i</sub>/c</code></td>
-            <td><code>tt.use_particle_phase = true</code></td>
-            <td>Diagnostic. Adds a phase-derivative term to the chirp source: head and tail see different cos.</td>
-        </tr>
-    </tbody>
-</table>
-<p>
-    For an always-on RF cavity to actually deliver a kick at <code>t&nbsp;&lt;&nbsp;0</code>,
-    the element's time window must extend to <code>-&infin;</code>. The
-    <code>TimeWindow</code> mixin defaults to <code>(-&infin;, +&infin;)</code>;
-    finite windows are used only for pulsed sources like
-    <code>CathodeSource</code> emission gating.
-</p>
-
-<h3 id="phys-cathode-drift">Behind-cathode drift</h3>
-<p>
-    When <code>tt.behind_cathode_z</code> and
-    <code>tt.behind_cathode_betazini</code> are set, particles with
-    <code>z &le; z<sub>cathode</sub></code> follow ImpactT's
-    <code>driftemission_BeamBunch</code> rule:
-</p>
-<ul>
-    <li>If <code>p<sub>z</sub> &ge; 0</code>: advance one full step at the
-        universal speed <code>v = &beta;<sub>z,ini</sub> &middot; c</code>
-        (regardless of the particle's individual <code>p<sub>z</sub></code>).
-        This synchronises cross-cathode arrivals to within ~1 ps.</li>
-    <li>If <code>p<sub>z</sub> &lt; 0</code>: frozen (no motion). Backward-
-        going particles below the cathode are unphysical artefacts of the
-        partcl.data sampler and are kept at their initial z until/unless
-        physics turns them around.</li>
-</ul>
-<p>
-    Below-cathode particles also bypass the field gather (no RF, solenoid,
-    or image-charge contribution) and the Boris kick. The universal-betazini
-    convention is critical for matching ImpactT: per-particle drift would
-    spread the cross-cathode arrival window to ~30 ps (= ~30&deg; of
-    S-band RF phase) and inflate sigma_z by ~100&times;.
-</p>
-<p>
-    For a partcl.data seed where <code>(K, m, B<sub>kenergy</sub>) = (1 eV, 511 keV, &mdash;)</code>:
-</p>
-<pre><code>tt.behind_cathode_z        = 0.0;
-tt.behind_cathode_betazini = sqrt(1 - 1/(1 + Bkenergy/Bmass)^2);  % ~0.001978 for 1 eV electrons
-</code></pre>
-
-<h3 id="phys-emission">First-order emission reset</h3>
-<p>
-    A particle that crosses the cathode plane during a step is handled
-    explicitly at the END of the step, after the second half-drift but
-    before the wake-field convolution. This mirrors ImpactT's
-    "first order emission model with random emission time within each step"
-    (<code>AccSimulator.f90</code> lines ~2147&ndash;2167):
-</p>
-<ol>
-    <li>Driftemission has just advanced the particle by
-        <code>&Delta;z = dt &middot; &beta;<sub>z,ini</sub> c</code> at universal speed,
-        bringing its z above the cathode.</li>
-    <li>Compute <code>dtmp = (z &minus; z<sub>cathode</sub>) / (&beta;<sub>z,ini</sub> c)</code>
-        &mdash; the fraction of the time step the particle has actually
-        spent above the cathode.</li>
-    <li><strong>Override</strong> the particle's z to its own-velocity
-        drift over <code>dtmp</code>:<br>
-        <code>z &larr; z<sub>cathode</sub> + dtmp &middot; u<sub>z</sub>/&gamma;</code></li>
-    <li>Add the corresponding own-velocity drift to x, y:<br>
-        <code>x &larr; x + dtmp &middot; u<sub>x</sub>/&gamma;</code>,
-        <code>y &larr; y + dtmp &middot; u<sub>y</sub>/&gamma;</code></li>
-</ol>
-<p>
-    The crossing particle gets <strong>no Boris kick on the cross step</strong>;
-    its first kick happens on the FOLLOWING step when it is fully above
-    the cathode. This avoids the spurious initial-step momentum kick that
-    a naive fractional-Boris scheme would produce.
-</p>
-
-<h3 id="phys-paraxial">Off-axis paraxial expansion (with higher-order corrections)</h3>
-<p>
-    On-axis fields are stored as Fourier sums (<code>ImpactTField</code>) or
-    analytic profiles. Off-axis components are reconstructed from
-    Maxwell's equations to second order in r:
-</p>
-<pre><code>E_r        = -(r/2) &middot; dE_z/dz
-E_&phi;        = -(r/2) &middot; dB_z/dt   (only for time-varying B; usually zero)
-B_r        = -(r/2) &middot; dB_z/dz
-B_&phi;        =  (r/(2c<sup>2</sup>)) &middot; dE_z/dt</code></pre>
-<p>
-    Plus the higher-order radial corrections from
-    <code>getfldtfour_SolRF</code> (lines 868&ndash;877):
-</p>
-<pre><code>f1   = -(d<sup>2</sup>E_z/dz<sup>2</sup>  + E_z &middot; (&omega;/c)<sup>2</sup>) / 4
-f1p  = -(d<sup>3</sup>E_z/dz<sup>3</sup> + dE_z/dz &middot; (&omega;/c)<sup>2</sup>) / 4
-
-E_z &larr; E_z + f1 &middot; r<sup>2</sup>
-E_x &larr; E_x &minus; x &middot; f1p &middot; r<sup>2</sup>/4   (and analogue for E_y)
-B_x &larr; B_x + (y/c<sup>2</sup>) &middot; (&omega; &middot; f1 &middot; r<sup>2</sup>/4) &middot; sin&phi;   (and analogue for B_y)</code></pre>
-<p>
-    The Fourier kernel <code>fourier_eval_higher</code> evaluates
-    <code>F, F', F'', F'''</code> in a single sweep so the higher-order
-    terms cost no additional FFT lookups. These corrections matter most in
-    the cell-to-cell transitions of multi-cell guns where the second
-    derivative of E_z is large; without them the chirp slope at the gun
-    exit deviates by tens of percent vs ImpactT.
-</p>
-
-<h3 id="phys-image">Cathode image charge</h3>
-<p>
-    A <code>CathodeSource</code> with <code>image_charge = true</code>
-    contributes a Coulomb mirror force per particle:
-</p>
-<pre><code>E_z<sup>(image)</sup>(z) = -q / (4 &pi; &epsilon;<sub>0</sub> &middot; (4 (z - z<sub>cathode</sub>)<sup>2</sup>))   for z &gt; z<sub>cathode</sub></code></pre>
-<p>
-    This is a per-particle 1/r<sup>2</sup> attraction toward the cathode
-    plane, dominant in the first few mm of acceleration. The
-    image-plane lookup is added INTO the gathered E during step 2 of
-    DKD, so it sees the same midstep position as the external fields.
-    The contribution gates off automatically once
-    <code>z &gt; sc_image_cutoff</code> (default 5 cm) to avoid floating-point
-    underflow and to mirror IMPACT-T's <code>Zimage</code> convention.
-</p>
-
-<h3 id="phys-sc-3d">3D space charge: IGF Poisson on an adaptive mesh</h3>
-<p>
-    Mesh-based 3D space charge uses ABLASTR's
-    <em>integrated Green-function</em> (IGF) open-boundary Poisson solver:
-</p>
-<ol>
-    <li><strong>Charge deposit</strong> &mdash; bilinear (CIC) deposition
-        of every alive particle's <code>q&middot;w</code> onto the SC
-        nodal mesh. Single-FAB layout per rank to allow position-based
-        indexing without ghost cells.</li>
-    <li><strong>Lorentz boost setup</strong> &mdash; the solver runs in
-        the bunch rest frame, with the z-grid stretched by the bunch-mean
-        <code>&gamma;</code>: cell sizes <code>(dx, dy, &gamma;&middot;dz)</code>.</li>
-    <li><strong>FFT-based IGF Poisson solve</strong> &mdash; convolves
-        the deposited density with the integrated Green function for an
-        open-boundary sphere; FFT-accelerated. Output: <code>(E_x, E_y, E_z)</code>
-        on the same mesh.</li>
-    <li><strong>Per-particle gather</strong> &mdash; trilinear
-        interpolation of <code>(E_x, E_y, E_z)</code> back to each particle.</li>
-    <li><strong>Self-force subtraction</strong> &mdash; remove the
-        Coulomb field of the particle's own deposited CIC cloud, looked
-        up from a precomputed shape table indexed by fractional cell
-        position. ~20 cycles instead of 8 sqrt+div per particle.</li>
-    <li><strong>Per-particle Lorentz boost-back</strong> &mdash;
-        multiply the gathered (and self-corrected) field by
-        <code>1/&gamma;<sub>i</sub><sup>2</sup></code> using each particle's
-        own &gamma; (infinite-bin energy-binning limit). Critical for
-        chirped bunches where head and tail differ by 2&times;+ in &gamma;.</li>
-</ol>
-<p>The mesh can be configured in three modes:</p>
-<dl>
-    <dt><strong>Static</strong> (<code>sc_adaptive=false, sc_comoving=false</code>)</dt>
-    <dd>Mesh fixed at <code>(geom_lo, geom_hi)</code>. Cheap but accurate
-        only when the bunch stays small relative to the box.</dd>
-    <dt><strong>Co-moving</strong> (<code>sc_comoving=true</code>)</dt>
-    <dd>Mesh follows the bunch in z; recenters when the centroid drifts
-        past the central 50% of the box. Suitable for long beamlines
-        where the bunch travels far but its dimensions don't vary much.</dd>
-    <dt><strong>Adaptive</strong> (<code>sc_adaptive=true</code>)</dt>
-    <dd>Mesh half-extents are recomputed every step as
-        <code>max(pad_factor &middot; &sigma;<sub>i</sub>, min_pad)</code> on each axis;
-        co-moving in z is implicit. Closest to ImpactT's per-step adaptive
-        mesh. Currently has a known LUT-noise issue that inflates
-        projected transverse emittance by ~5&times; on the LCLS injector
-        (slice emittance remains close to ImpactT).</dd>
-</dl>
-<p>
-    Image-charge planes are also handled by the SC stage: each
-    <code>CathodeSource</code> with <code>image_charge=true</code>
-    contributes a row of mirror charges to the deposit, so the IGF solver
-    sees a charge distribution that satisfies <code>&phi; = 0</code> on
-    the cathode plane (controlled by <code>sc_image_plane</code>).
-</p>
-
-<h3 id="phys-sc-slice">Slice space charge: 1D mesh-free longitudinal</h3>
-<p>
-    Mesh-based 3D SC under-resolves the longitudinal direction once the
-    bunch compresses below ~one cell. Slice SC patches this by computing
-    <code>E_z<sup>(slice)</sup></code> via Lawson's analytic disk-stack
-    formula:
-</p>
-<pre><code>E_z<sup>(slice)</sup>(z<sub>p</sub>) = (1/4&pi;&epsilon;<sub>0</sub>) &middot; &Sigma;<sub>k</sub> Q<sub>k</sub> &middot; G(z<sub>p</sub> - z<sub>k</sub>, R<sub>bunch</sub>(z<sub>k</sub>))</code></pre>
-<p>
-    where <code>G</code> is the on-axis E_z of a uniformly-charged disk
-    of radius <code>R</code>, <code>z<sub>k</sub></code> is the centre of
-    the k-th longitudinal slice, and
-    <code>R<sub>bunch</sub>(z<sub>k</sub>) = slice_radius_factor &middot; &sigma;<sub>x,y</sub>(z<sub>k</sub>)</code>.
-    Computed once per step with all-MPI reductions; the per-particle gather
-    is just <code>E_z_at(z)</code>. The disk-stack formula is in the lab
-    frame (E_z is invariant under longitudinal Lorentz boost) so no
-    additional <code>1/&gamma;<sup>2</sup></code> factor is applied.
-</p>
-<p>
-    When <code>tt.enable_slice_sc = true</code>, the slice
-    <code>E_z</code> REPLACES the longitudinal component from the 3D mesh
-    SC. The mesh keeps doing transverse (<code>E_x, E_y</code>); the
-    slice handles longitudinal. Cost is negligible (~1% of the FFT step)
-    and it keeps longitudinal physics resolved no matter how short the
-    bunch gets.
-</p>
-
-<h3 id="phys-wake">Wakefields (Bane analytic, short-range)</h3>
-<p>
-    Linac wakes are applied via Strang splitting after the second
-    half-drift: each <code>WakeField</code> element bins live particles
-    into <code>n_slices</code> longitudinal bins, computes per-slice
-    charge sum and dipole moments
-    (<code>&Sigma;q&middot;x, &Sigma;q&middot;y</code>), all-reduces across
-    MPI ranks, and convolves causally with Bane's analytic short-range
-    wake formulas for an iris-loaded periodic structure
-    (longitudinal monopole + transverse dipole). The resulting per-slice
-    impulse is interpolated back to each particle's
-    <code>(p<sub>x</sub>, p<sub>y</sub>, p<sub>z</sub>)</code>.
-</p>
-<p>
-    Wake parameters are the geometric cell parameters
-    (iris radius <code>a</code>, gap <code>g</code>, period <code>L</code>)
-    for the structure type. Longitudinal and transverse contributions
-    can be toggled independently, matching ImpactT's type-(-6)
-    <code>v(5)/v(6)</code> flags.
-</p>
-
-</section>
-
-
-<section class="docs-section" id="impactt-compare">
-<h2>Comparison with ImpactT <a class="section-link" href="#impactt-compare">#</a></h2>
-<p>
-    lucretia-tt is intentionally aligned with
-    <a href="https://github.com/impact-lbl/IMPACT-T">IMPACT-T</a> at the
-    algorithm level for the gun + capture region: the goal is that the
-    same partcl.data and rfdata files run through both codes give the same
-    answer to within the SC architecture difference. This section
-    inventories what's identical, what differs, and the current
-    cross-code numbers.
-</p>
-
-<h3 id="imp-shared">Algorithms shared with ImpactT (intentional 1:1)</h3>
-<ul>
-    <li><strong>Drift-kick-drift integrator</strong> with second-order
-        leapfrog structure (mirrors <code>kick2t_BeamBunch</code> in
-        <code>BeamBunch.f90</code>).</li>
-    <li><strong>Wallclock cos phase</strong>:
-        <code>cos(&omega; t + phase)</code> with <code>t</code> being the
-        wall-clock simulation time, evaluated at midstep. Matches
-        <code>tt = pos(4)</code> in
-        <code>getfldtfour_SolRF</code>.</li>
-    <li><strong>Birdsall-Langdon Boris kick</strong> (half-E + B-rotation
-        + half-E) with the <code>(t, s)</code>-vector formulation.</li>
-    <li><strong>Universal-betazini behind-cathode drift</strong> for
-        <code>p<sub>z</sub> &ge; 0</code> particles below the cathode plane.
-        Backward-going below-cathode particles are frozen.</li>
-    <li><strong>First-order emission model</strong>: cross-cathode particles
-        get z reset to <code>dtmp &middot; u<sub>z</sub>/&gamma;</code>;
-        no Boris kick on the cross step.</li>
-    <li><strong>Off-axis paraxial expansion with higher-order corrections</strong>
-        (the f1 / f1p terms involving <code>d<sup>2</sup>F</code> and
-        <code>d<sup>3</sup>F</code> from
-        <code>SolRF.f90</code> lines 868&ndash;877).</li>
-    <li><strong>ImpactT-format <code>rfdata</code> Fourier field maps</strong>
-        for E<sub>z</sub> and B<sub>z</sub> (two-block format with
-        <code>(NF, zmin, zmax, zlen)</code> headers).</li>
-    <li><strong>partcl.data</strong> as the canonical particle exchange
-        format. Both codes read the same file.</li>
-    <li><strong>Cathode image charge</strong> via Coulomb mirror force,
-        gated by a Z<sub>image</sub> cutoff distance.</li>
-</ul>
-
-<h3 id="imp-diff">Differences</h3>
-
-<h4>Capabilities lucretia-tt has that ImpactT does not</h4>
-<ul>
-    <li><strong>GPU acceleration</strong> (CUDA via AMReX). One push kernel
-        runs on either CPU-OpenMP or GPU; multi-GPU via CUDA-aware MPI.</li>
-    <li><strong>1D mesh-free slice SC</strong> (Lawson disk-stack).
-        Stays resolved at any bunch length without an FFT.</li>
-    <li><strong>3D adaptive mesh</strong> that tracks bunch sigmas every
-        step (transverse + longitudinal). ImpactT's adaptive mesh exists
-        but has a fixed <code>Xrad</code>/<code>Yrad</code> outer radius.</li>
-    <li><strong>openPMD HDF5</strong> particle dumps with full per-particle
-        history; readable by any openPMD-aware tool.</li>
-    <li><strong>Bunch handoff to s-based tracking</strong> via
-        <code>freezePlaneOut</code> &mdash; produces a Lucretia
-        <code>Beam</code> struct ready for <code>TrackThru</code>.</li>
-    <li><strong>WakeField as a first-class lattice element</strong> rather
-        than a separate input-file flag.</li>
-    <li><strong>Hammersley-sampled cathode generation in pure MATLAB</strong>
-        (<code>CathodeLaserDist</code>): no Python / distgen dependency,
-        no clumping artefacts.</li>
-    <li><strong>Per-step CSV trace diagnostic</strong>
-        (<code>tracking.trace_file</code>) for cross-code calibration:
-        bunch-mean stats every N steps in a flat CSV.</li>
-</ul>
-
-<h4>Capabilities ImpactT has that lucretia-tt does not (yet)</h4>
-<ul>
-    <li><strong>Detailed per-step slice diagnostics</strong> in
-        <code>fort.27/28/29/30</code> &mdash; lucretia-tt computes slice
-        statistics post-hoc from per-particle dumps.</li>
-    <li><strong>Type-(-2) collimators / type-(-99) bend regions</strong>
-        from the ImpactT input file are currently skipped by
-        <code>readImpactTLattice</code> with a warning.</li>
-    <li><strong>Mature transverse SC</strong>. lucretia-tt's adaptive mesh
-        currently has a known LUT-noise issue that inflates the projected
-        transverse emittance by ~5&times; on the LCLS injector benchmark;
-        the slice (peak-current) emittance remains within ~25% of ImpactT.
-        Fix is open work.</li>
-    <li><strong>Bend-region tracking</strong> &mdash; ImpactT supports
-        bend-plane integration; lucretia-tt is straight-axis only.</li>
-</ul>
-
-<h4>Implementation differences (matter only for byte-for-byte parity)</h4>
-<ul>
-    <li>lucretia-tt is C++17 with AMReX (BoxLib lineage); ImpactT is
-        Fortran 90 with custom MPI infrastructure.</li>
-    <li>Particle storage: AMReX <code>ParticleContainerPureSoA</code>
-        (struct-of-arrays, GPU-friendly) vs ImpactT's
-        <code>%Pts1(6, Nplocal)</code> Fortran 2D array.</li>
-    <li>Position units: lucretia-tt uses SI everywhere; ImpactT uses
-        a dimensionless internal representation (positions normalised
-        by <code>Sc<sub>xlt</sub> = c &middot; Dt</code>).</li>
-    <li>I/O: lucretia-tt writes openPMD HDF5; ImpactT writes
-        <code>fort.NN</code> formatted text and <code>partcl.data</code>.</li>
-</ul>
-
-<h3 id="imp-calib">Cross-code calibration results</h3>
-<p>
-    LCLS injector partcl-seed test (50,000 macros, no SC, gun + SOL1
-    region):
-</p>
-<table>
-    <thead>
-        <tr><th>Quantity</th><th>lucretia-tt</th><th>ImpactT</th><th>Ratio</th></tr>
-    </thead>
-    <tbody>
-        <tr><td>&gamma;<sub>mean</sub></td><td>11.6929</td><td>11.6486</td><td>+0.4%</td></tr>
-        <tr><td>&sigma;<sub>z</sub></td><td>523 &mu;m</td><td>530 &mu;m</td><td>&minus;1.3%</td></tr>
-        <tr><td>&sigma;<sub>&gamma;</sub></td><td>0.0319</td><td>0.0324</td><td>&minus;1.5%</td></tr>
-        <tr><td>&sigma;<sub>x</sub></td><td>240 &mu;m</td><td>234 &mu;m</td><td>+2.6%</td></tr>
-        <tr><td>chirp slope d&gamma;/dz</td><td>&minus;59.5 m<sup>-1</sup></td><td>&minus;60.6 m<sup>-1</sup></td><td>&minus;1.9%</td></tr>
-    </tbody>
-</table>
-<p>
-    LCLS injector full lattice (50,000 macros, with SC, gun + SOL1 + L0A
-    structure, end of L0A at z &asymp; 5 m):
-</p>
-<table>
-    <thead>
-        <tr><th>Quantity</th><th>lucretia-tt</th><th>ImpactT</th><th>Ratio</th><th>Note</th></tr>
-    </thead>
-    <tbody>
-        <tr><td>&gamma;<sub>mean</sub></td><td>93.6</td><td>94.5</td><td>&minus;0.9%</td><td>&mdash;</td></tr>
-        <tr><td>&sigma;<sub>z</sub></td><td>1.18 mm</td><td>1.28 mm</td><td>&minus;7%</td><td>&mdash;</td></tr>
-        <tr><td>&epsilon;<sub>nz</sub></td><td>273 &mu;m&middot;rad</td><td>290 &mu;m&middot;rad</td><td>&minus;6%</td><td>&mdash;</td></tr>
-        <tr><td>&sigma;<sub>x</sub></td><td>1.00 mm</td><td>0.73 mm</td><td>+37%</td><td>SC LUT noise</td></tr>
-        <tr><td>&sigma;<sub>&gamma;</sub></td><td>0.74</td><td>0.36</td><td>2.0&times;</td><td>under investigation</td></tr>
-        <tr><td>&epsilon;<sub>nx</sub> (projected)</td><td>6.29 &mu;m&middot;rad</td><td>1.10 &mu;m&middot;rad</td><td>5.7&times;</td><td>SC LUT noise (head/tail)</td></tr>
-        <tr><td>&epsilon;<sub>nx</sub> (peak-current slice)</td><td>1.23 &mu;m&middot;rad</td><td>~1.0 &mu;m&middot;rad</td><td>~1.2&times;</td><td>core OK</td></tr>
-    </tbody>
-</table>
-<p>
-    The transverse projected-emittance discrepancy is localised to the
-    head / tail of the bunch where mesh noise dominates; the bunch core
-    (peak-current slice) tracks ImpactT to within ~25%. The
-    <code>bench_full_lattice.m</code> driver in
-    <code>src/TimeTracking/examples/</code> reproduces these numbers.
-</p>
-<p>
-    For partcl-seeded comparison runs, drop the <code>cathode_source</code>
-    that <code>readImpactTLattice</code> generates &mdash; otherwise it
-    will emit a second batch of particles in parallel with the partcl.data
-    seed.
-</p>
-
-</section>
-
 
 <section class="docs-section" id="setup">
 <h2>Setup <a class="section-link" href="#setup">#</a></h2>
@@ -1460,6 +973,491 @@ src/TimeTracking/                    MATLAB front-end
 src/BeamGeneration/
 &#9492;&#9472;&#9472; CathodeLaserDist.m               native cold-start cathode distribution
 </code></pre>
+</section>
+
+<section class="docs-section" id="physics-algorithms">
+<h2>Physics &amp; algorithms <a class="section-link" href="#physics-algorithms">#</a></h2>
+<p>
+    Each integration step advances every alive particle through a six-stage
+    update derived from ImpactT's main loop in <code>AccSimulator.f90</code>
+    and verified to match it within a few percent on the LCLS injector
+    benchmark (see <a href="#impactt-compare">Comparison with ImpactT</a>).
+    The same kernel runs on CPU (OpenMP) and GPU (CUDA) via AMReX's
+    portability layer.
+</p>
+
+<h3 id="phys-integrator">Time integration: drift-kick-drift</h3>
+<p>
+    Each step is a second-order drift-kick-drift (DKD) leapfrog. For a
+    particle above the cathode (<code>z &gt; z<sub>cathode</sub></code>):
+</p>
+<ol>
+    <li><strong>Half-drift (old velocity)</strong> &mdash;
+        <code>x &larr; x + (dt/2) &middot; u/&gamma;</code>,
+        evaluated at the start-of-step momentum.</li>
+    <li><strong>Field gather</strong> at the new midstep position
+        <code>x<sub>n+1/2</sub></code> and midstep wall-clock time
+        <code>t + dt/2</code>. External RF/solenoid maps + cathode image
+        charge + 3D space charge + slice space charge contributions are
+        all summed into a single <code>(E, B)</code>.</li>
+    <li><strong>Boris kick (full dt)</strong> updates <code>u</code> from
+        the gathered field; details below.</li>
+    <li><strong>Half-drift (new velocity)</strong> &mdash;
+        <code>x &larr; x<sub>n+1/2</sub> + (dt/2) &middot; u<sub>new</sub>/&gamma;<sub>new</sub></code>.</li>
+</ol>
+<p>
+    Particles below the cathode follow a separate path
+    (<a href="#phys-cathode-drift">behind-cathode drift</a>) and get
+    <em>no</em> Boris kick &mdash; they only drift at the universal
+    cold-emission speed. Crossings are handled by a
+    <a href="#phys-emission">first-order emission reset</a> at the end of
+    the step.
+</p>
+<p>
+    DKD is the default
+    (<code>tt.use_dkd_integrator = true</code>). The legacy
+    kick-drift integrator (gather at start-of-step position, full Boris
+    including drift) is retained as <code>false</code> for back-compat
+    regression tests but should not be used for production runs.
+</p>
+
+<h3 id="phys-boris">Boris kick &mdash; relativistic, velocity-only</h3>
+<p>
+    Standard Birdsall-Langdon Boris kick that splits the Lorentz force
+    into half-electric &rarr; magnetic-rotation &rarr; half-electric.
+    Position drift is handled by the surrounding half-drifts, so this
+    routine touches <code>u</code> only:
+</p>
+<dl>
+    <dt>Half electric kick</dt>
+    <dd><code>u<sup>-</sup> = u<sup>n</sup> + (q/m)&middot;E&middot;(dt/2)</code></dd>
+    <dt>Magnetic rotation</dt>
+    <dd>
+        <code>&gamma;<sup>-</sup> = &radic;(1 + |u<sup>-</sup>|<sup>2</sup>/c<sup>2</sup>)</code><br>
+        <code>t = (q/m)&middot;B&middot;(dt/(2&gamma;<sup>-</sup>))</code><br>
+        <code>u' = u<sup>-</sup> + u<sup>-</sup> &times; t</code><br>
+        <code>s = 2t/(1 + |t|<sup>2</sup>)</code><br>
+        <code>u<sup>+</sup> = u<sup>-</sup> + u' &times; s</code>
+    </dd>
+    <dt>Half electric kick</dt>
+    <dd><code>u<sup>n+1</sup> = u<sup>+</sup> + (q/m)&middot;E&middot;(dt/2)</code></dd>
+</dl>
+<p>
+    The rotation is exact and norm-preserving (<code>|u<sup>+</sup>| = |u<sup>-</sup>|</code>),
+    so <code>&gamma;</code> is conserved across the magnetic stage to
+    machine precision regardless of <code>|B|&middot;dt</code>. The
+    second-order accuracy of the velocity kick is preserved by gathering
+    the field at the midstep position and time, which the surrounding
+    half-drifts make available.
+</p>
+
+<h3 id="phys-field-gather">External field gather and time reference</h3>
+<p>
+    For each lattice element overlapping the particle's z, the integrator
+    queries <code>gather_E_B(x, y, z, t<sub>field</sub>)</code> and
+    superposes the result into a per-particle <code>(E, B)</code>. Each
+    element computes its own time-harmonic factor from
+    <code>t<sub>field</sub></code>:
+</p>
+<pre><code>E_z(x,y,z,t) = scale &middot; F(z) &middot; cos(&omega; t<sub>field</sub> + phase)
+B_z(x,y,z,t) = scale &middot; F(z) &middot; cos(&omega; t<sub>field</sub> + phase)</code></pre>
+<p>
+    with <code>F(z)</code> from a Fourier sum (<code>ImpactTField</code>)
+    or analytic profile (<code>SWCavity</code>, <code>SolenoidAnalytic</code>,
+    &hellip;), and off-axis components reconstructed via the paraxial
+    expansion (see <a href="#phys-paraxial">Off-axis paraxial expansion</a>).
+    The choice of <code>t<sub>field</sub></code> is controlled by three
+    mutually-exclusive properties:
+</p>
+<table>
+    <thead><tr><th>Mode</th><th>t<sub>field</sub></th><th>Set via</th><th>Use</th></tr></thead>
+    <tbody>
+        <tr>
+            <td><strong>Wallclock</strong> (default)</td>
+            <td><code>t + dt/2</code></td>
+            <td>both flags off</td>
+            <td>Production. Mirrors ImpactT's <code>kick2t_BeamBunch</code> exactly (<code>pos(4) = tg = t</code>).</td>
+        </tr>
+        <tr>
+            <td><strong>Centroid-z</strong></td>
+            <td><code>z<sub>centroid</sub>/c + offset</code></td>
+            <td><code>tt.use_centroid_phase = true</code></td>
+            <td>Diagnostic. Was the historical default before May 2026; useful for studying phase-velocity effects in non-relativistic regions.</td>
+        </tr>
+        <tr>
+            <td><strong>Per-particle</strong></td>
+            <td><code>z<sub>i</sub>/c</code></td>
+            <td><code>tt.use_particle_phase = true</code></td>
+            <td>Diagnostic. Adds a phase-derivative term to the chirp source: head and tail see different cos.</td>
+        </tr>
+    </tbody>
+</table>
+<p>
+    For an always-on RF cavity to actually deliver a kick at <code>t&nbsp;&lt;&nbsp;0</code>,
+    the element's time window must extend to <code>-&infin;</code>. The
+    <code>TimeWindow</code> mixin defaults to <code>(-&infin;, +&infin;)</code>;
+    finite windows are used only for pulsed sources like
+    <code>CathodeSource</code> emission gating.
+</p>
+
+<h3 id="phys-cathode-drift">Behind-cathode drift</h3>
+<p>
+    When <code>tt.behind_cathode_z</code> and
+    <code>tt.behind_cathode_betazini</code> are set, particles with
+    <code>z &le; z<sub>cathode</sub></code> follow ImpactT's
+    <code>driftemission_BeamBunch</code> rule:
+</p>
+<ul>
+    <li>If <code>p<sub>z</sub> &ge; 0</code>: advance one full step at the
+        universal speed <code>v = &beta;<sub>z,ini</sub> &middot; c</code>
+        (regardless of the particle's individual <code>p<sub>z</sub></code>).
+        This synchronises cross-cathode arrivals to within ~1 ps.</li>
+    <li>If <code>p<sub>z</sub> &lt; 0</code>: frozen (no motion). Backward-
+        going particles below the cathode are unphysical artefacts of the
+        partcl.data sampler and are kept at their initial z until/unless
+        physics turns them around.</li>
+</ul>
+<p>
+    Below-cathode particles also bypass the field gather (no RF, solenoid,
+    or image-charge contribution) and the Boris kick. The universal-betazini
+    convention is critical for matching ImpactT: per-particle drift would
+    spread the cross-cathode arrival window to ~30 ps (= ~30&deg; of
+    S-band RF phase) and inflate sigma_z by ~100&times;.
+</p>
+<p>
+    For a partcl.data seed where <code>(K, m, B<sub>kenergy</sub>) = (1 eV, 511 keV, &mdash;)</code>:
+</p>
+<pre><code>tt.behind_cathode_z        = 0.0;
+tt.behind_cathode_betazini = sqrt(1 - 1/(1 + Bkenergy/Bmass)^2);  % ~0.001978 for 1 eV electrons
+</code></pre>
+
+<h3 id="phys-emission">First-order emission reset</h3>
+<p>
+    A particle that crosses the cathode plane during a step is handled
+    explicitly at the END of the step, after the second half-drift but
+    before the wake-field convolution. This mirrors ImpactT's
+    "first order emission model with random emission time within each step"
+    (<code>AccSimulator.f90</code> lines ~2147&ndash;2167):
+</p>
+<ol>
+    <li>Driftemission has just advanced the particle by
+        <code>&Delta;z = dt &middot; &beta;<sub>z,ini</sub> c</code> at universal speed,
+        bringing its z above the cathode.</li>
+    <li>Compute <code>dtmp = (z &minus; z<sub>cathode</sub>) / (&beta;<sub>z,ini</sub> c)</code>
+        &mdash; the fraction of the time step the particle has actually
+        spent above the cathode.</li>
+    <li><strong>Override</strong> the particle's z to its own-velocity
+        drift over <code>dtmp</code>:<br>
+        <code>z &larr; z<sub>cathode</sub> + dtmp &middot; u<sub>z</sub>/&gamma;</code></li>
+    <li>Add the corresponding own-velocity drift to x, y:<br>
+        <code>x &larr; x + dtmp &middot; u<sub>x</sub>/&gamma;</code>,
+        <code>y &larr; y + dtmp &middot; u<sub>y</sub>/&gamma;</code></li>
+</ol>
+<p>
+    The crossing particle gets <strong>no Boris kick on the cross step</strong>;
+    its first kick happens on the FOLLOWING step when it is fully above
+    the cathode. This avoids the spurious initial-step momentum kick that
+    a naive fractional-Boris scheme would produce.
+</p>
+
+<h3 id="phys-paraxial">Off-axis paraxial expansion (with higher-order corrections)</h3>
+<p>
+    On-axis fields are stored as Fourier sums (<code>ImpactTField</code>) or
+    analytic profiles. Off-axis components are reconstructed from
+    Maxwell's equations to second order in r:
+</p>
+<pre><code>E_r        = -(r/2) &middot; dE_z/dz
+E_&phi;        = -(r/2) &middot; dB_z/dt   (only for time-varying B; usually zero)
+B_r        = -(r/2) &middot; dB_z/dz
+B_&phi;        =  (r/(2c<sup>2</sup>)) &middot; dE_z/dt</code></pre>
+<p>
+    Plus the higher-order radial corrections from
+    <code>getfldtfour_SolRF</code> (lines 868&ndash;877):
+</p>
+<pre><code>f1   = -(d<sup>2</sup>E_z/dz<sup>2</sup>  + E_z &middot; (&omega;/c)<sup>2</sup>) / 4
+f1p  = -(d<sup>3</sup>E_z/dz<sup>3</sup> + dE_z/dz &middot; (&omega;/c)<sup>2</sup>) / 4
+
+E_z &larr; E_z + f1 &middot; r<sup>2</sup>
+E_x &larr; E_x &minus; x &middot; f1p &middot; r<sup>2</sup>/4   (and analogue for E_y)
+B_x &larr; B_x + (y/c<sup>2</sup>) &middot; (&omega; &middot; f1 &middot; r<sup>2</sup>/4) &middot; sin&phi;   (and analogue for B_y)</code></pre>
+<p>
+    The Fourier kernel <code>fourier_eval_higher</code> evaluates
+    <code>F, F', F'', F'''</code> in a single sweep so the higher-order
+    terms cost no additional FFT lookups. These corrections matter most in
+    the cell-to-cell transitions of multi-cell guns where the second
+    derivative of E_z is large; without them the chirp slope at the gun
+    exit deviates by tens of percent vs ImpactT.
+</p>
+
+<h3 id="phys-image">Cathode image charge</h3>
+<p>
+    A <code>CathodeSource</code> with <code>image_charge = true</code>
+    contributes a Coulomb mirror force per particle:
+</p>
+<pre><code>E_z<sup>(image)</sup>(z) = -q / (4 &pi; &epsilon;<sub>0</sub> &middot; (4 (z - z<sub>cathode</sub>)<sup>2</sup>))   for z &gt; z<sub>cathode</sub></code></pre>
+<p>
+    This is a per-particle 1/r<sup>2</sup> attraction toward the cathode
+    plane, dominant in the first few mm of acceleration. The
+    image-plane lookup is added INTO the gathered E during step 2 of
+    DKD, so it sees the same midstep position as the external fields.
+    The contribution gates off automatically once
+    <code>z &gt; sc_image_cutoff</code> (default 5 cm) to avoid floating-point
+    underflow and to mirror IMPACT-T's <code>Zimage</code> convention.
+</p>
+
+<h3 id="phys-sc-3d">3D space charge: IGF Poisson on an adaptive mesh</h3>
+<p>
+    Mesh-based 3D space charge uses ABLASTR's
+    <em>integrated Green-function</em> (IGF) open-boundary Poisson solver:
+</p>
+<ol>
+    <li><strong>Charge deposit</strong> &mdash; bilinear (CIC) deposition
+        of every alive particle's <code>q&middot;w</code> onto the SC
+        nodal mesh. Single-FAB layout per rank to allow position-based
+        indexing without ghost cells.</li>
+    <li><strong>Lorentz boost setup</strong> &mdash; the solver runs in
+        the bunch rest frame, with the z-grid stretched by the bunch-mean
+        <code>&gamma;</code>: cell sizes <code>(dx, dy, &gamma;&middot;dz)</code>.</li>
+    <li><strong>FFT-based IGF Poisson solve</strong> &mdash; convolves
+        the deposited density with the integrated Green function for an
+        open-boundary sphere; FFT-accelerated. Output: <code>(E_x, E_y, E_z)</code>
+        on the same mesh.</li>
+    <li><strong>Per-particle gather</strong> &mdash; trilinear
+        interpolation of <code>(E_x, E_y, E_z)</code> back to each particle.</li>
+    <li><strong>Self-force subtraction</strong> &mdash; remove the
+        Coulomb field of the particle's own deposited CIC cloud, looked
+        up from a precomputed shape table indexed by fractional cell
+        position. ~20 cycles instead of 8 sqrt+div per particle.</li>
+    <li><strong>Per-particle Lorentz boost-back</strong> &mdash;
+        multiply the gathered (and self-corrected) field by
+        <code>1/&gamma;<sub>i</sub><sup>2</sup></code> using each particle's
+        own &gamma; (infinite-bin energy-binning limit). Critical for
+        chirped bunches where head and tail differ by 2&times;+ in &gamma;.</li>
+</ol>
+<p>The mesh can be configured in three modes:</p>
+<dl>
+    <dt><strong>Static</strong> (<code>sc_adaptive=false, sc_comoving=false</code>)</dt>
+    <dd>Mesh fixed at <code>(geom_lo, geom_hi)</code>. Cheap but accurate
+        only when the bunch stays small relative to the box.</dd>
+    <dt><strong>Co-moving</strong> (<code>sc_comoving=true</code>)</dt>
+    <dd>Mesh follows the bunch in z; recenters when the centroid drifts
+        past the central 50% of the box. Suitable for long beamlines
+        where the bunch travels far but its dimensions don't vary much.</dd>
+    <dt><strong>Adaptive</strong> (<code>sc_adaptive=true</code>)</dt>
+    <dd>Mesh half-extents are recomputed every step as
+        <code>max(pad_factor &middot; &sigma;<sub>i</sub>, min_pad)</code> on each axis;
+        co-moving in z is implicit. Closest to ImpactT's per-step adaptive
+        mesh. Currently has a known LUT-noise issue that inflates
+        projected transverse emittance by ~5&times; on the LCLS injector
+        (slice emittance remains close to ImpactT).</dd>
+</dl>
+<p>
+    Image-charge planes are also handled by the SC stage: each
+    <code>CathodeSource</code> with <code>image_charge=true</code>
+    contributes a row of mirror charges to the deposit, so the IGF solver
+    sees a charge distribution that satisfies <code>&phi; = 0</code> on
+    the cathode plane (controlled by <code>sc_image_plane</code>).
+</p>
+
+<h3 id="phys-sc-slice">Slice space charge: 1D mesh-free longitudinal</h3>
+<p>
+    Mesh-based 3D SC under-resolves the longitudinal direction once the
+    bunch compresses below ~one cell. Slice SC patches this by computing
+    <code>E_z<sup>(slice)</sup></code> via Lawson's analytic disk-stack
+    formula:
+</p>
+<pre><code>E_z<sup>(slice)</sup>(z<sub>p</sub>) = (1/4&pi;&epsilon;<sub>0</sub>) &middot; &Sigma;<sub>k</sub> Q<sub>k</sub> &middot; G(z<sub>p</sub> - z<sub>k</sub>, R<sub>bunch</sub>(z<sub>k</sub>))</code></pre>
+<p>
+    where <code>G</code> is the on-axis E_z of a uniformly-charged disk
+    of radius <code>R</code>, <code>z<sub>k</sub></code> is the centre of
+    the k-th longitudinal slice, and
+    <code>R<sub>bunch</sub>(z<sub>k</sub>) = slice_radius_factor &middot; &sigma;<sub>x,y</sub>(z<sub>k</sub>)</code>.
+    Computed once per step with all-MPI reductions; the per-particle gather
+    is just <code>E_z_at(z)</code>. The disk-stack formula is in the lab
+    frame (E_z is invariant under longitudinal Lorentz boost) so no
+    additional <code>1/&gamma;<sup>2</sup></code> factor is applied.
+</p>
+<p>
+    When <code>tt.enable_slice_sc = true</code>, the slice
+    <code>E_z</code> REPLACES the longitudinal component from the 3D mesh
+    SC. The mesh keeps doing transverse (<code>E_x, E_y</code>); the
+    slice handles longitudinal. Cost is negligible (~1% of the FFT step)
+    and it keeps longitudinal physics resolved no matter how short the
+    bunch gets.
+</p>
+
+<h3 id="phys-wake">Wakefields (Bane analytic, short-range)</h3>
+<p>
+    Linac wakes are applied via Strang splitting after the second
+    half-drift: each <code>WakeField</code> element bins live particles
+    into <code>n_slices</code> longitudinal bins, computes per-slice
+    charge sum and dipole moments
+    (<code>&Sigma;q&middot;x, &Sigma;q&middot;y</code>), all-reduces across
+    MPI ranks, and convolves causally with Bane's analytic short-range
+    wake formulas for an iris-loaded periodic structure
+    (longitudinal monopole + transverse dipole). The resulting per-slice
+    impulse is interpolated back to each particle's
+    <code>(p<sub>x</sub>, p<sub>y</sub>, p<sub>z</sub>)</code>.
+</p>
+<p>
+    Wake parameters are the geometric cell parameters
+    (iris radius <code>a</code>, gap <code>g</code>, period <code>L</code>)
+    for the structure type. Longitudinal and transverse contributions
+    can be toggled independently, matching ImpactT's type-(-6)
+    <code>v(5)/v(6)</code> flags.
+</p>
+
+</section>
+
+<section class="docs-section" id="impactt-compare">
+<h2>Comparison with ImpactT <a class="section-link" href="#impactt-compare">#</a></h2>
+<p>
+    lucretia-tt is intentionally aligned with
+    <a href="https://github.com/impact-lbl/IMPACT-T">IMPACT-T</a> at the
+    algorithm level for the gun + capture region: the goal is that the
+    same partcl.data and rfdata files run through both codes give the same
+    answer to within the SC architecture difference. This section
+    inventories what's identical, what differs, and the current
+    cross-code numbers.
+</p>
+
+<h3 id="imp-shared">Algorithms shared with ImpactT (intentional 1:1)</h3>
+<ul>
+    <li><strong>Drift-kick-drift integrator</strong> with second-order
+        leapfrog structure (mirrors <code>kick2t_BeamBunch</code> in
+        <code>BeamBunch.f90</code>).</li>
+    <li><strong>Wallclock cos phase</strong>:
+        <code>cos(&omega; t + phase)</code> with <code>t</code> being the
+        wall-clock simulation time, evaluated at midstep. Matches
+        <code>tt = pos(4)</code> in
+        <code>getfldtfour_SolRF</code>.</li>
+    <li><strong>Birdsall-Langdon Boris kick</strong> (half-E + B-rotation
+        + half-E) with the <code>(t, s)</code>-vector formulation.</li>
+    <li><strong>Universal-betazini behind-cathode drift</strong> for
+        <code>p<sub>z</sub> &ge; 0</code> particles below the cathode plane.
+        Backward-going below-cathode particles are frozen.</li>
+    <li><strong>First-order emission model</strong>: cross-cathode particles
+        get z reset to <code>dtmp &middot; u<sub>z</sub>/&gamma;</code>;
+        no Boris kick on the cross step.</li>
+    <li><strong>Off-axis paraxial expansion with higher-order corrections</strong>
+        (the f1 / f1p terms involving <code>d<sup>2</sup>F</code> and
+        <code>d<sup>3</sup>F</code> from
+        <code>SolRF.f90</code> lines 868&ndash;877).</li>
+    <li><strong>ImpactT-format <code>rfdata</code> Fourier field maps</strong>
+        for E<sub>z</sub> and B<sub>z</sub> (two-block format with
+        <code>(NF, zmin, zmax, zlen)</code> headers).</li>
+    <li><strong>partcl.data</strong> as the canonical particle exchange
+        format. Both codes read the same file.</li>
+    <li><strong>Cathode image charge</strong> via Coulomb mirror force,
+        gated by a Z<sub>image</sub> cutoff distance.</li>
+</ul>
+
+<h3 id="imp-diff">Differences</h3>
+
+<h4>Capabilities lucretia-tt has that ImpactT does not</h4>
+<ul>
+    <li><strong>GPU acceleration</strong> (CUDA via AMReX). One push kernel
+        runs on either CPU-OpenMP or GPU; multi-GPU via CUDA-aware MPI.</li>
+    <li><strong>1D mesh-free slice SC</strong> (Lawson disk-stack).
+        Stays resolved at any bunch length without an FFT.</li>
+    <li><strong>3D adaptive mesh</strong> that tracks bunch sigmas every
+        step (transverse + longitudinal). ImpactT's adaptive mesh exists
+        but has a fixed <code>Xrad</code>/<code>Yrad</code> outer radius.</li>
+    <li><strong>openPMD HDF5</strong> particle dumps with full per-particle
+        history; readable by any openPMD-aware tool.</li>
+    <li><strong>Bunch handoff to s-based tracking</strong> via
+        <code>freezePlaneOut</code> &mdash; produces a Lucretia
+        <code>Beam</code> struct ready for <code>TrackThru</code>.</li>
+    <li><strong>WakeField as a first-class lattice element</strong> rather
+        than a separate input-file flag.</li>
+    <li><strong>Hammersley-sampled cathode generation in pure MATLAB</strong>
+        (<code>CathodeLaserDist</code>): no Python / distgen dependency,
+        no clumping artefacts.</li>
+    <li><strong>Per-step CSV trace diagnostic</strong>
+        (<code>tracking.trace_file</code>) for cross-code calibration:
+        bunch-mean stats every N steps in a flat CSV.</li>
+</ul>
+
+<h4>Capabilities ImpactT has that lucretia-tt does not (yet)</h4>
+<ul>
+    <li><strong>Detailed per-step slice diagnostics</strong> in
+        <code>fort.27/28/29/30</code> &mdash; lucretia-tt computes slice
+        statistics post-hoc from per-particle dumps.</li>
+    <li><strong>Type-(-2) collimators / type-(-99) bend regions</strong>
+        from the ImpactT input file are currently skipped by
+        <code>readImpactTLattice</code> with a warning.</li>
+    <li><strong>Mature transverse SC</strong>. lucretia-tt's adaptive mesh
+        currently has a known LUT-noise issue that inflates the projected
+        transverse emittance by ~5&times; on the LCLS injector benchmark;
+        the slice (peak-current) emittance remains within ~25% of ImpactT.
+        Fix is open work.</li>
+    <li><strong>Bend-region tracking</strong> &mdash; ImpactT supports
+        bend-plane integration; lucretia-tt is straight-axis only.</li>
+</ul>
+
+<h4>Implementation differences (matter only for byte-for-byte parity)</h4>
+<ul>
+    <li>lucretia-tt is C++17 with AMReX (BoxLib lineage); ImpactT is
+        Fortran 90 with custom MPI infrastructure.</li>
+    <li>Particle storage: AMReX <code>ParticleContainerPureSoA</code>
+        (struct-of-arrays, GPU-friendly) vs ImpactT's
+        <code>%Pts1(6, Nplocal)</code> Fortran 2D array.</li>
+    <li>Position units: lucretia-tt uses SI everywhere; ImpactT uses
+        a dimensionless internal representation (positions normalised
+        by <code>Sc<sub>xlt</sub> = c &middot; Dt</code>).</li>
+    <li>I/O: lucretia-tt writes openPMD HDF5; ImpactT writes
+        <code>fort.NN</code> formatted text and <code>partcl.data</code>.</li>
+</ul>
+
+<h3 id="imp-calib">Cross-code calibration results</h3>
+<p>
+    LCLS injector partcl-seed test (50,000 macros, no SC, gun + SOL1
+    region):
+</p>
+<table>
+    <thead>
+        <tr><th>Quantity</th><th>lucretia-tt</th><th>ImpactT</th><th>Ratio</th></tr>
+    </thead>
+    <tbody>
+        <tr><td>&gamma;<sub>mean</sub></td><td>11.6929</td><td>11.6486</td><td>+0.4%</td></tr>
+        <tr><td>&sigma;<sub>z</sub></td><td>523 &mu;m</td><td>530 &mu;m</td><td>&minus;1.3%</td></tr>
+        <tr><td>&sigma;<sub>&gamma;</sub></td><td>0.0319</td><td>0.0324</td><td>&minus;1.5%</td></tr>
+        <tr><td>&sigma;<sub>x</sub></td><td>240 &mu;m</td><td>234 &mu;m</td><td>+2.6%</td></tr>
+        <tr><td>chirp slope d&gamma;/dz</td><td>&minus;59.5 m<sup>-1</sup></td><td>&minus;60.6 m<sup>-1</sup></td><td>&minus;1.9%</td></tr>
+    </tbody>
+</table>
+<p>
+    LCLS injector full lattice (50,000 macros, with SC, gun + SOL1 + L0A
+    structure, end of L0A at z &asymp; 5 m):
+</p>
+<table>
+    <thead>
+        <tr><th>Quantity</th><th>lucretia-tt</th><th>ImpactT</th><th>Ratio</th><th>Note</th></tr>
+    </thead>
+    <tbody>
+        <tr><td>&gamma;<sub>mean</sub></td><td>93.6</td><td>94.5</td><td>&minus;0.9%</td><td>&mdash;</td></tr>
+        <tr><td>&sigma;<sub>z</sub></td><td>1.18 mm</td><td>1.28 mm</td><td>&minus;7%</td><td>&mdash;</td></tr>
+        <tr><td>&epsilon;<sub>nz</sub></td><td>273 &mu;m&middot;rad</td><td>290 &mu;m&middot;rad</td><td>&minus;6%</td><td>&mdash;</td></tr>
+        <tr><td>&sigma;<sub>x</sub></td><td>1.00 mm</td><td>0.73 mm</td><td>+37%</td><td>SC LUT noise</td></tr>
+        <tr><td>&sigma;<sub>&gamma;</sub></td><td>0.74</td><td>0.36</td><td>2.0&times;</td><td>under investigation</td></tr>
+        <tr><td>&epsilon;<sub>nx</sub> (projected)</td><td>6.29 &mu;m&middot;rad</td><td>1.10 &mu;m&middot;rad</td><td>5.7&times;</td><td>SC LUT noise (head/tail)</td></tr>
+        <tr><td>&epsilon;<sub>nx</sub> (peak-current slice)</td><td>1.23 &mu;m&middot;rad</td><td>~1.0 &mu;m&middot;rad</td><td>~1.2&times;</td><td>core OK</td></tr>
+    </tbody>
+</table>
+<p>
+    The transverse projected-emittance discrepancy is localised to the
+    head / tail of the bunch where mesh noise dominates; the bunch core
+    (peak-current slice) tracks ImpactT to within ~25%. The
+    <code>bench_full_lattice.m</code> driver in
+    <code>src/TimeTracking/examples/</code> reproduces these numbers.
+</p>
+<p>
+    For partcl-seeded comparison runs, drop the <code>cathode_source</code>
+    that <code>readImpactTLattice</code> generates &mdash; otherwise it
+    will emit a second batch of particles in parallel with the partcl.data
+    seed.
+</p>
+
 </section>
 
 <section class="docs-section" id="trouble">
