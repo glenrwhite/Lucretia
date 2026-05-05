@@ -214,6 +214,14 @@ int CathodeSource::emit_new_particles (
     // image-charge force at the first step; 1 um is a reasonable
     // approximation to the photoemission depth and keeps the image-force
     // bounded enough for Boris to integrate cleanly.
+    //
+    // ImpactT-mode: when m_z_init_spread > 0, particles are seeded
+    // BEHIND the cathode (z in [z_cathode - z_init_spread, z_cathode]).
+    // The TrackingLoop's behind_cathode_drift advances them at universal
+    // betazini until they cross z=0, then normal Boris kicks in. This
+    // mirrors ImpactT's partcl.data + driftemission_BeamBunch model and
+    // avoids the per-particle thermal-pz dispersion that explodes
+    // sigma_z when the particles don't share a synchronized drift.
     constexpr amrex::Real z_offset = amrex::Real(1.0e-6);
 
     std::vector<amrex::ParticleReal> xs(n_emit), ys(n_emit), zs(n_emit);
@@ -227,23 +235,63 @@ int CathodeSource::emit_new_particles (
         sample_xy(xi, yi);
         xs[i] = amrex::ParticleReal(xi);
         ys[i] = amrex::ParticleReal(yi);
-        zs[i] = m_z_cathode + z_offset;
+        if (m_z_init_spread > amrex::Real(0.0)) {
+            // Uniform random behind cathode. Combined with the universal-
+            // betazini drift in TrackingLoop, this gives a uniform spread
+            // in cross-cathode times of width z_init_spread/(betazini*c).
+            zs[i] = m_z_cathode
+                  - m_z_init_spread * amrex::ParticleReal(amrex::Random());
+        } else {
+            zs[i] = m_z_cathode + z_offset;
+        }
 
         // Thermal momentum (proper-velocity units)
         uxs[i] = sigma_u * amrex::ParticleReal(amrex::RandomNormal(0.0, 1.0));
         uys[i] = sigma_u * amrex::ParticleReal(amrex::RandomNormal(0.0, 1.0));
-        uzs[i] = 0.0;  // no longitudinal kick at emission
+        if (m_longitudinal_thermal) {
+            // Half-Maxwell on uz: |Normal(0, sigma_u)|. Per-particle
+            // thermal longitudinal momentum matching the MTE = m_mte
+            // convention (mean uz = sigma_u * sqrt(2/pi), std uz =
+            // sigma_u * sqrt(1 - 2/pi)). With m_mte = 414 meV this gives
+            // mean uz ~ 2.16e5 m/s, std uz ~ 1.63e5 m/s -- numerically
+            // identical to ImpactT's distgen-generated partcl.data
+            // distribution (verified 2026-05-04).
+            uzs[i] = sigma_u
+                * amrex::ParticleReal(std::abs(amrex::RandomNormal(0.0, 1.0)));
+        } else {
+            uzs[i] = 0.0;  // legacy: no longitudinal kick at emission
+        }
     }
 
-    // Birth time: assign mid-window time so particles inherit a
-    // consistent timestamp with their emission.
-    const amrex::Real t_birth = t + amrex::Real(0.5) * dt;
+    // Birth time: sample UNIFORMLY in [t, t+dt] per particle.
+    //
+    // Previously all particles in an emission step got the same
+    // mid-step t_birth = t + dt/2, then were pushed by full dt with
+    // identical initial conditions (z = z_cathode + 1 um, uz = 0,
+    // thermal MTE on ux,uy). Result: particles in one emission step
+    // saw IDENTICAL field history -> identical final energy ->
+    // discrete energy clusters (one spike per emission step) in the
+    // exit beam. With 1M macros over ~20 emission steps this gave
+    // P-spikes 5x the median bin count, visible in fort.18-style
+    // histograms.
+    //
+    // Sampling t_birth uniformly within [t, t+dt] per particle gives
+    // each particle a different effective alive-duration on its first
+    // step. The TrackingLoop kernel uses dt_eff = min(dt, t+dt-t_birth)
+    // to accumulate field kicks over only that fraction of dt for
+    // freshly-emitted particles. This breaks the synchronization that
+    // produced the spikes without changing the bunch's mean dynamics.
+    std::vector<amrex::ParticleReal> t_births(n_emit);
+    for (int i = 0; i < n_emit; ++i) {
+        t_births[i] = amrex::ParticleReal(
+            t + dt * amrex::Real(amrex::Random()));
+    }
 
     bunch.AddParticlesFromArrays(
         n_emit,
         xs.data(), ys.data(), zs.data(),
         uxs.data(), uys.data(), uzs.data(),
-        weight, t_birth);
+        weight, t_births.data());
 
     return n_emit;
 }

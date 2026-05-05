@@ -22,7 +22,15 @@ fprintf(f, 'geom.hi    = %.10g %.10g %.10g\n', obj.geom_hi);
 fprintf(f, 'geom.ncell = %d %d %d\n',          obj.geom_ncell);
 
 fprintf(f, '\n# ---- Beam ----\n');
-if isfield(obj.beam, 'seed_file') && ~isempty(obj.beam.seed_file)
+if isfield(obj.beam, 'partcl_file') && ~isempty(obj.beam.partcl_file)
+    % ImpactT-style ASCII partcl.data seed (cross-code calibration).
+    % Required: partcl_q_total (total |Q| in C). Optional: t_init.
+    fprintf(f, 'beam.partcl_file    = %s\n', obj.beam.partcl_file);
+    fprintf(f, 'beam.partcl_q_total = %.10g\n', obj.beam.partcl_q_total);
+    if isfield(obj.beam, 't_init') && ~isempty(obj.beam.t_init)
+        fprintf(f, 'beam.t_init         = %.10g\n', obj.beam.t_init);
+    end
+elseif isfield(obj.beam, 'seed_file') && ~isempty(obj.beam.seed_file)
     fprintf(f, 'beam.seed_file = %s\n', obj.beam.seed_file);
 else
     fprintf(f, 'beam.n_particles = %d\n', obj.beam.n_particles);
@@ -93,6 +101,11 @@ end
 if isprop(obj, 't_start') && ~isempty(obj.t_start)
     fprintf(f, 'tracking.t_start     = %.10g\n', obj.t_start);
 end
+if isprop(obj, 'behind_cathode_z') && ~isempty(obj.behind_cathode_z) ...
+        && isprop(obj, 'behind_cathode_betazini') && ~isempty(obj.behind_cathode_betazini)
+    fprintf(f, 'tracking.behind_cathode_z        = %.10g\n', obj.behind_cathode_z);
+    fprintf(f, 'tracking.behind_cathode_betazini = %.10g\n', obj.behind_cathode_betazini);
+end
 
 if obj.enable_space_charge
     fprintf(f, '\n# ---- Space charge ----\n');
@@ -100,8 +113,37 @@ if obj.enable_space_charge
     if isprop(obj, 'sc_comoving') && obj.sc_comoving
         fprintf(f, 'space_charge.comoving = 1\n');
     end
+    if isprop(obj, 'sc_adaptive') && obj.sc_adaptive
+        fprintf(f, 'space_charge.adaptive = 1\n');
+        if isprop(obj, 'sc_pad_factor') && ~isempty(obj.sc_pad_factor)
+            fprintf(f, 'space_charge.pad_factor = %.6g\n', obj.sc_pad_factor);
+        end
+        if isprop(obj, 'sc_min_pad_xy') && ~isempty(obj.sc_min_pad_xy)
+            fprintf(f, 'space_charge.min_pad_xy = %.6g\n', obj.sc_min_pad_xy);
+        end
+        if isprop(obj, 'sc_min_pad_z') && ~isempty(obj.sc_min_pad_z)
+            fprintf(f, 'space_charge.min_pad_z = %.6g\n', obj.sc_min_pad_z);
+        end
+    end
+    if isprop(obj, 'sc_image_plane') && obj.sc_image_plane
+        fprintf(f, 'space_charge.image_plane_enabled = 1\n');
+        fprintf(f, 'space_charge.image_plane_z = %.10g\n', obj.sc_image_plane_z);
+        fprintf(f, 'space_charge.image_cutoff = %.10g\n', obj.sc_image_cutoff);
+    end
     if isprop(obj, 'sc_verbose') && ~isempty(obj.sc_verbose) && obj.sc_verbose > 0
         fprintf(f, 'space_charge.verbose = %d\n', round(obj.sc_verbose));
+    end
+end
+if isprop(obj, 'enable_slice_sc') && obj.enable_slice_sc
+    if ~obj.enable_space_charge
+        fprintf(f, '\n# ---- Space charge (slice only) ----\n');
+    end
+    fprintf(f, 'space_charge.slice_enabled = 1\n');
+    if isprop(obj, 'slice_sc_n') && ~isempty(obj.slice_sc_n)
+        fprintf(f, 'space_charge.slice_n = %d\n', round(obj.slice_sc_n));
+    end
+    if isprop(obj, 'slice_sc_radius_factor') && ~isempty(obj.slice_sc_radius_factor)
+        fprintf(f, 'space_charge.slice_radius_factor = %.6g\n', obj.slice_sc_radius_factor);
     end
 end
 

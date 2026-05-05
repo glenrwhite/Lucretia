@@ -23,7 +23,7 @@ TimeBunch::TimeBunch (const amrex::Geometry& geom,
 {
     SetSoACompileTimeNames(
         {"x", "y", "z", "px", "py", "pz", "q", "qm", "w", "t_birth"},
-        {"alive"});
+        {"alive", "emerged"});
 }
 
 
@@ -66,6 +66,7 @@ void TimeBunch::AddParticles (
             ptd.rdata(RealSoA::w)[idx]       = weight;
             ptd.rdata(RealSoA::t_birth)[idx] = ParticleReal(0.0);
             ptd.idata(IntSoA::alive)[idx]    = 1;
+            ptd.idata(IntSoA::emerged)[idx]  = 0;
         }
     }
     Redistribute();
@@ -112,6 +113,54 @@ void TimeBunch::AddParticlesFromArrays (
             ptd.rdata(RealSoA::w)[idx]       = weight;
             ptd.rdata(RealSoA::t_birth)[idx] = t_birth;
             ptd.idata(IntSoA::alive)[idx]    = 1;
+            ptd.idata(IntSoA::emerged)[idx]  = 0;
+        }
+    }
+    Redistribute();
+}
+
+
+void TimeBunch::AddParticlesFromArrays (
+    int                        n,
+    const amrex::ParticleReal* xs,       const amrex::ParticleReal* ys,  const amrex::ParticleReal* zs,
+    const amrex::ParticleReal* uxs,      const amrex::ParticleReal* uys, const amrex::ParticleReal* uzs,
+    amrex::ParticleReal        weight,
+    const amrex::ParticleReal* t_births)
+{
+    using namespace amrex;
+
+    if (ParallelDescriptor::IOProcessor() && n > 0)
+    {
+        auto& ptile = DefineAndReturnParticleTile(0, 0, 0);
+        const int old_size = ptile.numParticles();
+        ptile.resize(old_size + n);
+
+        auto& soa = ptile.GetStructOfArrays();
+        uint64_t* const idcpu = soa.GetIdCPUData().data() + old_size;
+
+        const Long pid_base = ParticleType::NextID();
+        ParticleType::NextID(pid_base + n);
+        const int cpuid = ParallelDescriptor::MyProc();
+
+        auto ptd = ptile.getParticleTileData();
+
+        for (int i = 0; i < n; ++i)
+        {
+            const int idx = old_size + i;
+            idcpu[i] = SetParticleIDandCPU(pid_base + i, cpuid);
+
+            ptd.rdata(RealSoA::x)[idx]       = xs[i];
+            ptd.rdata(RealSoA::y)[idx]       = ys[i];
+            ptd.rdata(RealSoA::z)[idx]       = zs[i];
+            ptd.rdata(RealSoA::px)[idx]      = uxs[i];
+            ptd.rdata(RealSoA::py)[idx]      = uys[i];
+            ptd.rdata(RealSoA::pz)[idx]      = uzs[i];
+            ptd.rdata(RealSoA::q)[idx]       = kElectronCharge;
+            ptd.rdata(RealSoA::qm)[idx]      = kElectronCharge / kElectronMass;
+            ptd.rdata(RealSoA::w)[idx]       = weight;
+            ptd.rdata(RealSoA::t_birth)[idx] = t_births[i];
+            ptd.idata(IntSoA::alive)[idx]    = 1;
+            ptd.idata(IntSoA::emerged)[idx]  = 0;
         }
     }
     Redistribute();

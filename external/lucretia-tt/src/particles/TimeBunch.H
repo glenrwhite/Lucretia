@@ -37,7 +37,8 @@ struct RealSoA
 struct IntSoA
 {
     enum Comp {
-        alive = 0,  // 1 = alive, 0 = absorbed/lost
+        alive    = 0,  // 1 = alive, 0 = absorbed/lost
+        emerged  = 1,  // 1 = has crossed cathode at least once, 0 = still in initial drift
         nattribs
     };
 };
@@ -84,6 +85,17 @@ public:
         const amrex::ParticleReal* uxs, const amrex::ParticleReal* uys, const amrex::ParticleReal* uzs,
         amrex::ParticleReal        weight,
         amrex::ParticleReal        t_birth);
+
+    /** Same as above but with per-particle birth times (used to break
+     *  the discrete emission-time aliasing that produces P-spikes
+     *  when all particles in one CathodeSource emission step share a
+     *  single t_birth). */
+    void AddParticlesFromArrays (
+        int                        n,
+        const amrex::ParticleReal* xs,       const amrex::ParticleReal* ys,  const amrex::ParticleReal* zs,
+        const amrex::ParticleReal* uxs,      const amrex::ParticleReal* uys, const amrex::ParticleReal* uzs,
+        amrex::ParticleReal        weight,
+        const amrex::ParticleReal* t_births);
 
     /** Print total particle count, plus per-rank breakdown when MPI > 1. */
     void PrintSummary (const std::string& tag);

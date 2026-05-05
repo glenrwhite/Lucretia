@@ -144,7 +144,13 @@ for k = 1:numel(lat_lines)
 
     switch Bnpstp
     case 105
-        % RF cavity / solenoid via rfdata file.
+        % SolRF: solenoid (B), RF cavity (E), or both, via rfdata file.
+        % ImpactT manual: "V1: zedge, the real used field range in z is
+        % [zedge, zedge+Blength]." So:
+        %   v(1) = Blength (lattice-line length used for field gating)
+        %   v(5) = zedge   (lab z corresponding to file z = 0 AND start
+        %                   of the "real used" range)
+        %
         % scale_B position depends on how many misalignment slots the
         % ImpactT line carries before the trailing B-field scale:
         %   RF cavity:   6 misal + optional scale_B at v(17) (often 0.0)
@@ -165,7 +171,7 @@ for k = 1:numel(lat_lines)
         end
         path = fullfile(impactt_dir, sprintf('rfdata%d', file_id));
         lattice{end+1} = timetracking.ImpactTField('name', nm, ...
-            'z', z_edge, 'path', path, ...
+            'z', z_edge, 'length', L, 'path', path, ...
             'scale_E', scale_E, 'scale_B', scale_B, ...
             'f_RF', f_RF, 'phase_deg', phase_dg);  %#ok<AGROW>
         % Track first gun-like element (RF, scale_E > 0)
@@ -173,7 +179,7 @@ for k = 1:numel(lat_lines)
             gun_z_edge = z_edge;
             gun_path   = path;
         end
-        elem_z_max = max(elem_z_max, z_edge + max(L, 1.5));  % field map can extend
+        elem_z_max = max(elem_z_max, z_edge + L);
     case 1
         % Quadrupole
         z_edge   = v(5);
@@ -252,43 +258,61 @@ for k = 1:numel(lat_lines)
     end
 end
 
-% --- Build cathode source from beam params + first gun ---
+% --- Cathode-at-z=0 normalization ---
 %
-% ImpactT convention for type-105 RF cavity (and our ImpactTField C++
-% element): the lattice-line z value (gun_z_edge here) corresponds to
-% file z = 0, and the field map's [zmin, zmax] maps to lab
-% [gun_z_edge + zmin, gun_z_edge + zmax].
+% By convention (matching ImpactT's image-charge model: "the cathode is
+% always assumed to be at z = 0"), we translate the entire lattice so
+% the cathode (= first RF cavity's zedge) lands at lucretia-tt z = 0.
+% All downstream zedge/z_start/z_end/dt-switch/z_stop values are shifted
+% by -gun_z_edge. For a properly-written ImpactT.in where the gun is
+% already at zedge=0 (e.g. the LCLS lattice), this is a no-op.
 %
-% For the LCLS / SLAC-style 1.5-cell S-band gun (rfdata201), inspection
-% of the on-axis F(z) shows the field PEAK is at file z = zmin (and
-% file z = zmax) with a near-zero crossing at file z = 0. The cathode
-% sits at the field-peak end -- file z = zmin -- not at the zero-
-% crossing in the middle. So:
+% Rationale:
+%   - Cathode at z=0 means image-charge math is unambiguous.
+%   - Element zedge values become "distance downstream of cathode," which
+%     is the natural mental model for photoinjector layouts.
+%   - Removes a class of subtle bugs around what z=0 means.
 %
-%     cathode_lab = gun_z_edge + zmin
-%
-% This places the cathode at the upstream face of the gun field map,
-% which is where the peak emission field lives.
-%
-% (NOTE: an earlier "fix" using cathode_z = gun_z_edge alone placed the
-% cathode in the field's zero-crossing region, which gave essentially
-% no acceleration -- mean P ~ 0.5 MeV at all phases -- and lost half
-% the bunch to backward propagation. Empirically verified the zmin
-% convention is correct for the LCLS rfdata201 format on 2026-05-01.)
+% The original ImpactT-frame cathode position is recorded in
+% info.z_shift so users can map results back to ImpactT coordinates if
+% needed (z_impactT = z_lucretia + info.z_shift).
 if isnan(gun_z_edge)
     warnings{end+1} = 'no gun found; cathode placed at z=0';
+    z_shift   = 0.0;
     cathode_z = 0.0;
 else
+    z_shift = gun_z_edge;     % positive = ImpactT placed cathode this far downstream
+    cathode_z = 0.0;
     try
         ffid = fopen(gun_path, 'r');
         h = textscan(ffid, '%f', 4);
         fclose(ffid);
-        gun_field_zmin = h{1}(2);
-        cathode_z = gun_z_edge + gun_field_zmin;
+        gun_field_zmin = h{1}(2);            % kept for info struct
     catch
-        warnings{end+1} = sprintf('cannot read gun rfdata %s; cathode at z=0', gun_path);
-        cathode_z = 0.0;
+        gun_field_zmin = NaN;
+        warnings{end+1} = sprintf('cannot read gun rfdata %s for diagnostic zmin', gun_path);
     end
+end
+
+% Apply the shift to every element's z-bearing field (in-place on the
+% parsed lattice cell array).
+if z_shift ~= 0
+    for k = 1:numel(lattice)
+        e = lattice{k};
+        if isfield(e, 'z'),       e.z       = e.z       - z_shift; end
+        if isfield(e, 'z_start'), e.z_start = e.z_start - z_shift; end
+        if isfield(e, 'z_end'),   e.z_end   = e.z_end   - z_shift; end
+        lattice{k} = e;
+    end
+    for k = 1:numel(dt_schedule)
+        dt_schedule(k).z = dt_schedule(k).z - z_shift;
+    end
+    if ~isnan(z_stop),     z_stop     = z_stop     - z_shift; end
+    if ~isnan(elem_z_max), elem_z_max = elem_z_max - z_shift; end
+    gun_z_edge = 0.0;
+    fprintf(['readImpactTLattice: cathode-at-z=0 normalization: shifted ', ...
+             'all element z by %+.6f m (original ImpactT cathode at lab ', ...
+             'z=%+.6f m).\n'], -z_shift, z_shift);
 end
 
 % Insert CathodeSource at the FRONT of the lattice. Emission window
@@ -307,10 +331,15 @@ cathode = timetracking.CathodeSource('name', 'cat', ...
     'transverse_profile', 'gaussian', ...
     'spot_size', max(sigx, sigy), 'mte', opts.mte_eV);
 
-% Always add a beam monitor at the end, dump_every chosen later in tracking
-mon = timetracking.BeamMonitor('name', 'mon', 'dump_every', max(1, round(n_steps0/100)));
-
-lattice = [{cathode}, lattice, {mon}];
+% BeamMonitor is appended AFTER tracking.n_steps is computed (below) so
+% dump_every can be sized to the actual run length, not the lattice
+% header's Ntstep (which is typically a huge upper bound -- e.g. 500000
+% for LCLS, vs an actual ~10000 steps to reach z_stop). Sizing on the
+% header value gave dump_every=5000 with only 9758 actual steps,
+% producing a single dump at step 5000 (mid-injector, BEFORE L0A) and
+% missing the post-L0A bunch entirely. Now we target ~100 dumps over
+% the actual run.
+lattice = [{cathode}, lattice];
 
 % --- Beam (no seed; emission from cathode) ---
 beam = timetracking.SeedBeam('n_particles', 0);
@@ -395,15 +424,23 @@ tracking.t_start = Tini - emission_half_window;
 % the earlier t_start).
 tracking.n_steps = tracking.n_steps + ceil(emission_half_window / tracking.dt);
 
+% Append BeamMonitor with dump_every sized to the actual run so we get
+% ~100 dumps total (last dump close to the end of the run, capturing
+% the post-L0A bunch at the exit plane).
+mon = timetracking.BeamMonitor('name', 'mon', ...
+                               'dump_every', max(1, round(tracking.n_steps / 100)));
+lattice = [lattice, {mon}];
+
 % --- Info / warnings ---
 info.warnings    = warnings;
-info.cathode_z   = cathode_z;
-info.gun_z_edge  = gun_z_edge;
+info.cathode_z   = cathode_z;     % always 0 after normalization
+info.gun_z_edge  = gun_z_edge;    % always 0 after normalization
 info.gun_path    = gun_path;
 info.total_charge = total_charge;
 info.t_emission   = t_em;
 info.RF_freq      = Bfreq;
-info.z_stop       = z_stop;       % NaN if no -99 element seen
+info.z_stop       = z_stop;       % NaN if no -99 element seen, in lucretia-tt frame
+info.z_shift      = z_shift;      % z_impactT = z_lucretia + z_shift
 
 if ~isempty(warnings)
     fprintf('readImpactTLattice: %d warnings:\n', numel(warnings));

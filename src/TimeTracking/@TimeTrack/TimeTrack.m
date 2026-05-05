@@ -28,6 +28,8 @@ properties
     dt_change_t  = []                                            % s, time at which to switch dt (empty = no switch)
     dt_after     = []                                            % s, dt to use after dt_change_t (empty = same as dt)
     t_start      = []                                            % s, initial sim time (empty = 0)
+    behind_cathode_z        = []                                 % m, ImpactT-style behind-cathode drift turns ON below this z
+    behind_cathode_betazini = []                                 % dimensionless, universal v/c for behind-cathode drift
     geom_lo    = [-0.05, -0.05,  0.0]                            % m
     geom_hi    = [ 0.05,  0.05,  1.0]                            % m
     geom_ncell = [32, 32, 32]
@@ -36,7 +38,17 @@ properties
     binary     = ''                                              % '' -> which('lucretia-tt')
     enable_space_charge = false                                  % toggles ParmParse space_charge.enabled
     sc_comoving         = false                                  % SC mesh follows the bunch in z
+    sc_adaptive         = false                                  % SC mesh resizes EVERY axis to track current bunch sigmas (supersedes sc_comoving)
+    sc_pad_factor       = 5.0                                    % adaptive: half-extent = max(pad_factor * sigma, min_pad)
+    sc_min_pad_xy       = 1e-3                                   % adaptive: min transverse half-extent (m)
+    sc_min_pad_z        = 1e-3                                   % adaptive: min longitudinal half-extent (m)
+    sc_image_plane      = false                                  % cathode image-charge handling: deposit mirror charges on the SC mesh so the IGF Poisson satisfies phi=0 on the cathode plane
+    sc_image_plane_z    = 0.0                                    % m: lab-frame cathode plane (mirror axis)
+    sc_image_cutoff     = 0.05                                   % m: image deposit only fires for particles within this distance of the cathode (matches IMPACT-T's Zimage)
     sc_verbose          = 0                                      % space_charge.verbose: 0 = quiet, 1 = print recenter / per-step diagnostics
+    enable_slice_sc     = false                                  % toggles ParmParse space_charge.slice_enabled (1D longitudinal slice SC, mesh-free in z)
+    slice_sc_n          = 256                                    % # of z-slices for the slice SC bunch density estimator
+    slice_sc_radius_factor = 2.0                                 % bunch_radius (for the disk-stack formula) = factor * sigma_xy
     target              = 'cpu'                                  % 'cpu' | 'gpu'  -- combined with mpi_nranks selects the binary
     mpi_nranks          = 1                                      % >1 -> mpirun -np N (requires MPI-enabled binary)
     mpi_binary          = ''                                     % deprecated (use target+mpi_nranks); '' -> autodetect

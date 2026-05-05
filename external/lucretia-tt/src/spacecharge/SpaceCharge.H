@@ -63,34 +63,123 @@ public:
     void set_comoving (bool on) noexcept { m_comoving = on; }
     bool comoving    () const noexcept { return m_comoving; }
 
+    /** Toggle adaptive mesh extent: when on, solve() resizes the mesh
+     *  every step to track the bunch's CURRENT sigmas (not just the
+     *  centroid). The new pad in each direction is
+     *      pad_axis = max(pad_factor * sigma_axis, min_pad_axis)
+     *  and the integer BoxArray (ncell) is preserved so the IGF FFT
+     *  plan stays valid (only cell sizes change, which the IGF Green
+     *  function recomputes per call from cell_size).
+     *
+     *  The self-force LUT is rebuilt when the cell aspect ratio shifts
+     *  by more than 5% — the LUT depends on the cell shape and would
+     *  otherwise drift out of calibration as the bunch evolves.
+     *
+     *  Default: off. Use only when the 3D mesh SC is needed AND the
+     *  bunch evolves significantly in size (e.g. emittance growth in
+     *  drifts, focus through a quad). For a photoinjector the slice
+     *  SC alone (mesh off) gives better results — see SpaceChargeSlice. */
+    void set_adaptive (bool on,
+                       amrex::Real pad_factor   = amrex::Real(5.0),
+                       amrex::Real min_pad_xy   = amrex::Real(1.0e-3),
+                       amrex::Real min_pad_z    = amrex::Real(1.0e-3)) noexcept
+    {
+        m_adaptive    = on;
+        m_pad_factor  = pad_factor;
+        m_min_pad_xy  = min_pad_xy;
+        m_min_pad_z   = min_pad_z;
+    }
+    bool adaptive    () const noexcept { return m_adaptive; }
+
+    /** Enable cathode image-charge handling.
+     *
+     *  When enabled, deposit_charge also deposits a MIRROR rho with
+     *  flipped sign at the mirror positions about the cathode plane:
+     *  for each particle at z > z_cath, an image deposit goes to
+     *  (x, y, 2*z_cath - z) with -q*w. The IGF Poisson solve over the
+     *  combined direct+image distribution gives a phi that satisfies
+     *  the conducting-cathode boundary condition (phi = 0 on the
+     *  cathode plane). This matches IMPACT-T's "shifted Green function"
+     *  approach in the limit where the image positions fit within the
+     *  current SC mesh.
+     *
+     *  Implementation note (vs IMPACT-T): IMPACT-T does a SECOND FFT
+     *  with a Green function shifted by 2*z_centroid, so the image
+     *  positions are always "in frame" regardless of where the mesh
+     *  is in lab z. Our simpler mirror-deposit-into-same-mesh approach
+     *  silently drops image deposits whose mirror positions fall
+     *  outside the mesh — fine for the early-emission near-cathode
+     *  regime (where the comoving mesh straddles the cathode), and
+     *  the image effect is anyway negligible (~1/γ²) once the bunch
+     *  is relativistic and the mesh has moved away.
+     *
+     *  Past z = `image_cutoff` the image-charge term is dropped
+     *  entirely (matches IMPACT-T's `Zimage` parameter). This is set
+     *  per-particle: only particles with z - z_cath < image_cutoff
+     *  contribute to the image deposit. */
+    void set_image_plane (amrex::Real z_cath,
+                          amrex::Real image_cutoff = amrex::Real(0.05)) noexcept
+    {
+        m_image_plane_enabled = true;
+        m_image_plane_z       = z_cath;
+        m_image_cutoff        = image_cutoff;
+    }
+    void unset_image_plane () noexcept { m_image_plane_enabled = false; }
+    bool image_plane_enabled () const noexcept { return m_image_plane_enabled; }
+
     /** Shift the Geometry's RealBox so the mesh is centered on z_new
      *  (longitudinal only; transverse extent unchanged). BoxArray is
      *  preserved so existing MultiFabs stay valid; rho is reset to 0. */
     void recenter (amrex::Real z_new);
 
+    /** Resize the Geometry's RealBox to a new (centroid, half-extent).
+     *  BoxArray + ncell are preserved (so cell sizes scale with the
+     *  new extent). Self-force LUT is rebuilt if the cell aspect ratio
+     *  changed by more than 5%; rho/phi/E are reset. */
+    void resize (amrex::Real x_centroid, amrex::Real y_centroid,
+                 amrex::Real z_centroid,
+                 amrex::Real half_x,     amrex::Real half_y,
+                 amrex::Real half_z);
+
     /** Last beta_z used in the solve. */
     amrex::Real last_beta_z () const noexcept { return m_last_beta_z; }
-    /** Number of times the mesh has been recentered since construction. */
+    /** Number of times the mesh has been recentered (or resized) since construction. */
     int n_recenters () const noexcept { return m_n_recenters; }
+    /** Number of times the self-force LUT has been rebuilt since construction. */
+    int n_lut_rebuilds () const noexcept { return m_n_lut_rebuilds; }
 
-    // ---- Access for the particle-loop kernel (per-tile, MFIter-driven) ----
+    // ---- Access for the particle-loop kernel ----
+    //
+    // Single-FAB layout: SC's m_rho/m_phi/m_Ex/m_Ey/m_Ez each live on one
+    // BoxArray box covering the full nodal domain (forced in the constructor
+    // independent of the cell_ba subdivision the caller may have built for
+    // the particle container). The returned Array4 is the only FAB's data.
+    // No tile lookup -- particle iteration in TrackingLoop is independent
+    // of SC mesh tiling.
 
-    template <typename PIter>
-    amrex::Array4<const amrex::Real> Ex_array (const PIter& pti) const
-    { return m_Ex.const_array(pti); }
-    template <typename PIter>
-    amrex::Array4<const amrex::Real> Ey_array (const PIter& pti) const
-    { return m_Ey.const_array(pti); }
-    template <typename PIter>
-    amrex::Array4<const amrex::Real> Ez_array (const PIter& pti) const
-    { return m_Ez.const_array(pti); }
+    amrex::Array4<const amrex::Real> Ex_array () const
+    {
+        amrex::MFIter mfi(m_Ex);
+        return m_Ex.const_array(mfi);
+    }
+    amrex::Array4<const amrex::Real> Ey_array () const
+    {
+        amrex::MFIter mfi(m_Ey);
+        return m_Ey.const_array(mfi);
+    }
+    amrex::Array4<const amrex::Real> Ez_array () const
+    {
+        amrex::MFIter mfi(m_Ez);
+        return m_Ez.const_array(mfi);
+    }
 
-    /** Valid index range of the SC field arrays for the tile owned by pti.
-     *  Includes ghost cells so CIC gather handles particles right at the
-     *  box edge. */
-    template <typename PIter>
-    amrex::Box mesh_box (const PIter& pti) const
-    { return m_Ex[pti].box(); }
+    /** Valid index range of the SC field arrays. Includes ghost cells so
+     *  CIC gather handles particles right at the box edge. */
+    amrex::Box mesh_box () const
+    {
+        amrex::MFIter mfi(m_Ex);
+        return m_Ex[mfi].box();
+    }
 
     amrex::GpuArray<amrex::Real, 3> dxi () const
     {
@@ -141,19 +230,54 @@ private:
     void compute_E_from_phi      ();
     void build_self_force_lut    ();
 
+    /** ABLASTR-style IGF Poisson solve with a z-SHIFTED Green function.
+     *
+     *  Solves phi = G_shifted ⊛ rho  where the Green function used in
+     *  the convolution has its z-coordinate offset by `z_shift`. For
+     *  cathode image charges (Qiang/IMPACT-T method), z_shift =
+     *  -2 * (z_centroid - z_cath) * gamma — places the bunch's image
+     *  in the FFT domain so the convolution gives the image-charge
+     *  contribution to phi at observation points within the mesh.
+     *
+     *  Mirrors ablastr::fields::computePhiIGF; the only difference is
+     *  the `+ z_shift` in the z-coordinate passed to
+     *  SumOfIntegratedPotential3D. Maintains its own cached
+     *  OpenBCSolver because the Domain may differ from the direct one. */
+    void compute_phi_IGF_shifted (
+        amrex::MultiFab const&            rho,
+        amrex::MultiFab&                  phi,
+        std::array<amrex::Real, 3> const& cell_size,
+        amrex::Real                       z_shift) const;
+
+    /** Compute centroid and central-moment sigmas of the bunch in one
+     *  pass. Used by the adaptive resizer. Returns false if the bunch
+     *  is empty. */
+    bool compute_bunch_stats (particles::TimeBunch& bunch,
+                              amrex::Real& x_c,     amrex::Real& y_c,    amrex::Real& z_c,
+                              amrex::Real& sigma_x, amrex::Real& sigma_y, amrex::Real& sigma_z) const;
+
     amrex::Geometry            m_geom;
     amrex::BoxArray            m_ba_nodal;
     amrex::DistributionMapping m_dm;
 
-    amrex::MultiFab            m_rho;   // C/m^3,  node-centered
-    amrex::MultiFab            m_phi;   // V,      node-centered, 1 ghost
-    amrex::MultiFab            m_Ex;    // V/m,    node-centered, 1 ghost
-    amrex::MultiFab            m_Ey;    // V/m,    node-centered, 1 ghost
-    amrex::MultiFab            m_Ez;    // V/m,    node-centered, 1 ghost
+    amrex::MultiFab            m_rho;        // C/m^3,  node-centered
+    amrex::MultiFab            m_phi;        // V,      node-centered, 1 ghost
+    amrex::MultiFab            m_phi_image;  // V (image-charge contribution; allocated on demand)
+    amrex::MultiFab            m_Ex;         // V/m,    node-centered, 1 ghost
+    amrex::MultiFab            m_Ey;         // V/m,    node-centered, 1 ghost
+    amrex::MultiFab            m_Ez;         // V/m,    node-centered, 1 ghost
 
-    amrex::Real                m_last_beta_z = 0.0;
-    bool                       m_comoving    = false;
-    int                        m_n_recenters = 0;
+    amrex::Real                m_last_beta_z    = 0.0;
+    bool                       m_comoving       = false;
+    bool                       m_adaptive       = false;
+    amrex::Real                m_pad_factor     = 5.0;
+    amrex::Real                m_min_pad_xy     = 1.0e-3;
+    amrex::Real                m_min_pad_z      = 1.0e-3;
+    bool                       m_image_plane_enabled = false;
+    amrex::Real                m_image_plane_z       = 0.0;
+    amrex::Real                m_image_cutoff        = 0.05;     // m
+    int                        m_n_recenters    = 0;
+    int                        m_n_lut_rebuilds = 1;     // counts the constructor build
 
     // Per-component self-force shape table, size (N+1)^3 each, indexed
     // [ix*(N+1)^2 + iy*(N+1) + iz]. Built once in ctor; cell aspect

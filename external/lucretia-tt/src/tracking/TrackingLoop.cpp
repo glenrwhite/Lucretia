@@ -5,6 +5,7 @@
 #include "elements/WakeField.H"
 #include "particles/TimeBunch.H"
 #include "spacecharge/SpaceCharge.H"
+#include "spacecharge/SpaceChargeSlice.H"
 
 #include <ablastr/particles/NodalFieldGather.H>
 
@@ -32,7 +33,8 @@ void TrackingLoop::step (
     const elements::Lattice&              lattice,
     amrex::Real                           t,
     amrex::Real                           dt,
-    spacecharge::SpaceCharge*             sc)
+    spacecharge::SpaceCharge*             sc,
+    spacecharge::SpaceChargeSlice*        slice_sc)
 {
     using namespace amrex;
     using namespace particles;
@@ -64,6 +66,45 @@ void TrackingLoop::step (
     GpuArray<Real, 3>  dxi_sc{}, lo_sc{};
     Real const*        sf_lut[3] = {nullptr, nullptr, nullptr};
     int                sf_n      = 0;
+    // Boost-back factor for SC E -> lab synchronous force.
+    //
+    // SpaceCharge::solve runs the IGF Poisson with cell sizes (dx, dy,
+    // gamma * dz), giving phi as the Coulomb potential of the bunch
+    // (full physical charge per cell, NOT divided by gamma) evaluated
+    // at the stretched-z grid positions. Effectively:
+    //   phi_solver(x_lab, y_lab, z_lab) = gamma * phi_rest_correct(x_lab, y_lab, gamma*z_lab)
+    // The gradient computed in LAB coords (the kernel uses dx[2]) gives:
+    //   E_x_solver = -d phi_solver / dx_lab  = gamma * E_x_rest    (dx_lab = dx_rest)
+    //   E_z_solver = -d phi_solver / dz_lab  = gamma^2 * E_z_rest  (dz_rest = gamma*dz_lab,
+    //                                                              so d/dz_lab = gamma * d/dz_rest)
+    //
+    // Lab-frame force on a synchronous test particle (moving at the
+    // same beta as the bunch, with v x B canceling part of the boosted
+    // E in the transverse direction):
+    //   F_x_lab = q * E_x_rest / gamma   (transverse: 1/gamma^2 from boost cancellation)
+    //   F_z_lab = q * E_z_rest           (longitudinal: invariant under z-boost)
+    //
+    // Required correction multipliers on the solver fields, BOTH the
+    // same 1/gamma^2 = (1 - beta^2):
+    //   E_x_solver * (1/gamma^2) = (gamma*E_x_rest) / gamma^2 = E_x_rest / gamma  -> F_x correct
+    //   E_z_solver * (1/gamma^2) = (gamma^2*E_z_rest) / gamma^2 = E_z_rest          -> F_z correct
+    //
+    // At gamma = 1 (test_uniform_sphere) the factor is 1 → behaviour
+    // unchanged. At gun exit (gamma ~ 12) the factor is ~1/144, so the
+    // raw mesh contribution is correctly tamped down to physical scale.
+    // sc_boost is now computed PER PARTICLE in the kernel (see below) —
+    // this is the "infinite-bin" energy-binning limit, where each
+    // particle's lab-frame SC force is corrected by ITS OWN 1/gamma^2
+    // rather than the bunch-mean. Avoids the issue where a single
+    // mean-gamma boost is wrong for both head and tail of a chirped
+    // bunch (typical for photoinjector exit). Cost: one sqrt + 2 mul
+    // per particle per step.
+    // SC field arrays are looked up ONCE here (not per-pti) -- with
+    // single-FAB SpaceCharge MultiFabs the same arrays serve all
+    // particles, so caching outside the pti loop avoids repeated
+    // MFIter constructions that AMReX rejects when nested with PIter.
+    Array4<const Real> Ex_sc_arr, Ey_sc_arr, Ez_sc_arr;
+    Box                sc_box;
     if (sc) {
         sc->solve(bunch);
         dxi_sc = sc->dxi();
@@ -72,6 +113,20 @@ void TrackingLoop::step (
         sf_lut[0] = sc->lut_ptr(0);
         sf_lut[1] = sc->lut_ptr(1);
         sf_lut[2] = sc->lut_ptr(2);
+        Ex_sc_arr = sc->Ex_array();
+        Ey_sc_arr = sc->Ey_array();
+        Ez_sc_arr = sc->Ez_array();
+        sc_box    = sc->mesh_box();
+    }
+
+    // 1D longitudinal slice SC: solved (re-binned + integrated) once per
+    // step for all ranks. Per-particle gather is just E_z_at(z_p) below.
+    // The slice solver is mesh-free and stays resolved no matter how
+    // short the bunch gets; it REPLACES the longitudinal component of
+    // the 3D mesh SC contribution at gather time. The mesh SC keeps
+    // doing transverse (Ex, Ey).
+    if (slice_sc) {
+        slice_sc->compute(bunch);
     }
 
     // ---- 4. Per-particle push ----
@@ -82,15 +137,8 @@ void TrackingLoop::step (
         auto ptd = pti.GetParticleTile().getParticleTileData();
         const int np = pti.numParticles();
 
-        // Per-tile SC field arrays (one Array4 per FAB owned by this rank).
-        Array4<const Real> Ex_sc_arr, Ey_sc_arr, Ez_sc_arr;
-        Box                sc_box;
-        if (sc) {
-            Ex_sc_arr = sc->Ex_array(pti);
-            Ey_sc_arr = sc->Ey_array(pti);
-            Ez_sc_arr = sc->Ez_array(pti);
-            sc_box    = sc->mesh_box(pti);
-        }
+        // SC field arrays were cached above (outside the pti loop)
+        // since they're independent of pti when SC uses single-FAB layout.
 
         // CPU-only loop (Phase 4A). GPU portability deferred to Phase 7.
 #ifdef AMREX_USE_OMP
@@ -98,6 +146,11 @@ void TrackingLoop::step (
 #endif
         for (int ip = 0; ip < np; ++ip)
         {
+            // Skip dead particles (e.g. cathode re-cross kills below).
+            // These remain in the bunch container for SC charge
+            // conservation but get no field gather / Boris push.
+            if (ptd.idata(IntSoA::alive)[ip] == 0) { continue; }
+
             Real x  = ptd.rdata(RealSoA::x)[ip];
             Real y  = ptd.rdata(RealSoA::y)[ip];
             Real z  = ptd.rdata(RealSoA::z)[ip];
@@ -107,6 +160,74 @@ void TrackingLoop::step (
             const Real q  = ptd.rdata(RealSoA::q)[ip];
             const Real qm = ptd.rdata(RealSoA::qm)[ip];
 
+            // Per-particle effective dt and field-gather time (sub-step
+            // emission). For freshly emitted particles (t_birth in
+            // (t, t+dt]) the first-push interval is [t_birth, t+dt], not
+            // [t, t+dt]. Gathering the lattice field at the MIDPOINT of
+            // that interval — t_field = (t_birth + t + dt) / 2 — gives
+            // each new particle a different RF phase exposure on its
+            // first step, breaking the per-emission-step coherence that
+            // was producing P-spikes in the gun output. Uniform-random
+            // t_birth alone is not enough: without per-particle t_field,
+            // every particle in step k still sees field(k*dt), so all
+            // first-step energy gains cluster around a single value per
+            // emission step (~180 keV inter-step spacing at 1 ps dt and
+            // 100 MV/m cathode field at 2856 MHz). Old particles
+            // (t_birth <= t) keep gathering at t to preserve existing
+            // gun-phase calibration.
+            const Real t_birth = ptd.rdata(RealSoA::t_birth)[ip];
+            const Real dt_eff  = std::min(dt, std::max(Real(0.0), t + dt - t_birth));
+            const Real t_field = (t_birth > t)
+                ? Real(0.5) * (t_birth + t + dt)
+                : t;
+
+            // ImpactT-style behind-cathode drift. Particles with
+            // z < cathode_z that have NEVER yet crossed cathode
+            // (emerged == 0) advance at the universal speed betazini*c
+            // (independent of their own pz) -- mirroring ImpactT's
+            // `driftemission_BeamBunch`. No field gather, no Boris push,
+            // no SC contribution to themselves on this step.
+            //
+            // Once a particle has crossed cathode (emerged == 1), it
+            // is committed to normal Boris dynamics. If a bad RF phase
+            // kicks uz negative and pushes z back below cathode_z, the
+            // particle gets KILLED (alive = 0). This prevents the
+            // re-crossing ratchet that produced ~15 outlier particles
+            // (out of 50000) at extreme gammas. Without the kill the
+            // particle would be re-drifted forward at betazini, re-cross
+            // cathode at a new RF phase, and accumulate uncorrelated
+            // kicks until reaching gamma 50-2500 (runaways) or staying
+            // stuck at gamma 1-10 (stragglers) -- both blow up the
+            // bulk sigma_gamma. Killed particles are still in the SC
+            // mesh for charge conservation but their alive=0 flag
+            // signals analysis tools to skip them.
+            if (m_behind_cathode_drift_on && z < m_cathode_z) {
+                if (ptd.idata(IntSoA::emerged)[ip] == 0) {
+                    z += dt_eff * m_behind_cathode_betazini * kSpeedOfLight;
+                    ptd.rdata(RealSoA::z)[ip] = z;
+                } else {
+                    // Already emerged once, now back behind cathode -- kill.
+                    // Mark dead AND park the particle far below the simulation
+                    // domain so its (x, y, z) never re-enters mesh statistics
+                    // or downstream visualization. SC deposit also skips
+                    // alive==0 particles.
+                    ptd.idata(IntSoA::alive)[ip] = 0;
+                    ptd.rdata(RealSoA::x)[ip]  = Real(0.0);
+                    ptd.rdata(RealSoA::y)[ip]  = Real(0.0);
+                    ptd.rdata(RealSoA::z)[ip]  = Real(-1.0e9);
+                    ptd.rdata(RealSoA::px)[ip] = Real(0.0);
+                    ptd.rdata(RealSoA::py)[ip] = Real(0.0);
+                    ptd.rdata(RealSoA::pz)[ip] = Real(0.0);
+                }
+                continue;   // skip field, SC, and Boris for this particle
+            }
+            // Mark first cathode crossing.
+            if (m_behind_cathode_drift_on
+                && ptd.idata(IntSoA::emerged)[ip] == 0
+                && z >= m_cathode_z) {
+                ptd.idata(IntSoA::emerged)[ip] = 1;
+            }
+
             // External fields from elements
             Real Ex = 0.0, Ey = 0.0, Ez = 0.0;
             Real Bx = 0.0, By = 0.0, Bz = 0.0;
@@ -114,8 +235,8 @@ void TrackingLoop::step (
                 Real Ex_e = 0.0, Ey_e = 0.0, Ez_e = 0.0;
                 Real Bx_e = 0.0, By_e = 0.0, Bz_e = 0.0;
                 std::visit([&] (auto const& e) {
-                    if (e.active(t)) {
-                        e.gather_E_B(x, y, z, t,
+                    if (e.active(t_field)) {
+                        e.gather_E_B(x, y, z, t_field,
                                      Ex_e, Ey_e, Ez_e,
                                      Bx_e, By_e, Bz_e);
                     }
@@ -218,13 +339,49 @@ void TrackingLoop::step (
                 // uniform-sphere test (1000 macros, R = 1 mm).
                 constexpr Real kSelfForceFactor = Real(0.62);
                 const Real qw_f = qw * kSelfForceFactor;
-                Ex += E_sc[0] - qw_f * E_self[0];
-                Ey += E_sc[1] - qw_f * E_self[1];
-                Ez += E_sc[2] - qw_f * E_self[2];
+                // sc_boost = 1/gamma = sqrt(1 - beta^2) — see comment at
+                // SC solve. Both the gathered IGF field and the self-force
+                // subtraction get the same boost-back factor (they are
+                // both computed in the bunch rest frame, with the same
+                // stretched-z geometry).
+                // Per-particle 1/gamma^2 boost (infinite-bin limit of
+                // ImpactT-style energy binning): use THIS particle's
+                // u^2 = ux^2 + uy^2 + uz^2 to compute its own gamma,
+                // not the bunch-mean. Critical for chirped bunches
+                // where head and tail differ by a factor of two or
+                // more in gamma — applying mean-gamma boost gives
+                // wrong forces to the off-mean particles and inflates
+                // slice emittance with mesh-noise spread.
+                constexpr Real c     = kSpeedOfLight;
+                constexpr Real inv_c2 = Real(1.0) / (c * c);
+                const Real u2_p     = ux*ux + uy*uy + uz*uz;
+                const Real sc_boost = Real(1.0) / (Real(1.0) + u2_p * inv_c2);   // 1/gamma^2
+                Ex += sc_boost * (E_sc[0] - qw_f * E_self[0]);
+                Ey += sc_boost * (E_sc[1] - qw_f * E_self[1]);
+                if (!slice_sc) {
+                    // Mesh-only mode: longitudinal from the 3D IGF
+                    // (with same boost factor as transverse).
+                    Ez += sc_boost * (E_sc[2] - qw_f * E_self[2]);
+                }
+                // else: slice SC handles longitudinal — gathered below
+                // (after the sc_done label, so it still runs for
+                // particles that fell outside the mesh box).
             }
             sc_done:;
+            if (slice_sc) {
+                // 1D longitudinal slice SC: applies regardless of the
+                // 3D mesh box bounds (slice grid spans the actual bunch
+                // z-extent, not the mesh). Disk-stack formula is in the
+                // lab frame (E_z invariant under longitudinal boost),
+                // with gamma baked into the z-distance term, so no
+                // additional boost factor here.
+                Ez += slice_sc->E_z_at(z);
+            }
 
-            boris_push_one(qm, Ex, Ey, Ez, Bx, By, Bz, dt,
+            // dt_eff and t_birth are computed above (at the top of the
+            // per-particle loop) so they are available to the field
+            // gather. Just push with dt_eff here.
+            boris_push_one(qm, Ex, Ey, Ez, Bx, By, Bz, dt_eff,
                            x, y, z, ux, uy, uz);
 
             ptd.rdata(RealSoA::x)[ip]  = x;

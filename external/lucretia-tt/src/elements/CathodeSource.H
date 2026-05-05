@@ -68,7 +68,21 @@ struct CathodeSource
         amrex::Real  pulse_alpha          = amrex::Real(1.0),
         amrex::Real  pulse_slope          = amrex::Real(0.0),
         amrex::Real  transverse_alpha     = amrex::Real(1.0),
-        amrex::Real  transverse_truncate  = amrex::Real(0.0))   // 0 -> 4*sigma fallback
+        amrex::Real  transverse_truncate  = amrex::Real(0.0),   // 0 -> 4*sigma fallback
+        // ImpactT-style emission knobs (default off so existing runs are
+        // unchanged). When `longitudinal_thermal` is true, uz is sampled
+        // from a half-Maxwell with sigma = sqrt(MTE * |e| / m_e) (matches
+        // distgen's MTE convention). When `z_init_spread` > 0, each
+        // emitted particle's initial z is uniformly distributed in
+        // [cathode_z - z_init_spread, cathode_z]; combined with
+        // tracking.behind_cathode_betazini and tracking.behind_cathode_z
+        // in the TrackingLoop, this reproduces ImpactT's universal-
+        // betazini drift behind the cathode (so all particles cross z=0
+        // within a tight window of ~ z_init_spread / (betazini*c) and
+        // see the same RF phase, instead of dispersing over 30+ ps the
+        // way per-particle thermal-pz drift would).
+        bool         longitudinal_thermal = false,
+        amrex::Real  z_init_spread        = amrex::Real(0.0))
         : Named(std::move(n))
         , Position3D(0.0, 0.0, z_cathode, amrex::Real(1.0))
         , TimeWindow()
@@ -86,6 +100,8 @@ struct CathodeSource
         , m_pulse_slope(pulse_slope)
         , m_transverse_alpha(transverse_alpha)
         , m_transverse_truncate(transverse_truncate)
+        , m_longitudinal_thermal(longitudinal_thermal)
+        , m_z_init_spread(z_init_spread)
     {
         build_lookup_tables();
     }
@@ -149,6 +165,10 @@ struct CathodeSource
     amrex::Real              m_pulse_cdf_t_lo = 0.0;
     amrex::Real              m_pulse_cdf_t_hi = 0.0;
     std::vector<amrex::Real> m_radial_inv_cdf_table;   // r at uniform u in [0,1]
+
+    // ImpactT-style emission options (off by default).
+    bool        m_longitudinal_thermal = false;
+    amrex::Real m_z_init_spread        = 0.0;     // m: initial z in [z_cathode - spread, z_cathode]
 };
 
 } // namespace elements

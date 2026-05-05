@@ -10,9 +10,13 @@ function s = ImpactTField(varargin)
 %
 % Parameters:
 %   z          - lab-frame z that corresponds to the field map's
-%                intrinsic z = 0. The field is gated to z_lab in
-%                [z + zmin, z + zmax] where zmin/zmax are read from
-%                the file.
+%                intrinsic z = 0 (ImpactT type-105 "zedge").
+%   length     - m, ImpactT type-105 V2 "Blength". The "real used"
+%                field range in lab z is [z, z+length]; outside that
+%                range the field is zero. The file's intrinsic
+%                [zmin, zmax] may extend beyond this -- the negative-z
+%                portion of many ImpactT field maps is Fourier padding,
+%                not a physical extent.
 %   path       - path to the rfdata file
 %   scale_E    - V/m, multiplies the on-axis E_z Fourier sum
 %   scale_B    - T,   multiplies the on-axis B_z Fourier sum
@@ -27,6 +31,7 @@ function s = ImpactTField(varargin)
 p = inputParser;
 p.addParameter('name',      'IT',  @(x) ischar(x) || isstring(x));
 p.addParameter('z',         0.0,   @isnumeric);
+p.addParameter('length',    0.0,   @isnumeric);
 p.addParameter('path',      '',    @(x) ischar(x) || isstring(x));
 p.addParameter('scale_E',   0.0,   @isnumeric);
 p.addParameter('scale_B',   0.0,   @isnumeric);
@@ -38,10 +43,15 @@ r = p.Results;
 if isempty(r.path)
     error('timetracking:ImpactTField:noPath', 'path is required');
 end
+if r.length <= 0
+    error('timetracking:ImpactTField:noLength', ...
+          'length (ImpactT Blength) must be > 0; got %g', r.length);
+end
 
 s = struct('type',    'impact_t_field', ...
            'name',    char(r.name), ...
            'z',       r.z, ...
+           'length',  r.length, ...
            'path',    char(r.path), ...
            'scale_E', r.scale_E, ...
            'scale_B', r.scale_B, ...

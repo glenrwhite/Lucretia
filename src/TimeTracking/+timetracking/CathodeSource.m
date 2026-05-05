@@ -47,6 +47,16 @@ p.addParameter('pulse_alpha',            1.0,    @isnumeric);
 p.addParameter('pulse_slope',            0.0,    @isnumeric);
 p.addParameter('transverse_alpha',       1.0,    @isnumeric);
 p.addParameter('transverse_truncate',    0.0,    @isnumeric);
+% ImpactT-style emission options (off by default).
+%   longitudinal_thermal: sample uz from half-Maxwell |Normal(0, sigma_u)|
+%       with sigma_u = sqrt(MTE * |e| / m_e). Matches distgen-generated
+%       partcl.data when the same MTE is used in both codes.
+%   z_init_spread: initial z is uniform in [z_cathode - spread, z_cathode].
+%       Combined with TimeTrack.behind_cathode_betazini (>0), particles
+%       drift at the universal speed until z >= z_cathode, mirroring
+%       ImpactT's driftemission_BeamBunch.
+p.addParameter('longitudinal_thermal',   false,  @(x) islogical(x) || isnumeric(x));
+p.addParameter('z_init_spread',          0.0,    @isnumeric);
 p.parse(varargin{:});
 r = p.Results;
 
@@ -65,5 +75,7 @@ s = struct('type',                   'cathode_source', ...
            'pulse_alpha',            r.pulse_alpha, ...
            'pulse_slope',            r.pulse_slope, ...
            'transverse_alpha',       r.transverse_alpha, ...
-           'transverse_truncate',    r.transverse_truncate);
+           'transverse_truncate',    r.transverse_truncate, ...
+           'longitudinal_thermal',   double(logical(r.longitudinal_thermal)), ...
+           'z_init_spread',          r.z_init_spread);
 end
