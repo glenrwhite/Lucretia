@@ -39,6 +39,12 @@ void TrackingLoop::step (
     using namespace amrex;
     using namespace particles;
 
+    // Dispatch to ImpactT-style drift-kick-drift integrator if enabled.
+    if (m_use_dkd_integrator) {
+        step_dkd(bunch, lattice, t, dt, sc, slice_sc);
+        return;
+    }
+
     // ---- 1. Emission ----
     for (auto const& el : lattice) {
         std::visit([&] (auto const& e) {
@@ -224,7 +230,16 @@ void TrackingLoop::step (
             // (AccSimulator.f90 lines 2154-2160).
             Real t_birth = ptd.rdata(RealSoA::t_birth)[ip];
             Real dt_eff  = std::min(dt, std::max(Real(0.0), t + dt - t_birth));
-            const Real t_phase = m_use_centroid_phase ? t_centroid : t;
+            // Phase-reference time for cos(omega*t_field + phi) in field gather.
+            // Per-particle phase mode overrides centroid mode (z_i/c per particle).
+            Real t_phase;
+            if (m_use_particle_phase) {
+                t_phase = z / kSpeedOfLight;
+            } else if (m_use_centroid_phase) {
+                t_phase = t_centroid;
+            } else {
+                t_phase = t;
+            }
             Real t_field = (t_birth > t)
                 ? Real(0.5) * (t_birth + t + dt) - (t - t_phase)
                 : t_phase;
@@ -289,9 +304,13 @@ void TrackingLoop::step (
                 t_birth = t + dt - dt_post;
                 ptd.rdata(RealSoA::t_birth)[ip] = t_birth;
                 const Real midpoint = Real(0.5) * (t_birth + t + dt);
-                t_field = m_use_centroid_phase
-                    ? midpoint - (t - t_phase)
-                    : midpoint;
+                if (m_use_particle_phase) {
+                    t_field = z / kSpeedOfLight;
+                } else if (m_use_centroid_phase) {
+                    t_field = midpoint - (t - t_phase);
+                } else {
+                    t_field = midpoint;
+                }
                 ptd.idata(IntSoA::emerged)[ip] = 1;
                 // Fall through to field gather + Boris below.
             } else if (m_behind_cathode_drift_on
@@ -324,6 +343,13 @@ void TrackingLoop::step (
                 x_gather = x + half_dt * ux * recpgam_mid;
                 y_gather = y + half_dt * uy * recpgam_mid;
                 z_gather = z + half_dt * uz * recpgam_mid;
+                // Also advance t_field by 0.5*dt to fully match ImpactT's
+                // drift-kick-drift centering (half-drift advances t by dt/2
+                // before kick, so field gather sees t_n+1/2). For wallclock
+                // and centroid modes this is just an additive offset.
+                if (!m_use_particle_phase) {
+                    t_field += Real(0.5) * dt_eff;
+                }
             }
             Real Ex = 0.0, Ey = 0.0, Ez = 0.0;
             Real Bx = 0.0, By = 0.0, Bz = 0.0;
@@ -493,6 +519,342 @@ void TrackingLoop::step (
     // Applied to whatever particles ended up in each WakeField's
     // [z_start, z_end] range after the Boris push. Bane analytic
     // short-range wake; slice convolution; explicit per-step impulse.
+    for (auto const& el : lattice) {
+        std::visit([&] (auto const& e) {
+            using T = std::decay_t<decltype(e)>;
+            if constexpr (std::is_same_v<T, elements::WakeField>) {
+                e.apply_wake(bunch, dt);
+            }
+        }, el);
+    }
+}
+
+
+// =====================================================================
+// ImpactT-style drift-kick-drift integrator with first-order emission
+// =====================================================================
+//
+// Mirrors AccSimulator.f90 main loop (lines 1407, 2110, 2141):
+//   1. drifthalf_BeamBunch  (above-cathode particles, OLD velocity, 0.5*dt)
+//   2. SC solve             (at midstep positions, after the half-drift)
+//   3. kick2t_BeamBunch     (field gather at t+0.5*dt, full-dt Boris kick)
+//   4. drifthalf_BeamBunch  (above-cathode, NEW velocity, 0.5*dt)
+//   5. driftemission_BeamBunch (z<=0 + pz>=0 particles, full-dt at betazini)
+//   6. first-order emission  (crossing particles: z = dtmp * uz/gamma,
+//                             where dtmp = z_after_emission/betazini)
+//
+// Below-cathode particles with pz<0 are FROZEN (don't drift) -- ImpactT
+// does this implicitly via the (pz>=0) check in driftemission. The fractional
+// cross-cathode kick is REMOVED: emerging particles get their first Boris
+// kick on the FOLLOWING step, not on the crossing step itself.
+void TrackingLoop::step_dkd (
+    particles::TimeBunch&                 bunch,
+    const elements::Lattice&              lattice,
+    amrex::Real                           t,
+    amrex::Real                           dt,
+    spacecharge::SpaceCharge*             sc,
+    spacecharge::SpaceChargeSlice*        slice_sc)
+{
+    using namespace amrex;
+    using namespace particles;
+    using PIter = ParIterSoA<RealSoA::nattribs, IntSoA::nattribs>;
+
+    constexpr Real c        = kSpeedOfLight;
+    constexpr Real inv_c2   = Real(1.0) / (c * c);
+    constexpr int  lev      = 0;
+    const     Real cathode_z = m_behind_cathode_drift_on
+                                ? m_cathode_z : Real(-1e30);
+    const     Real betazini_c = m_behind_cathode_drift_on
+                                ? (m_behind_cathode_betazini * c) : Real(0.0);
+    const     Real half_dt   = Real(0.5) * dt;
+
+    // ---- 1. Emission ----
+    for (auto const& el : lattice) {
+        std::visit([&] (auto const& e) {
+            using T = std::decay_t<decltype(e)>;
+            if constexpr (std::is_same_v<T, elements::CathodeSource>) {
+                e.emit_new_particles(bunch, t, dt);
+            }
+        }, el);
+    }
+
+    // ---- 2. First half-drift: above-cathode particles only, OLD velocity ----
+    // Mirrors drifthalf_BeamBunch (BeamBunch.f90 line 103).
+    for (PIter pti(bunch, lev); pti.isValid(); ++pti) {
+        auto ptd = pti.GetParticleTile().getParticleTileData();
+        const int np = pti.numParticles();
+#ifdef AMREX_USE_OMP
+#pragma omp parallel for
+#endif
+        for (int ip = 0; ip < np; ++ip) {
+            if (ptd.idata(IntSoA::alive)[ip] == 0) continue;
+            const Real z = ptd.rdata(RealSoA::z)[ip];
+            if (z <= cathode_z) continue;
+            const Real ux = ptd.rdata(RealSoA::px)[ip];
+            const Real uy = ptd.rdata(RealSoA::py)[ip];
+            const Real uz = ptd.rdata(RealSoA::pz)[ip];
+            const Real recpgam = Real(1.0) / std::sqrt(
+                Real(1.0) + (ux*ux + uy*uy + uz*uz) * inv_c2);
+            ptd.rdata(RealSoA::x)[ip] += half_dt * ux * recpgam;
+            ptd.rdata(RealSoA::y)[ip] += half_dt * uy * recpgam;
+            ptd.rdata(RealSoA::z)[ip] += half_dt * uz * recpgam;
+        }
+    }
+
+    // ---- 3. Phase reference time (centroid mode only -- otherwise unused) ----
+    Real t_centroid = t;
+    if (m_use_centroid_phase) {
+        Real sum_z = 0.0, sum_vz = 0.0;
+        long n_alive = 0;
+        for (PIter pti(bunch, lev); pti.isValid(); ++pti) {
+            auto& soa = pti.GetStructOfArrays();
+            const int np = pti.numParticles();
+            const auto& zs     = soa.GetRealData(RealSoA::z);
+            const auto& uxs    = soa.GetRealData(RealSoA::px);
+            const auto& uys    = soa.GetRealData(RealSoA::py);
+            const auto& uzs    = soa.GetRealData(RealSoA::pz);
+            const auto& alives = soa.GetIntData(IntSoA::alive);
+            for (int i = 0; i < np; ++i) {
+                if (alives[i] == 0) continue;
+                const Real ux = uxs[i], uy = uys[i], uz = uzs[i];
+                const Real gamma = std::sqrt(Real(1.0) +
+                    (ux*ux + uy*uy + uz*uz) * inv_c2);
+                sum_z  += zs[i];
+                sum_vz += uz / gamma;
+                ++n_alive;
+            }
+        }
+        ParallelDescriptor::ReduceRealSum(sum_z);
+        ParallelDescriptor::ReduceRealSum(sum_vz);
+        ParallelDescriptor::ReduceLongSum(n_alive);
+        if (n_alive > 0) {
+            const Real z_centroid = sum_z / Real(n_alive);
+            t_centroid = z_centroid / c + m_centroid_t_offset;
+        }
+    }
+
+    // ---- 4. Image-charge planes (collect cathode z's from CathodeSource) ----
+    std::vector<Real> image_planes;
+    for (auto const& el : lattice) {
+        std::visit([&] (auto const& e) {
+            using T = std::decay_t<decltype(e)>;
+            if constexpr (std::is_same_v<T, elements::CathodeSource>) {
+                if (e.m_image_charge_enabled) {
+                    image_planes.push_back(e.m_z_cathode);
+                }
+            }
+        }, el);
+    }
+
+    // ---- 5. Space-charge solve (at midstep positions, post half-drift) ----
+    GpuArray<Real, 3>  dxi_sc{}, lo_sc{};
+    Real const*        sf_lut[3] = {nullptr, nullptr, nullptr};
+    int                sf_n      = 0;
+    Array4<const Real> Ex_sc_arr, Ey_sc_arr, Ez_sc_arr;
+    Box                sc_box;
+    if (sc) {
+        sc->solve(bunch);
+        dxi_sc    = sc->dxi();
+        lo_sc     = sc->lo();
+        sf_n      = sc->lut_n();
+        sf_lut[0] = sc->lut_ptr(0);
+        sf_lut[1] = sc->lut_ptr(1);
+        sf_lut[2] = sc->lut_ptr(2);
+        Ex_sc_arr = sc->Ex_array();
+        Ey_sc_arr = sc->Ey_array();
+        Ez_sc_arr = sc->Ez_array();
+        sc_box    = sc->mesh_box();
+    }
+    if (slice_sc) {
+        slice_sc->compute(bunch);
+    }
+
+    // ---- 6. Field gather + Boris kick (above-cathode only, full dt) ----
+    // Field is gathered at midstep position (current x after half-drift)
+    // and midstep time (t + 0.5*dt for wallclock; t_centroid for centroid mode).
+    // Below-cathode particles get NO field, NO kick this step.
+    const Real t_field_default = m_use_centroid_phase ? t_centroid
+                               : (t + half_dt);
+    for (PIter pti(bunch, lev); pti.isValid(); ++pti) {
+        auto ptd = pti.GetParticleTile().getParticleTileData();
+        const int np = pti.numParticles();
+#ifdef AMREX_USE_OMP
+#pragma omp parallel for
+#endif
+        for (int ip = 0; ip < np; ++ip) {
+            if (ptd.idata(IntSoA::alive)[ip] == 0) continue;
+            const Real x = ptd.rdata(RealSoA::x)[ip];
+            const Real y = ptd.rdata(RealSoA::y)[ip];
+            const Real z = ptd.rdata(RealSoA::z)[ip];
+            if (z <= cathode_z) continue;
+
+            Real ux = ptd.rdata(RealSoA::px)[ip];
+            Real uy = ptd.rdata(RealSoA::py)[ip];
+            Real uz = ptd.rdata(RealSoA::pz)[ip];
+            const Real q  = ptd.rdata(RealSoA::q)[ip];
+            const Real qm = ptd.rdata(RealSoA::qm)[ip];
+
+            const Real t_field = m_use_particle_phase
+                ? (z / c) : t_field_default;
+
+            Real Ex = 0, Ey = 0, Ez = 0;
+            Real Bx = 0, By = 0, Bz = 0;
+            for (auto const& el : lattice) {
+                Real Ex_e = 0, Ey_e = 0, Ez_e = 0;
+                Real Bx_e = 0, By_e = 0, Bz_e = 0;
+                std::visit([&] (auto const& e) {
+                    if (e.active(t_field)) {
+                        e.gather_E_B(x, y, z, t_field,
+                                     Ex_e, Ey_e, Ez_e,
+                                     Bx_e, By_e, Bz_e);
+                    }
+                }, el);
+                Ex += Ex_e; Ey += Ey_e; Ez += Ez_e;
+                Bx += Bx_e; By += By_e; Bz += Bz_e;
+            }
+
+            // Image-charge planes (one Coulomb mirror per cathode plane).
+            for (Real z_cath : image_planes) {
+                const Real z_above = z - z_cath;
+                if (z_above > Real(0.0)) {
+                    Ez += -q * kCoulombConstant
+                        / (Real(4.0) * z_above * z_above);
+                }
+            }
+
+            // Space-charge gather + per-particle self-force subtraction
+            // + per-particle 1/gamma^2 boost (same pattern as kick-drift).
+            if (sc) {
+                const Real fx_sc = (x - lo_sc[0]) * dxi_sc[0];
+                const Real fy_sc = (y - lo_sc[1]) * dxi_sc[1];
+                const Real fz_sc = (z - lo_sc[2]) * dxi_sc[2];
+                const int  ix_sc = int(std::floor(fx_sc));
+                const int  iy_sc = int(std::floor(fy_sc));
+                const int  iz_sc = int(std::floor(fz_sc));
+                if (!(ix_sc < sc_box.smallEnd(0)
+                   || ix_sc + 1 > sc_box.bigEnd(0)
+                   || iy_sc < sc_box.smallEnd(1)
+                   || iy_sc + 1 > sc_box.bigEnd(1)
+                   || iz_sc < sc_box.smallEnd(2)
+                   || iz_sc + 1 > sc_box.bigEnd(2)))
+                {
+                    auto E_sc = ablastr::particles::doGatherVectorFieldNodal(
+                        ParticleReal(x), ParticleReal(y), ParticleReal(z),
+                        Ex_sc_arr, Ey_sc_arr, Ez_sc_arr,
+                        dxi_sc, lo_sc);
+
+                    const Real w  = ptd.rdata(RealSoA::w)[ip];
+                    const Real qw = q * w * kCoulombConstant;
+
+                    const Real wx_frac = fx_sc - std::floor(fx_sc);
+                    const Real wy_frac = fy_sc - std::floor(fy_sc);
+                    const Real wz_frac = fz_sc - std::floor(fz_sc);
+                    const Real tx = wx_frac * Real(sf_n);
+                    const Real ty = wy_frac * Real(sf_n);
+                    const Real tz = wz_frac * Real(sf_n);
+                    int ix_t = int(tx); if (ix_t >= sf_n) ix_t = sf_n - 1;
+                    int iy_t = int(ty); if (iy_t >= sf_n) iy_t = sf_n - 1;
+                    int iz_t = int(tz); if (iz_t >= sf_n) iz_t = sf_n - 1;
+                    if (ix_t < 0) ix_t = 0;
+                    if (iy_t < 0) iy_t = 0;
+                    if (iz_t < 0) iz_t = 0;
+                    const Real ax = tx - Real(ix_t);
+                    const Real ay = ty - Real(iy_t);
+                    const Real az = tz - Real(iz_t);
+                    const int  s1 = sf_n + 1;
+                    const int  s2 = s1 * s1;
+                    const int  i000 = ix_t * s2 + iy_t * s1 + iz_t;
+
+                    Real E_self[3];
+                    for (int cc = 0; cc < 3; ++cc) {
+                        const Real* T = sf_lut[cc];
+                        const Real v000 = T[i000];
+                        const Real v001 = T[i000 + 1];
+                        const Real v010 = T[i000 + s1];
+                        const Real v011 = T[i000 + s1 + 1];
+                        const Real v100 = T[i000 + s2];
+                        const Real v101 = T[i000 + s2 + 1];
+                        const Real v110 = T[i000 + s2 + s1];
+                        const Real v111 = T[i000 + s2 + s1 + 1];
+                        const Real v00  = v000 + (v001 - v000) * az;
+                        const Real v01  = v010 + (v011 - v010) * az;
+                        const Real v10  = v100 + (v101 - v100) * az;
+                        const Real v11  = v110 + (v111 - v110) * az;
+                        const Real v0   = v00  + (v01  - v00 ) * ay;
+                        const Real v1   = v10  + (v11  - v10 ) * ay;
+                        E_self[cc] = v0 + (v1 - v0) * ax;
+                    }
+                    constexpr Real kSelfForceFactor = Real(0.62);
+                    const Real qw_f = qw * kSelfForceFactor;
+                    const Real u2_p     = ux*ux + uy*uy + uz*uz;
+                    const Real sc_boost = Real(1.0)
+                        / (Real(1.0) + u2_p * inv_c2);
+                    Ex += sc_boost * (E_sc[0] - qw_f * E_self[0]);
+                    Ey += sc_boost * (E_sc[1] - qw_f * E_self[1]);
+                    if (!slice_sc) {
+                        Ez += sc_boost * (E_sc[2] - qw_f * E_self[2]);
+                    }
+                }
+            }
+            if (slice_sc) {
+                Ez += slice_sc->E_z_at(z);
+            }
+
+            // Velocity-only Boris kick (full dt). Position drift is handled
+            // by separate half-drift passes around this kick.
+            boris_kick_only(qm, Ex, Ey, Ez, Bx, By, Bz, dt,
+                            ux, uy, uz);
+
+            ptd.rdata(RealSoA::px)[ip] = ux;
+            ptd.rdata(RealSoA::py)[ip] = uy;
+            ptd.rdata(RealSoA::pz)[ip] = uz;
+        }
+    }
+
+    // ---- 7. Second half-drift + driftemission + first-order emission ----
+    // Mirrors AccSimulator.f90 lines 2141-2167.
+    for (PIter pti(bunch, lev); pti.isValid(); ++pti) {
+        auto ptd = pti.GetParticleTile().getParticleTileData();
+        const int np = pti.numParticles();
+#ifdef AMREX_USE_OMP
+#pragma omp parallel for
+#endif
+        for (int ip = 0; ip < np; ++ip) {
+            if (ptd.idata(IntSoA::alive)[ip] == 0) continue;
+            const Real ux = ptd.rdata(RealSoA::px)[ip];
+            const Real uy = ptd.rdata(RealSoA::py)[ip];
+            const Real uz = ptd.rdata(RealSoA::pz)[ip];
+            const Real recpgam = Real(1.0) / std::sqrt(
+                Real(1.0) + (ux*ux + uy*uy + uz*uz) * inv_c2);
+            const Real z_pre = ptd.rdata(RealSoA::z)[ip];
+
+            if (z_pre > cathode_z) {
+                // Above cathode: half-drift at NEW velocity.
+                ptd.rdata(RealSoA::x)[ip] += half_dt * ux * recpgam;
+                ptd.rdata(RealSoA::y)[ip] += half_dt * uy * recpgam;
+                ptd.rdata(RealSoA::z)[ip] += half_dt * uz * recpgam;
+            } else if (uz >= Real(0.0)) {
+                // Below cathode + forward velocity: full-step drift at
+                // universal betazini (driftemission_BeamBunch).
+                const Real z_after = z_pre + dt * betazini_c;
+                ptd.rdata(RealSoA::z)[ip] = z_after;
+
+                // First-order emission: did we cross cathode this step?
+                // ImpactT condition: tmpzz<=0 (was below) AND z>=0 (now above).
+                if (z_after >= cathode_z) {
+                    const Real dtmp = (z_after - cathode_z) / betazini_c;
+                    // x, y get ADDITIONAL own-velocity drift over dtmp
+                    ptd.rdata(RealSoA::x)[ip] += dtmp * ux * recpgam;
+                    ptd.rdata(RealSoA::y)[ip] += dtmp * uy * recpgam;
+                    // z is OVERRIDDEN to own-velocity result over dtmp
+                    ptd.rdata(RealSoA::z)[ip] = cathode_z + dtmp * uz * recpgam;
+                }
+            }
+            // else: z_pre <= cathode AND uz < 0 -- frozen (no motion).
+        }
+    }
+
+    // ---- 8. Wake-field impulse (post-push, Strang splitting) ----
     for (auto const& el : lattice) {
         std::visit([&] (auto const& e) {
             using T = std::decay_t<decltype(e)>;

@@ -115,6 +115,18 @@ end
 if isprop(obj, 'use_midstep_field') && ~isempty(obj.use_midstep_field) && obj.use_midstep_field
     fprintf(f, 'tracking.use_midstep_field  = 1\n');
 end
+if isprop(obj, 'use_particle_phase') && ~isempty(obj.use_particle_phase) && obj.use_particle_phase
+    fprintf(f, 'tracking.use_particle_phase = 1\n');
+end
+if isprop(obj, 'use_dkd_integrator') && ~isempty(obj.use_dkd_integrator) && obj.use_dkd_integrator
+    fprintf(f, 'tracking.use_dkd_integrator = 1\n');
+end
+if isprop(obj, 'trace_file') && ~isempty(obj.trace_file)
+    fprintf(f, 'tracking.trace_file         = %s\n', char(obj.trace_file));
+    if isprop(obj, 'trace_every') && ~isempty(obj.trace_every)
+        fprintf(f, 'tracking.trace_every        = %d\n', round(obj.trace_every));
+    end
+end
 
 if obj.enable_space_charge
     fprintf(f, '\n# ---- Space charge ----\n');

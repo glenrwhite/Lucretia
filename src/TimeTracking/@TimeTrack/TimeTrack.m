@@ -30,9 +30,13 @@ properties
     t_start      = []                                            % s, initial sim time (empty = 0)
     behind_cathode_z        = []                                 % m, ImpactT-style behind-cathode drift turns ON below this z
     behind_cathode_betazini = []                                 % dimensionless, universal v/c for behind-cathode drift
-    use_centroid_phase      = []                                 % logical: use bunch z-centroid/c instead of wallclock t for external-field gather (ImpactT compat)
-    centroid_t_offset       = []                                 % s, additive offset so t_eff = z_centroid/c + offset matches wallclock at bunch start
-    use_midstep_field       = []                                 % logical: gather external field at midstep particle position (ImpactT compat)
+    use_centroid_phase      = []                                 % logical: use bunch z-centroid/c instead of wallclock t for cos argument (off by default; ImpactT actually uses wallclock)
+    centroid_t_offset       = []                                 % s, additive offset for centroid mode
+    use_midstep_field       = []                                 % logical: gather external field at midstep particle position (subsumed by use_dkd_integrator when set)
+    use_particle_phase      = []                                 % logical: per-particle phase t_eff = z_particle/c (test mode for chirp investigation)
+    use_dkd_integrator      = true                               % logical: ImpactT-style drift-kick-drift + first-order emission (default ON; cleanest cross-code calibration)
+    trace_file              = ''                                 % path: per-step bunch-mean diagnostics (CSV) for cross-code comparison
+    trace_every             = 1                                  % step interval for trace rows (1 = every step)
     geom_lo    = [-0.05, -0.05,  0.0]                            % m
     geom_hi    = [ 0.05,  0.05,  1.0]                            % m
     geom_ncell = [32, 32, 32]

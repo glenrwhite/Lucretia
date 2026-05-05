@@ -21,8 +21,8 @@ struct TimeWindow
     [[nodiscard]] bool active (amrex::Real t) const noexcept
     { return t >= m_t_start && t <= m_t_stop; }
 
-    amrex::Real m_t_start = 0.0;
-    amrex::Real m_t_stop  = std::numeric_limits<amrex::Real>::infinity();
+    amrex::Real m_t_start = -std::numeric_limits<amrex::Real>::infinity();
+    amrex::Real m_t_stop  =  std::numeric_limits<amrex::Real>::infinity();
 };
 
 } // namespace elements

@@ -732,6 +732,10 @@ int main (int argc, char* argv[])
         int         use_centroid_phase      = 0;
         amrex::Real centroid_t_offset       = 0.0;
         int         use_midstep_field       = 0;
+        int         use_particle_phase      = 0;
+        int         use_dkd_integrator      = 0;
+        std::string trace_file;
+        int         trace_every             = 1;
         {
             amrex::ParmParse pp_track("tracking");
             pp_track.query("dt", dt);
@@ -744,6 +748,10 @@ int main (int argc, char* argv[])
             pp_track.query("use_centroid_phase",      use_centroid_phase);
             pp_track.query("centroid_t_offset",       centroid_t_offset);
             pp_track.query("use_midstep_field",       use_midstep_field);
+            pp_track.query("use_particle_phase",      use_particle_phase);
+            pp_track.query("use_dkd_integrator",      use_dkd_integrator);
+            pp_track.query("trace_file",              trace_file);
+            pp_track.query("trace_every",             trace_every);
         }
         if (dt_after <= 0.0) { dt_after = dt; }
 
@@ -767,11 +775,104 @@ int main (int argc, char* argv[])
             tracker.set_midstep_field(true);
             amrex::Print() << "[tracking] midstep-position field gather enabled\n";
         }
+        if (use_particle_phase != 0) {
+            tracker.set_particle_phase(true);
+            amrex::Print() << "[tracking] per-particle phase enabled "
+                           << "(t_eff = z_particle/c per particle)\n";
+        }
+        if (use_dkd_integrator != 0) {
+            tracker.set_dkd_integrator(true);
+            amrex::Print() << "[tracking] ImpactT-style drift-kick-drift "
+                           << "integrator + first-order emission enabled\n";
+        }
         amrex::Real t = t_start;
         bool        switched = false;
 
+        // Per-step trace file for cross-code calibration. Writes one
+        // CSV row per (trace_every) step containing bunch-mean diagnostics.
+        std::ofstream trace_out;
+        if (!trace_file.empty() && amrex::ParallelDescriptor::IOProcessor()) {
+            trace_out.open(trace_file);
+            if (!trace_out) {
+                amrex::Print() << "[trace] WARNING: cannot open " << trace_file << "\n";
+            } else {
+                trace_out << "step,t,n_alive,z_mean,sigma_z,gamma_mean,sigma_gamma,"
+                             "x_mean,sigma_x,vz_mean,t_centroid_eff\n";
+                amrex::Print() << "[trace] writing per-step bunch stats to "
+                               << trace_file << " (every " << trace_every
+                               << " step)\n";
+            }
+        }
+        // Lambda: compute and write trace row for current step.
+        constexpr amrex::Real kTraceC  = 299792458.0;
+        constexpr amrex::Real kTraceMe = 9.1093837015e-31;
+        auto write_trace_row = [&] (int step, amrex::Real cur_t) {
+            if (!trace_out.is_open()) return;
+            using namespace lucretiatt::particles;
+            using PIter = amrex::ParIterSoA<RealSoA::nattribs, IntSoA::nattribs>;
+            constexpr int lev = 0;
+            amrex::Real sum_x = 0, sum_x2 = 0, sum_z = 0, sum_z2 = 0;
+            amrex::Real sum_g = 0, sum_g2 = 0, sum_vz = 0;
+            long n_alive = 0;
+            constexpr amrex::Real inv_c2 = amrex::Real(1.0) / (kTraceC * kTraceC);
+            for (PIter pti(bunch, lev); pti.isValid(); ++pti) {
+                auto& soa = pti.GetStructOfArrays();
+                const int np = pti.numParticles();
+                const auto& xs  = soa.GetRealData(RealSoA::x);
+                const auto& zs  = soa.GetRealData(RealSoA::z);
+                const auto& uxs = soa.GetRealData(RealSoA::px);
+                const auto& uys = soa.GetRealData(RealSoA::py);
+                const auto& uzs = soa.GetRealData(RealSoA::pz);
+                const auto& alives = soa.GetIntData(IntSoA::alive);
+                for (int i = 0; i < np; ++i) {
+                    if (alives[i] == 0) { continue; }
+                    const amrex::Real ux = uxs[i], uy = uys[i], uz = uzs[i];
+                    const amrex::Real g = std::sqrt(amrex::Real(1.0)
+                        + (ux*ux + uy*uy + uz*uz) * inv_c2);
+                    sum_x  += xs[i];   sum_x2 += xs[i]*xs[i];
+                    sum_z  += zs[i];   sum_z2 += zs[i]*zs[i];
+                    sum_g  += g;       sum_g2 += g*g;
+                    sum_vz += uz / g;
+                    ++n_alive;
+                }
+            }
+            amrex::ParallelDescriptor::ReduceLongSum(n_alive);
+            amrex::ParallelDescriptor::ReduceRealSum(sum_x);
+            amrex::ParallelDescriptor::ReduceRealSum(sum_x2);
+            amrex::ParallelDescriptor::ReduceRealSum(sum_z);
+            amrex::ParallelDescriptor::ReduceRealSum(sum_z2);
+            amrex::ParallelDescriptor::ReduceRealSum(sum_g);
+            amrex::ParallelDescriptor::ReduceRealSum(sum_g2);
+            amrex::ParallelDescriptor::ReduceRealSum(sum_vz);
+            if (n_alive == 0) return;
+            const amrex::Real inv_N = amrex::Real(1.0) / amrex::Real(n_alive);
+            const amrex::Real x_mean = sum_x * inv_N;
+            const amrex::Real z_mean = sum_z * inv_N;
+            const amrex::Real g_mean = sum_g * inv_N;
+            const amrex::Real vz_mean = sum_vz * inv_N;
+            const amrex::Real var_x = std::max(sum_x2*inv_N - x_mean*x_mean, amrex::Real(0.0));
+            const amrex::Real var_z = std::max(sum_z2*inv_N - z_mean*z_mean, amrex::Real(0.0));
+            const amrex::Real var_g = std::max(sum_g2*inv_N - g_mean*g_mean, amrex::Real(0.0));
+            const amrex::Real sx = std::sqrt(var_x);
+            const amrex::Real sz = std::sqrt(var_z);
+            const amrex::Real sg = std::sqrt(var_g);
+            // Effective field-gather time used by centroid-phase mode.
+            const amrex::Real t_centroid_eff = (use_centroid_phase != 0)
+                ? (z_mean / kTraceC + centroid_t_offset)
+                : cur_t;
+            if (amrex::ParallelDescriptor::IOProcessor()) {
+                trace_out << step << ',' << cur_t << ',' << n_alive << ','
+                          << z_mean << ',' << sz << ','
+                          << g_mean << ',' << sg << ','
+                          << x_mean << ',' << sx << ','
+                          << vz_mean << ',' << t_centroid_eff << '\n';
+                trace_out.flush();
+            }
+        };
+
         // Step 0 = initial state (pre-push).
         maybe_dump(writer.get(), lattice, bunch, 0, t);
+        write_trace_row(0, t);
 
         // Progress reports every 10% of steps (or every step if n_steps < 10).
         // Includes wall time and ETA so long Injector / production runs are
@@ -793,6 +894,9 @@ int main (int argc, char* argv[])
             tracker.step(bunch, lattice, t, cur_dt, sc.get(), slice_sc.get());
             t += cur_dt;
             maybe_dump(writer.get(), lattice, bunch, s, t);
+            if (s % trace_every == 0) {
+                write_trace_row(s, t);
+            }
 
             if (s % prog_every == 0 || s == n_steps) {
                 const long n_now      = bunch.TotalNumberOfParticles(true, false);

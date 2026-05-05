@@ -81,5 +81,54 @@ void boris_push_one (
     z += uz * inv_g * dt;
 }
 
+/** Velocity-only Boris kick (no position drift).
+ *
+ *  Same half-E -> B-rotate -> half-E sequence as boris_push_one, but skips
+ *  the final position drift. Used by the drift-kick-drift integrator where
+ *  position advance is handled by separate half-drift passes around the
+ *  kick. */
+AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
+void boris_kick_only (
+    amrex::Real qm,
+    amrex::Real Ex, amrex::Real Ey, amrex::Real Ez,
+    amrex::Real Bx, amrex::Real By, amrex::Real Bz,
+    amrex::Real dt,
+    amrex::Real& ux, amrex::Real& uy, amrex::Real& uz)
+{
+    constexpr amrex::Real c      = kSpeedOfLight;
+    constexpr amrex::Real inv_c2 = amrex::Real(1.0) / (c * c);
+
+    const amrex::Real half_qm_dt = amrex::Real(0.5) * qm * dt;
+    const amrex::Real ux_m = ux + half_qm_dt * Ex;
+    const amrex::Real uy_m = uy + half_qm_dt * Ey;
+    const amrex::Real uz_m = uz + half_qm_dt * Ez;
+
+    const amrex::Real u2_m    = ux_m*ux_m + uy_m*uy_m + uz_m*uz_m;
+    const amrex::Real gamma_m = std::sqrt(amrex::Real(1.0) + u2_m * inv_c2);
+
+    const amrex::Real fac = half_qm_dt / gamma_m;
+    const amrex::Real tx = fac * Bx;
+    const amrex::Real ty = fac * By;
+    const amrex::Real tz = fac * Bz;
+
+    const amrex::Real upx = ux_m + (uy_m * tz - uz_m * ty);
+    const amrex::Real upy = uy_m + (uz_m * tx - ux_m * tz);
+    const amrex::Real upz = uz_m + (ux_m * ty - uy_m * tx);
+
+    const amrex::Real t2     = tx*tx + ty*ty + tz*tz;
+    const amrex::Real s_norm = amrex::Real(2.0) / (amrex::Real(1.0) + t2);
+    const amrex::Real sx = s_norm * tx;
+    const amrex::Real sy = s_norm * ty;
+    const amrex::Real sz = s_norm * tz;
+
+    const amrex::Real ux_p = ux_m + (upy * sz - upz * sy);
+    const amrex::Real uy_p = uy_m + (upz * sx - upx * sz);
+    const amrex::Real uz_p = uz_m + (upx * sy - upy * sx);
+
+    ux = ux_p + half_qm_dt * Ex;
+    uy = uy_p + half_qm_dt * Ey;
+    uz = uz_p + half_qm_dt * Ez;
+}
+
 } // namespace tracking
 } // namespace lucretiatt

@@ -103,13 +103,65 @@ public:
     void set_midstep_field (bool on) noexcept { m_use_midstep_field = on; }
     bool midstep_field_enabled () const noexcept { return m_use_midstep_field; }
 
+    /** Use PER-PARTICLE phase: each particle sees cos(omega*z_i/c + phi)
+     *  where z_i is the particle's own z. This is in contrast to the
+     *  centroid-phase mode (cos(omega*z_centroid/c + phi), same for all
+     *  particles) and the wallclock mode (cos(omega*t + phi)).
+     *
+     *  Per-particle phase adds a phase-derivative term to the chirp source:
+     *  with centroid phase, only the spatial gradient dE_z/dz contributes
+     *  to chirp (dgamma/dz ~ q/m * dE_z/dz * cos). With per-particle phase,
+     *  there is also -E_z * (omega/c) * sin (the phase derivative across
+     *  the bunch). For LCLS gun phase 305 deg these terms can partially
+     *  cancel, reducing chirp by a factor of 2-3. Test mode for the no-SC
+     *  partcl-seed comparison vs ImpactT.
+     *
+     *  Default off. Mutually exclusive with centroid-phase mode. */
+    void set_particle_phase (bool on) noexcept { m_use_particle_phase = on; }
+    bool particle_phase_enabled () const noexcept { return m_use_particle_phase; }
+
+    /** Use ImpactT-style drift-kick-drift integrator with first-order
+     *  emission model. Replaces the default kick-drift scheme. The DKD
+     *  step is:
+     *    1. Half-drift (above-cathode particles only, OLD velocity)
+     *    2. Field gather at midstep position + midstep time (t + 0.5*dt)
+     *    3. Boris kick (full dt, velocity-only — no position drift)
+     *    4. Half-drift (above-cathode particles only, NEW velocity)
+     *    5. driftemission: below-cathode + pz>=0 particles drift FULL dt
+     *       at universal betazini
+     *    6. First-order emission: particles that crossed cathode this step
+     *       get z reset to (z/betazini) * pz/gamma (own-velocity drift)
+     *
+     *  Differences from kick-drift mode:
+     *   - Field is gathered at midstep position + time (not start-of-step)
+     *   - No fractional Boris kick on cathode-crossing step (Boris waits
+     *     until next step when particle is fully above cathode)
+     *   - Below-cathode + pz<0 particles are FROZEN (don't drift)
+     *
+     *  Together with use_centroid_phase=false (i.e., wallclock cos), this
+     *  matches ImpactT's main integration loop almost exactly.
+     *
+     *  Default off; enable via tracking.use_dkd_integrator = 1. */
+    void set_dkd_integrator (bool on) noexcept { m_use_dkd_integrator = on; }
+    bool dkd_integrator_enabled () const noexcept { return m_use_dkd_integrator; }
+
 private:
+    void step_dkd (
+        particles::TimeBunch&                 bunch,
+        const elements::Lattice&              lattice,
+        amrex::Real                           t,
+        amrex::Real                           dt,
+        spacecharge::SpaceCharge*             sc,
+        spacecharge::SpaceChargeSlice*        slice_sc);
+
     bool        m_behind_cathode_drift_on = false;
     amrex::Real m_cathode_z               = 0.0;
     amrex::Real m_behind_cathode_betazini = 0.0;
     bool        m_use_centroid_phase      = false;
     amrex::Real m_centroid_t_offset       = 0.0;
     bool        m_use_midstep_field       = false;
+    bool        m_use_particle_phase      = false;
+    bool        m_use_dkd_integrator      = false;
 };
 
 } // namespace tracking
