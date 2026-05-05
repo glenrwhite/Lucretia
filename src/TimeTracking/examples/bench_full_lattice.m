@@ -1,0 +1,334 @@
+function bench_full_lattice(varargin)
+% BENCH_FULL_LATTICE  Comprehensive cross-code benchmark vs ImpactT for the
+% LCLS injector through L0A (~5 m), with space charge enabled.
+%
+% Usage: bench_full_lattice('impactt_dir', '/path/to/ImpactT', 'n_macros', 50000)
+%
+% Compares (at end of L0A):
+%   - sigma_x, sigma_y, sigma_z        (transverse + longitudinal beam sizes)
+%   - bunch length (FWHM-equivalent)
+%   - sigma_gamma (energy spread, MeV)
+%   - eps_nx, eps_ny                   (normalised transverse emittance)
+%   - eps_nz                           (longitudinal emittance, m·rad)
+%   - slice eps_nx, eps_ny             (per z-slice, peak-current slice)
+%
+% Uses TimeTrack defaults (DKD + wallclock cos), adaptive 3D SC + slice SC,
+% ImpactT partcl.data as initial distribution (apples-to-apples seed).
+
+p = inputParser;
+p.addParameter('impactt_dir', '/Users/glenwhite/Documents/GitHub/Lattices/common/ImpactT', @(x) ischar(x) || isstring(x));
+p.addParameter('n_macros',    50000, @isnumeric);
+p.addParameter('n_steps',     9000,  @isnumeric);   % ~16.6 ns to match ImpactT end
+p.addParameter('dt_initial',  0.3e-12, @isnumeric);
+p.addParameter('dt_after',    4e-12,  @isnumeric);
+p.addParameter('dt_change_t', 1.5e-9, @isnumeric);
+p.addParameter('n_slice',     30,    @isnumeric);
+p.addParameter('tag',         'bench_full', @(x) ischar(x) || isstring(x));
+p.parse(varargin{:});
+opts = p.Results;
+impactt_dir = char(opts.impactt_dir);
+
+fprintf('=== Full-lattice benchmark (LCLS injector + L0A, with SC) ===\n');
+fprintf('  ImpactT dir: %s\n', impactt_dir);
+fprintf('  n_macros: %d  n_steps: %d\n', opts.n_macros, opts.n_steps);
+
+[lattice, ~, geom_imp, tracking_imp, info] = timetracking.readImpactTLattice( ...
+    impactt_dir, 'n_macros', opts.n_macros);
+
+% Read header for partcl-seed setup
+fid = fopen(fullfile(impactt_dir, 'ImpactT.in'), 'r');
+hd = textscan(fid, '%s', 'Delimiter', '\n');  fclose(fid);  hd = hd{1};
+data_lines = hd(~startsWith(strtrim(hd), '!') & ~cellfun('isempty', strtrim(hd)));
+h9 = sscanf(data_lines{9}, '%f');
+Bcurr = h9(1); Bfreq = h9(5); Tini = h9(6);
+Bkenergy = h9(2); Bmass = h9(3);
+q_total = abs(Bcurr) / Bfreq;
+
+% Filter out cathode_source -- we are using partcl.data as the seed,
+% otherwise the cathode would emit a second batch of particles in parallel.
+keep = true(size(lattice));
+for k = 1:numel(lattice)
+    if strcmp(lattice{k}.type, 'cathode_source'), keep(k) = false; end
+end
+lattice = lattice(keep);
+
+% Replace BeamMonitor with cadence that gives ~25 dumps over the run
+mon_idx = find(cellfun(@(e) strcmp(e.type, 'beam_monitor'), lattice), 1);
+dump_every = max(100, floor(opts.n_steps / 25));
+if ~isempty(mon_idx)
+    lattice{mon_idx} = timetracking.BeamMonitor('name', 'mon', 'dump_every', dump_every);
+else
+    lattice{end+1} = timetracking.BeamMonitor('name', 'mon', 'dump_every', dump_every);
+end
+
+fprintf('  lattice elements: %d  (BeamMonitor every %d steps)\n', numel(lattice), dump_every);
+for k = 1:numel(lattice)
+    el = lattice{k};
+    fprintf('    [%2d] %-22s type=%-18s\n', k, el.name, el.type);
+end
+
+% --- Build TimeTrack (uses new DKD + wallclock defaults) ---
+tt = TimeTrack();
+tt.lattice = lattice;
+tt.beam    = struct('partcl_file', fullfile(impactt_dir, 'partcl.data'), ...
+                    'partcl_q_total', q_total, 't_init', Tini);
+
+% Geometry (initial; SC adaptive will resize per step)
+tt.geom_lo    = [-3e-3, -3e-3, -0.05];
+tt.geom_hi    = [ 3e-3,  3e-3,  0.70];
+tt.geom_ncell = geom_imp.ncell(:).';
+
+% Tracking schedule
+tt.t_start     = Tini;
+tt.dt          = opts.dt_initial;
+tt.dt_change_t = opts.dt_change_t;
+tt.dt_after    = opts.dt_after;
+tt.n_steps     = opts.n_steps;
+
+% Behind-cathode drift (universal-betazini, ImpactT compat)
+tt.behind_cathode_z        = 0.0;
+tt.behind_cathode_betazini = sqrt(1.0 - 1.0/(1.0 + Bkenergy/Bmass)^2);
+
+% Space charge: full 3D adaptive + 1D slice longitudinal + cathode image
+tt.enable_space_charge = true;
+tt.sc_adaptive         = true;
+tt.enable_slice_sc     = true;
+tt.sc_image_plane      = true;
+tt.sc_image_plane_z    = 0.0;
+tt.sc_image_cutoff     = 0.05;
+
+tt.work_dir = ['/tmp/bench_full_' char(opts.tag)];
+if exist(tt.work_dir, 'dir'), rmdir(tt.work_dir, 's'); end
+
+fprintf('\nDKD=%d wallclock=%d (centroid=%d, particle=%d)\n', ...
+    coalesce(tt.use_dkd_integrator), coalesce(~ifempty(tt.use_centroid_phase, false)), ...
+    coalesce(tt.use_centroid_phase), coalesce(tt.use_particle_phase));
+
+t0 = tic;
+tt.run();
+fprintf('Run time: %.1f s\n', toc(t0));
+
+% --- Compute lucretia-tt stats ---
+bunches = tt.readDumps();
+fprintf('Dumps: %d\n', numel(bunches));
+
+me = 9.1093837015e-31; c = 299792458;
+last = bunches{end};
+[bm_lt, sl_lt] = compute_stats(last, me, c, opts.n_slice);
+
+% --- Read ImpactT final particles + bunch evolution ---
+[bm_imp, sl_imp] = read_imp_final(impactt_dir, me, c, opts.n_slice);
+ref = timetracking.readImpactTFort18(impactt_dir);
+
+% --- Print final-state comparison ---
+print_final_comparison(bm_lt, bm_imp, sl_lt, sl_imp, last, me, c);
+
+% --- Print evolution comparison ---
+print_evolution(bunches, ref, me, c);
+
+end
+
+
+% ====================================================================
+function [bm, sl] = compute_stats(b, me, c, n_slice)
+% Compute bunch-mean and slice stats from a particle dump struct.
+xx = double(b.x); yy = double(b.y); zz = double(b.z);
+px = double(b.px); py = double(b.py); pz = double(b.pz);
+N  = numel(xx);
+p2 = px.*px + py.*py + pz.*pz;
+g  = sqrt(1 + p2/(me*c)^2);
+
+bm.N        = N;
+bm.t        = b.time;
+bm.z_mean   = mean(zz);
+bm.gamma    = mean(g);
+bm.sigma_x  = std(xx);
+bm.sigma_y  = std(yy);
+bm.sigma_z  = std(zz);
+bm.sigma_gamma = std(g);
+bm.sigma_E_MeV = std(g) * 0.5109989461;        % MeV
+bm.bunch_len_fwhm = sigma_to_fwhm(zz);          % m (FWHM of z dist)
+bm.eps_nx   = norm_emittance(xx, px./max(pz,1e-30), g);
+bm.eps_ny   = norm_emittance(yy, py./max(pz,1e-30), g);
+% Longitudinal: eps_nz = sqrt(<dz^2><dgamma^2> - <dz*dgamma>^2) in m
+dz = zz - mean(zz);
+dg = g  - mean(g);
+bm.eps_nz   = sqrt(max(mean(dz.^2)*mean(dg.^2) - mean(dz.*dg)^2, 0));
+
+% Slice emittances (peak-current slice)
+edges = linspace(min(zz), max(zz), n_slice+1);
+[~, ~, bin] = histcounts(zz, edges);
+sl.eps_nx_slice = nan(n_slice, 1);
+sl.eps_ny_slice = nan(n_slice, 1);
+sl.current      = nan(n_slice, 1);
+sl.z_centers    = 0.5*(edges(1:end-1) + edges(2:end));
+for k = 1:n_slice
+    msk = (bin == k);
+    if sum(msk) < 5, continue; end
+    xk = xx(msk); pxk = px(msk); pzk = pz(msk);
+    yk = yy(msk); pyk = py(msk);
+    gk = g(msk);
+    sl.eps_nx_slice(k) = norm_emittance(xk, pxk./max(pzk,1e-30), gk);
+    sl.eps_ny_slice(k) = norm_emittance(yk, pyk./max(pzk,1e-30), gk);
+    dz = edges(k+1) - edges(k);
+    Nk = sum(msk);
+    sl.current(k) = Nk / N * dz;   % normalised slice density
+end
+[~, peak_k] = max(sl.current);
+bm.eps_nx_peak_slice = sl.eps_nx_slice(peak_k);
+bm.eps_ny_peak_slice = sl.eps_ny_slice(peak_k);
+bm.peak_slice_z      = sl.z_centers(peak_k);
+end
+
+
+function [bm, sl] = read_imp_final(impactt_dir, me, c, n_slice)
+% Read fort.50 (final particles in lab frame) and compute matching stats.
+fid = fopen(fullfile(impactt_dir, 'fort.50'), 'r');
+D = textscan(fid, '%f %f %f %f %f %f %f %f %f');
+fclose(fid);
+% fort.50 columns: x, px(=beta*gamma), y, py, z(or beta_z?), gamma, q, m, id
+% Per source code: pos in lab z, momentum normalized.
+xx = D{1}; px_n = D{2}; yy = D{3}; py_n = D{4}; col5 = D{5}; gam = D{6};
+% col5 in fort.50 is beta_z (close to 1 for relativistic). Compute pz from gamma.
+betaz = col5;
+betaz(betaz > 1) = 1;     % numerical clipping
+pz_n = sqrt(max(gam.^2 - 1 - px_n.^2 - py_n.^2, 0));   % beta_z*gamma reconstructed
+
+% z-position from fort.50 not directly stored — fort.50 is at FIXED TIME, all
+% particles drifted to common t. The "z" we need is from fort.40 (initial)
+% propagated forward. As ImpactT outputs gun-exit projection in fort.50, we
+% need a different file for z. Use fort.26 evolution + fort.50 transverse.
+%
+% For SLICE EMITTANCE in z, ImpactT provides fort.60+ but the format varies.
+% Best approach: use fort.50 transverse stats and fort.26 longitudinal.
+
+% So we report what we CAN from fort.50:
+bm.N        = numel(xx);
+bm.gamma    = mean(gam);
+bm.sigma_x  = std(xx);
+bm.sigma_y  = std(yy);
+bm.sigma_gamma = std(gam);
+bm.sigma_E_MeV = std(gam) * 0.5109989461;
+bm.eps_nx   = norm_emittance(xx, px_n./max(pz_n,1e-30), gam);
+bm.eps_ny   = norm_emittance(yy, py_n./max(pz_n,1e-30), gam);
+
+% Pull longitudinal stats from fort.26 (last row)
+ref = timetracking.readImpactTFort18(impactt_dir);
+bm.t        = ref.t(end);
+bm.z_mean   = ref.z_mean(end);
+bm.sigma_z  = ref.sigma_z(end);
+bm.bunch_len_fwhm = bm.sigma_z * 2.3548;   % approx FWHM = 2*sqrt(2 ln 2)*sigma
+bm.eps_nz   = ref.eps_nz(end);
+
+% Slice transverse emittance from fort.50 — but no z per particle!
+% Approximate: assume fort.50's particle ORDERING preserves emission time
+% (often true for ImpactT). Bin by ID to get pseudo-slices.
+% This is an approximation; for true z-binned slice, would need fort.27/28
+% slice diagnostics.
+sl.note = 'ImpactT slice emittance not directly available without full z; approximated via fort.50 N-bin if needed.';
+sl.eps_nx_slice = [];
+sl.eps_ny_slice = [];
+sl.current = [];
+sl.z_centers = [];
+bm.eps_nx_peak_slice = NaN;
+bm.eps_ny_peak_slice = NaN;
+bm.peak_slice_z      = NaN;
+end
+
+
+function eps_n = norm_emittance(x, xp, g)
+sx  = std(x);
+sxp = std(xp);
+cxxp = mean((x - mean(x)) .* (xp - mean(xp)));
+eps_geom = sqrt(max(sx^2 * sxp^2 - cxxp^2, 0));
+bg = sqrt(g.^2 - 1);
+eps_n = mean(bg) * eps_geom;
+end
+
+
+function fwhm = sigma_to_fwhm(z)
+[counts, edges] = histcounts(z, 100);
+ctrs = 0.5*(edges(1:end-1) + edges(2:end));
+mx = max(counts);
+above = counts > 0.5*mx;
+if sum(above) < 2, fwhm = 0; return; end
+fwhm = ctrs(find(above, 1, 'last')) - ctrs(find(above, 1, 'first'));
+end
+
+
+function v = coalesce(x)
+if isempty(x), v = false; else, v = logical(x); end
+end
+
+
+function v = ifempty(x, dflt)
+if isempty(x), v = dflt; else, v = x; end
+end
+
+
+function print_final_comparison(bm_lt, bm_imp, sl_lt, sl_imp, last, me, c)
+fprintf('\n=== FINAL STATE COMPARISON (end of L0A) ===\n');
+fprintf('%-22s %-14s %-14s %-10s\n', 'Quantity', 'lucretia-tt', 'ImpactT', 'ratio');
+fprintf('%s\n', repmat('-', 1, 70));
+P = @(name, lt, imp, fmt) fprintf('%-22s %-14s %-14s %-10.3f\n', name, ...
+        sprintf(fmt, lt), sprintf(fmt, imp), lt/imp);
+
+fprintf('%-22s %-14d %-14d   --\n', 'N (alive)', bm_lt.N, bm_imp.N);
+P('t [ns]',          bm_lt.t*1e9,        bm_imp.t*1e9,         '%.3f');
+P('z_mean [m]',      bm_lt.z_mean,       bm_imp.z_mean,        '%.4f');
+P('gamma_mean',      bm_lt.gamma,        bm_imp.gamma,         '%.3f');
+P('sigma_x [um]',    bm_lt.sigma_x*1e6,  bm_imp.sigma_x*1e6,   '%.2f');
+P('sigma_y [um]',    bm_lt.sigma_y*1e6,  bm_imp.sigma_y*1e6,   '%.2f');
+P('sigma_z [um]',    bm_lt.sigma_z*1e6,  bm_imp.sigma_z*1e6,   '%.2f');
+P('FWHM_z [um]',     bm_lt.bunch_len_fwhm*1e6, bm_imp.bunch_len_fwhm*1e6, '%.2f');
+P('sigma_gamma',     bm_lt.sigma_gamma,  bm_imp.sigma_gamma,   '%.4f');
+P('sigma_E [keV]',   bm_lt.sigma_E_MeV*1e3, bm_imp.sigma_E_MeV*1e3, '%.2f');
+P('eps_nx [um.rad]', bm_lt.eps_nx*1e6,   bm_imp.eps_nx*1e6,    '%.4f');
+P('eps_ny [um.rad]', bm_lt.eps_ny*1e6,   bm_imp.eps_ny*1e6,    '%.4f');
+P('eps_nz [um.rad]', bm_lt.eps_nz*1e6,   bm_imp.eps_nz*1e6,    '%.4f');
+
+fprintf('\n  Slice (peak-current) eps_nx [um.rad]: ltt=%.4f  imp=%s\n', ...
+    bm_lt.eps_nx_peak_slice*1e6, ...
+    iif(isnan(bm_imp.eps_nx_peak_slice), '--N/A--', sprintf('%.4f', bm_imp.eps_nx_peak_slice*1e6)));
+fprintf('  Slice (peak-current) eps_ny [um.rad]: ltt=%.4f  imp=%s\n', ...
+    bm_lt.eps_ny_peak_slice*1e6, ...
+    iif(isnan(bm_imp.eps_ny_peak_slice), '--N/A--', sprintf('%.4f', bm_imp.eps_ny_peak_slice*1e6)));
+
+% Save .mat for later inspection
+save('bench_full_final.mat', 'bm_lt', 'bm_imp', 'sl_lt', 'sl_imp');
+fprintf('\nSaved -> bench_full_final.mat\n');
+end
+
+
+function print_evolution(bunches, ref, me, c)
+fprintf('\n=== EVOLUTION (lucretia-tt dumps interpolated to ImpactT) ===\n');
+fprintf('%-9s %-8s | %-7s %-7s | %-8s %-8s | %-8s %-8s | %-9s %-9s\n', ...
+    't[ns]', 'z[mm]', 'lt-gam', 'imp-gam', 'lt-sx[mm]', 'imp-sx[mm]', ...
+    'lt-sz[mm]', 'imp-sz[mm]', 'lt-eps[um]', 'imp-eps[um]');
+fprintf('%s\n', repmat('-', 1, 100));
+for k = 1:numel(bunches)
+    b = bunches{k};
+    if numel(b.x) < 5, continue; end
+    px=double(b.px); py=double(b.py); pz=double(b.pz);
+    gam = sqrt(1 + (px.^2+py.^2+pz.^2)/(me*c)^2);
+    xp = px./max(pz,1e-30);
+    sx = std(double(b.x));
+    sz = std(double(b.z));
+    eps = norm_emittance(double(b.x), xp, gam);
+    tk = b.time;
+    if tk < ref.t(1) || tk > ref.t(end), continue; end
+    g_imp = interp1(ref.t, ref.gamma,   tk, 'linear');
+    sx_imp = interp1(ref.t, ref.sigma_x, tk, 'linear');
+    sz_imp = interp1(ref.t, ref.sigma_z, tk, 'linear');
+    eps_imp = interp1(ref.t, ref.eps_nx, tk, 'linear');
+    fprintf('%-9.2f %-8.1f | %-7.2f %-7.2f | %-9.3f %-9.3f | %-9.4f %-9.4f | %-10.3f %-10.3f\n', ...
+        tk*1e9, mean(double(b.z))*1e3, mean(gam), g_imp, ...
+        sx*1e3, sx_imp*1e3, sz*1e3, sz_imp*1e3, ...
+        eps*1e6, eps_imp*1e6);
+end
+end
+
+
+function v = iif(cond, a, b)
+if cond, v = a; else, v = b; end
+end
