@@ -11,7 +11,7 @@ p.addParameter('slice_sc',     true,  @islogical);
 p.addParameter('mesh_sc',      true,  @islogical);
 p.addParameter('sc_adaptive',  false, @islogical);
 p.addParameter('tag',          '',    @(x) ischar(x) || isstring(x));
-p.addParameter('n_steps',      1500,  @isnumeric);
+p.addParameter('n_steps',      2500,  @isnumeric);   % matches ImpactT dt=0.3ps for ~750 ps
 p.addParameter('impactt_dir',  '/Users/glenwhite/Documents/GitHub/Lattices/common/ImpactT', @(x) ischar(x) || isstring(x));
 p.parse(varargin{:});
 opts = p.Results;
@@ -33,7 +33,7 @@ impactt_dir = char(opts.impactt_dir);
 fprintf('=== LCLS gun: partcl.data seed comparison ===\n\n');
 
 % --- Parse ImpactT.in to inherit lattice + header config ---
-[lattice, ~, ~, ~, info] = timetracking.readImpactTLattice( ...
+[lattice, ~, geom_imp, tracking_imp, info] = timetracking.readImpactTLattice( ...
     impactt_dir, 'n_macros', 50000);
 
 % Strip CathodeSource and trim to GUN + SOL1 + monitor (gun-region focus)
@@ -69,18 +69,27 @@ tt.beam = struct( ...
     'partcl_q_total', q_total, ...
     't_init',         Tini);
 
-% Geometry sized for the gun region (z<0.65m, transverse +/- 3mm)
+% Geometry sized for the gun region (z<0.65m, transverse +/- 3mm).
+% Match ImpactT.in's grid by default.
 tt.geom_lo    = [-3e-3, -3e-3, -0.05];
 tt.geom_hi    = [ 3e-3,  3e-3,  0.70];
-tt.geom_ncell = [48, 48, 256];
+tt.geom_ncell = geom_imp.ncell(:).';
 
 % Tracking. Start at Tini so RF phase exposure matches ImpactT's wall-
-% clock time. First-pass run length ~750 ps to clear the gun region
-% (z=0 to ~200 mm). Memory's gun-region table goes to z=200mm; that's
-% the slice of the lattice where the 2.2x sigma_x divergence is set.
-% A longer run can follow once we know whether the issue persists.
+% clock time. Honor ImpactT's dt schedule (0.3ps initial, 4ps after
+% z=0.25m for the LCLS deck) -- extracted by readImpactTLattice.
 tt.t_start = Tini;
-tt.dt      = 0.5e-12;
+if isfield(tracking_imp, 'dt') && ~isempty(tracking_imp.dt)
+    tt.dt = tracking_imp.dt;
+else
+    tt.dt = 0.5e-12;
+end
+if isfield(tracking_imp, 'dt_change') && ~isempty(tracking_imp.dt_change)
+    tt.dt_change_t = tracking_imp.dt_change;
+end
+if isfield(tracking_imp, 'dt_after') && ~isempty(tracking_imp.dt_after)
+    tt.dt_after = tracking_imp.dt_after;
+end
 tt.n_steps = opts.n_steps;
 
 % SC config

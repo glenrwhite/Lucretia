@@ -13,7 +13,7 @@ function res = lcls_compare_cathode_imptT(varargin)
 
 p = inputParser;
 p.addParameter('tag',           'cathode_imptT', @(x) ischar(x) || isstring(x));
-p.addParameter('n_steps',       1500,            @isnumeric);
+p.addParameter('n_steps',       2500,            @isnumeric);   % matches ImpactT dt=0.3ps for ~750 ps
 p.addParameter('slice_sc',      true,            @islogical);
 p.addParameter('mesh_sc',       true,            @islogical);
 p.addParameter('z_init_spread', 1.6e-5,          @isnumeric);
@@ -35,8 +35,8 @@ impactt_dir = char(opts.impactt_dir);
 
 fprintf('=== LCLS gun: CathodeSource + ImpactT-style emission ===\n\n');
 
-% Read ImpactT.in to inherit lattice + Tini header
-[lattice, ~, ~, ~, info] = timetracking.readImpactTLattice( ...
+% Read ImpactT.in to inherit lattice + tracking + geom suggestions
+[lattice, ~, geom_imp, tracking_imp, info] = timetracking.readImpactTLattice( ...
     impactt_dir, 'n_macros', 50000);
 
 % Read Tini and Bcurr from ImpactT.in header (same logic as the partcl driver)
@@ -102,27 +102,45 @@ tt.beam    = struct('n_particles', 0);    % cathode emits
 
 tt.geom_lo    = [-3e-3, -3e-3, -0.05];
 tt.geom_hi    = [ 3e-3,  3e-3,  0.70];
-% Allow ncell override via opts.geom_ncell; default keeps the historical
-% [48 48 256] tuning that this driver was originally written against.
+% Match ImpactT.in's grid by default (line 9 of LCLS deck = [48 48 48]).
+% Override via opts.geom_ncell when sweeping.
 if isempty(opts.geom_ncell)
-    tt.geom_ncell = [48, 48, 256];
+    tt.geom_ncell = geom_imp.ncell(:).';
 else
     tt.geom_ncell = opts.geom_ncell;
 end
 
 tt.t_start = Tini;
-tt.dt      = 0.5e-12;
-tt.n_steps = opts.n_steps;
-% Switch to bigger dt past the gun for runs long enough to reach
-% ImpactT's z=0.95m fort.101 dump plane.
-if opts.n_steps > 3000
-    tt.dt_change_t = Tini + 2.0e-10;   % switch ~200 ps after start
-    tt.dt_after    = 2.0e-12;          % 2 ps post-gun
+% Match ImpactT.in's dt schedule: dt0=0.3ps for the cathode/gun region,
+% switching to 4ps after z=0.25m (encoded in the type-(-4) lattice
+% element). readImpactTLattice extracts the schedule into tracking_imp;
+% we use it verbatim. Override dt only if opts.n_steps is supplied
+% (then we honor that count and the override dt the caller wants).
+if isfield(tracking_imp, 'dt') && ~isempty(tracking_imp.dt)
+    tt.dt = tracking_imp.dt;
+else
+    tt.dt = 0.5e-12;
 end
+if isfield(tracking_imp, 'dt_change') && ~isempty(tracking_imp.dt_change)
+    tt.dt_change_t = tracking_imp.dt_change;
+end
+if isfield(tracking_imp, 'dt_after') && ~isempty(tracking_imp.dt_after)
+    tt.dt_after = tracking_imp.dt_after;
+end
+tt.n_steps = opts.n_steps;
+fprintf('  tracking: dt=%.2g ps, n_steps=%d', tt.dt*1e12, tt.n_steps);
+if ~isempty(tt.dt_change_t)
+    fprintf(', dt_change_t=%.3g ns -> dt_after=%.2g ps', ...
+            tt.dt_change_t*1e9, tt.dt_after*1e12);
+end
+fprintf('\n');
 
-% NEW: ImpactT-style behind-cathode drift
-tt.behind_cathode_z        = lattice{cat_idx}.z_cathode;   % typically 0
-tt.behind_cathode_betazini = betazini;
+% ImpactT-style behind-cathode drift. Disable when z_init_spread <= 0
+% (particles emit AT or just past cathode; no behind-cathode region).
+if opts.z_init_spread > 0
+    tt.behind_cathode_z        = lattice{cat_idx}.z_cathode;
+    tt.behind_cathode_betazini = betazini;
+end
 
 tt.enable_space_charge = opts.mesh_sc;
 tt.sc_image_plane      = opts.mesh_sc;
