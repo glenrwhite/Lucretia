@@ -126,20 +126,25 @@ amrex::Real SpaceCharge::compute_mean_z (particles::TimeBunch& bunch) const
     using namespace amrex;
     using namespace particles;
 
-    long n_total = bunch.TotalNumberOfParticles(true, false);
-    if (n_total == 0) { return 0.0; }
-
     Real sum_z = 0.0;
+    long n_alive = 0;
     using PIter = ParIterSoA<RealSoA::nattribs, IntSoA::nattribs>;
     constexpr int lev = 0;
     for (PIter pti(bunch, lev); pti.isValid(); ++pti) {
         auto& soa = pti.GetStructOfArrays();
         const int np = pti.numParticles();
         const auto& zs = soa.GetRealData(RealSoA::z);
-        for (int i = 0; i < np; ++i) { sum_z += zs[i]; }
+        const auto& alives = soa.GetIntData(IntSoA::alive);
+        for (int i = 0; i < np; ++i) {
+            if (alives[i] == 0) { continue; }
+            sum_z += zs[i];
+            ++n_alive;
+        }
     }
     ParallelDescriptor::ReduceRealSum(sum_z);
-    return sum_z / Real(n_total);
+    ParallelDescriptor::ReduceLongSum(n_alive);
+    if (n_alive == 0) { return 0.0; }
+    return sum_z / Real(n_alive);
 }
 
 
@@ -151,11 +156,9 @@ bool SpaceCharge::compute_bunch_stats (
     using namespace amrex;
     using namespace particles;
 
-    long n_total = bunch.TotalNumberOfParticles(true, false);
-    if (n_total == 0) { return false; }
-
     Real sum_x = 0.0,  sum_y = 0.0,  sum_z = 0.0;
     Real sum_x2 = 0.0, sum_y2 = 0.0, sum_z2 = 0.0;
+    long n_alive = 0;
 
     using PIter = ParIterSoA<RealSoA::nattribs, IntSoA::nattribs>;
     constexpr int lev = 0;
@@ -165,15 +168,24 @@ bool SpaceCharge::compute_bunch_stats (
         const auto& xs = soa.GetRealData(RealSoA::x);
         const auto& ys = soa.GetRealData(RealSoA::y);
         const auto& zs = soa.GetRealData(RealSoA::z);
+        const auto& alives = soa.GetIntData(IntSoA::alive);
         for (int i = 0; i < np; ++i) {
+            // Skip dead particles (e.g. cathode re-cross kills, parked
+            // at z=-1e9 by TrackingLoop). Including them would skew
+            // the centroid and sigmas catastrophically and trigger
+            // the adaptive mesh to enclose a 10^9 m extent.
+            if (alives[i] == 0) { continue; }
             sum_x  += xs[i];        sum_y  += ys[i];        sum_z  += zs[i];
             sum_x2 += xs[i]*xs[i];  sum_y2 += ys[i]*ys[i];  sum_z2 += zs[i]*zs[i];
+            ++n_alive;
         }
     }
     ParallelDescriptor::ReduceRealSum(sum_x);  ParallelDescriptor::ReduceRealSum(sum_y);  ParallelDescriptor::ReduceRealSum(sum_z);
     ParallelDescriptor::ReduceRealSum(sum_x2); ParallelDescriptor::ReduceRealSum(sum_y2); ParallelDescriptor::ReduceRealSum(sum_z2);
+    ParallelDescriptor::ReduceLongSum(n_alive);
+    if (n_alive == 0) { return false; }
 
-    const Real inv_N = Real(1.0) / Real(n_total);
+    const Real inv_N = Real(1.0) / Real(n_alive);
     x_c = sum_x * inv_N;
     y_c = sum_y * inv_N;
     z_c = sum_z * inv_N;
@@ -284,13 +296,8 @@ amrex::Real SpaceCharge::compute_mean_beta_z (particles::TimeBunch& bunch) const
     using namespace amrex;
     using namespace particles;
 
-    long const n_local = bunch.NumberOfParticlesAtLevel(
-        0, /*only_valid*/ true, /*only_local*/ true);
-    long n_total = bunch.TotalNumberOfParticles(true, false);
-    if (n_total == 0) { return 0.0; }
-
-    // Compute sum of beta_z = (uz/c) / sqrt(1 + (u/c)^2)
     Real sum_beta_z = 0.0;
+    long n_alive = 0;
 
     using PIter = ParIterSoA<RealSoA::nattribs, IntSoA::nattribs>;
     constexpr int lev = 0;
@@ -300,19 +307,23 @@ amrex::Real SpaceCharge::compute_mean_beta_z (particles::TimeBunch& bunch) const
         const auto& uxs = soa.GetRealData(RealSoA::px);
         const auto& uys = soa.GetRealData(RealSoA::py);
         const auto& uzs = soa.GetRealData(RealSoA::pz);
+        const auto& alives = soa.GetIntData(IntSoA::alive);
         for (int i = 0; i < np; ++i) {
+            if (alives[i] == 0) { continue; }
             const Real ux = uxs[i];
             const Real uy = uys[i];
             const Real uz = uzs[i];
             const Real gamma = std::sqrt(Real(1.0) +
                 (ux*ux + uy*uy + uz*uz) / (kSpeedOfLight * kSpeedOfLight));
             sum_beta_z += (uz / kSpeedOfLight) / gamma;
+            ++n_alive;
         }
     }
     ParallelDescriptor::ReduceRealSum(sum_beta_z);
-    amrex::ignore_unused(n_local);
+    ParallelDescriptor::ReduceLongSum(n_alive);
+    if (n_alive == 0) { return 0.0; }
 
-    return sum_beta_z / Real(n_total);
+    return sum_beta_z / Real(n_alive);
 }
 
 

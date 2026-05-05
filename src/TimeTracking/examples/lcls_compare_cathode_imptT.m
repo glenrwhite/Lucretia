@@ -18,6 +18,11 @@ p.addParameter('slice_sc',      true,            @islogical);
 p.addParameter('mesh_sc',       true,            @islogical);
 p.addParameter('z_init_spread', 1.6e-5,          @isnumeric);
 p.addParameter('long_thermal',  true,            @islogical);
+% Sigma_x diagnostic knobs
+p.addParameter('sc_adaptive',   false,           @islogical);
+p.addParameter('sc_pad_factor', 5.0,             @isnumeric);
+p.addParameter('mte_eV',        [],              @(x) isempty(x) || isnumeric(x));
+p.addParameter('geom_ncell',    [],              @(x) isempty(x) || (isnumeric(x) && numel(x)==3));
 p.parse(varargin{:});
 opts = p.Results;
 
@@ -50,8 +55,12 @@ cat_idx = find(cellfun(@(e) strcmp(e.type, 'cathode_source'), lattice), 1);
 assert(~isempty(cat_idx), 'readImpactTLattice did not insert a CathodeSource');
 lattice{cat_idx}.longitudinal_thermal = double(opts.long_thermal);
 lattice{cat_idx}.z_init_spread        = opts.z_init_spread;
-fprintf('  CathodeSource augmented: longitudinal_thermal=%d, z_init_spread=%g m\n', ...
-        lattice{cat_idx}.longitudinal_thermal, lattice{cat_idx}.z_init_spread);
+if ~isempty(opts.mte_eV)
+    lattice{cat_idx}.mte = opts.mte_eV;
+end
+fprintf('  CathodeSource augmented: longitudinal_thermal=%d, z_init_spread=%g m, mte=%g eV\n', ...
+        lattice{cat_idx}.longitudinal_thermal, lattice{cat_idx}.z_init_spread, ...
+        lattice{cat_idx}.mte);
 
 % Trim to GUN + SOL1 + monitor for fast first-pass test
 keep = false(size(lattice));
@@ -70,7 +79,13 @@ tt.beam    = struct('n_particles', 0);    % cathode emits
 
 tt.geom_lo    = [-3e-3, -3e-3, -0.05];
 tt.geom_hi    = [ 3e-3,  3e-3,  0.70];
-tt.geom_ncell = [48, 48, 256];
+% Allow ncell override via opts.geom_ncell; default keeps the historical
+% [48 48 256] tuning that this driver was originally written against.
+if isempty(opts.geom_ncell)
+    tt.geom_ncell = [48, 48, 256];
+else
+    tt.geom_ncell = opts.geom_ncell;
+end
 
 tt.t_start = Tini;
 tt.dt      = 0.5e-12;
@@ -90,6 +105,10 @@ tt.enable_space_charge = opts.mesh_sc;
 tt.sc_image_plane      = opts.mesh_sc;
 tt.sc_image_plane_z    = lattice{cat_idx}.z_cathode;
 tt.sc_image_cutoff     = 0.05;
+tt.sc_adaptive         = opts.sc_adaptive;
+tt.sc_pad_factor       = opts.sc_pad_factor;
+tt.sc_min_pad_xy       = 1e-3;
+tt.sc_min_pad_z        = 1e-3;
 tt.enable_slice_sc     = opts.slice_sc;
 tt.slice_sc_n          = 256;
 tt.slice_sc_radius_factor = 2.0;
