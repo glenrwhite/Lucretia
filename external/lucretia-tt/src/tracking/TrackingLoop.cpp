@@ -54,28 +54,48 @@ void TrackingLoop::step (
     // and use t_centroid = z_centroid/c + offset as the wallclock
     // substitute for external-field gather. Mirrors ImpactT's
     // refptcl(5) = sgcenter(5) convention (AccSimulator.f90 line 1436).
+    //
+    // ImpactT computes sgcenter AFTER a half-step drift; we approximate
+    // that by predicting the midstep centroid as
+    //   z_mid = <z> + 0.5*dt*<v_z>
+    // where <v_z> = <uz>/<gamma> is computed from the same alive
+    // particles. Without this shift our t_centroid is the start-of-
+    // step value, half a dt behind ImpactT's reference; the resulting
+    // RF phase offset (~5° at non-rel cathode region) propagates into
+    // a measurable chirp-slope error.
     Real t_centroid = t;   // default: identical to wallclock
     if (m_use_centroid_phase) {
-        Real sum_z = 0.0;
+        Real sum_z = 0.0, sum_vz = 0.0;
         long n_alive = 0;
         using PIter = ParIterSoA<RealSoA::nattribs, IntSoA::nattribs>;
         constexpr int lev = 0;
+        constexpr Real inv_c2 = Real(1.0) / (kSpeedOfLight * kSpeedOfLight);
         for (PIter pti(bunch, lev); pti.isValid(); ++pti) {
             auto& soa = pti.GetStructOfArrays();
             const int np = pti.numParticles();
             const auto& zs     = soa.GetRealData(RealSoA::z);
+            const auto& uxs    = soa.GetRealData(RealSoA::px);
+            const auto& uys    = soa.GetRealData(RealSoA::py);
+            const auto& uzs    = soa.GetRealData(RealSoA::pz);
             const auto& alives = soa.GetIntData(IntSoA::alive);
             for (int i = 0; i < np; ++i) {
                 if (alives[i] == 0) { continue; }
-                sum_z += zs[i];
+                const Real ux = uxs[i], uy = uys[i], uz = uzs[i];
+                const Real gamma = std::sqrt(Real(1.0) +
+                    (ux*ux + uy*uy + uz*uz) * inv_c2);
+                sum_z  += zs[i];
+                sum_vz += uz / gamma;     // v_z = u_z / gamma
                 ++n_alive;
             }
         }
         ParallelDescriptor::ReduceRealSum(sum_z);
+        ParallelDescriptor::ReduceRealSum(sum_vz);
         ParallelDescriptor::ReduceLongSum(n_alive);
         if (n_alive > 0) {
-            const Real z_centroid = sum_z / Real(n_alive);
-            t_centroid = z_centroid / kSpeedOfLight + m_centroid_t_offset;
+            const Real z_centroid  = sum_z  / Real(n_alive);
+            const Real vz_centroid = sum_vz / Real(n_alive);
+            const Real z_mid = z_centroid + Real(0.5) * dt * vz_centroid;
+            t_centroid = z_mid / kSpeedOfLight + m_centroid_t_offset;
         }
     }
 
