@@ -30,6 +30,8 @@ properties
     t_start      = []                                            % s, initial sim time (empty = 0)
     behind_cathode_z        = []                                 % m, ImpactT-style behind-cathode drift turns ON below this z
     behind_cathode_betazini = []                                 % dimensionless, universal v/c for behind-cathode drift
+    use_centroid_phase      = []                                 % logical: use bunch z-centroid/c instead of wallclock t for external-field gather (ImpactT compat)
+    centroid_t_offset       = []                                 % s, additive offset so t_eff = z_centroid/c + offset matches wallclock at bunch start
     geom_lo    = [-0.05, -0.05,  0.0]                            % m
     geom_hi    = [ 0.05,  0.05,  1.0]                            % m
     geom_ncell = [32, 32, 32]

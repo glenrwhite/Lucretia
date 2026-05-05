@@ -106,6 +106,12 @@ if isprop(obj, 'behind_cathode_z') && ~isempty(obj.behind_cathode_z) ...
     fprintf(f, 'tracking.behind_cathode_z        = %.10g\n', obj.behind_cathode_z);
     fprintf(f, 'tracking.behind_cathode_betazini = %.10g\n', obj.behind_cathode_betazini);
 end
+if isprop(obj, 'use_centroid_phase') && ~isempty(obj.use_centroid_phase) && obj.use_centroid_phase
+    fprintf(f, 'tracking.use_centroid_phase = 1\n');
+    if isprop(obj, 'centroid_t_offset') && ~isempty(obj.centroid_t_offset)
+        fprintf(f, 'tracking.centroid_t_offset  = %.10g\n', obj.centroid_t_offset);
+    end
+end
 
 if obj.enable_space_charge
     fprintf(f, '\n# ---- Space charge ----\n');

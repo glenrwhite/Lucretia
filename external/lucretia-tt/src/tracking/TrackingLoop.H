@@ -67,10 +67,36 @@ public:
     }
     bool behind_cathode_drift_enabled () const noexcept { return m_behind_cathode_drift_on; }
 
+    /** Use ImpactT-style centroid-z reference time for external-field
+     *  gather. ImpactT line 1436 of AccSimulator.f90 sets
+     *  refptcl(5) = sgcenter(5) (bunch z-centroid in normalized units),
+     *  then field gather uses tg = refptcl(5). The effective field
+     *  formula becomes `cos(omega * z_centroid/c + phase)` -- a SPATIAL
+     *  phase tied to the bunch's progress through the lattice, NOT
+     *  wallclock time. For relativistic bunches z_centroid/c == t (modulo
+     *  offset) so both conventions agree. During the cathode region
+     *  (beta<1), they diverge by tens of degrees of RF phase across the
+     *  emission window, which appears to be the source of the chirp-
+     *  sign reversal seen in the no-SC sanity check vs ImpactT.
+     *
+     *  When enabled, TrackingLoop computes a per-step centroid z and
+     *  uses t_eff = z_centroid/c + t_offset for the field gather time
+     *  (replacing wallclock t). t_offset is set so t_eff matches
+     *  wallclock t at the moment of bunch emission start (typically
+     *  Tini), preserving the RF phase reference. */
+    void set_centroid_field_phase (bool on, amrex::Real t_offset = amrex::Real(0.0)) noexcept
+    {
+        m_use_centroid_phase = on;
+        m_centroid_t_offset  = t_offset;
+    }
+    bool centroid_field_phase_enabled () const noexcept { return m_use_centroid_phase; }
+
 private:
     bool        m_behind_cathode_drift_on = false;
     amrex::Real m_cathode_z               = 0.0;
     amrex::Real m_behind_cathode_betazini = 0.0;
+    bool        m_use_centroid_phase      = false;
+    amrex::Real m_centroid_t_offset       = 0.0;
 };
 
 } // namespace tracking

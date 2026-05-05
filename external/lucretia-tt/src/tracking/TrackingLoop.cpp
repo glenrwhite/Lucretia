@@ -49,6 +49,36 @@ void TrackingLoop::step (
         }, el);
     }
 
+    // ---- 1b. Centroid-z reference time (ImpactT compat) ----
+    // When m_use_centroid_phase is set, compute the bunch z-centroid
+    // and use t_centroid = z_centroid/c + offset as the wallclock
+    // substitute for external-field gather. Mirrors ImpactT's
+    // refptcl(5) = sgcenter(5) convention (AccSimulator.f90 line 1436).
+    Real t_centroid = t;   // default: identical to wallclock
+    if (m_use_centroid_phase) {
+        Real sum_z = 0.0;
+        long n_alive = 0;
+        using PIter = ParIterSoA<RealSoA::nattribs, IntSoA::nattribs>;
+        constexpr int lev = 0;
+        for (PIter pti(bunch, lev); pti.isValid(); ++pti) {
+            auto& soa = pti.GetStructOfArrays();
+            const int np = pti.numParticles();
+            const auto& zs     = soa.GetRealData(RealSoA::z);
+            const auto& alives = soa.GetIntData(IntSoA::alive);
+            for (int i = 0; i < np; ++i) {
+                if (alives[i] == 0) { continue; }
+                sum_z += zs[i];
+                ++n_alive;
+            }
+        }
+        ParallelDescriptor::ReduceRealSum(sum_z);
+        ParallelDescriptor::ReduceLongSum(n_alive);
+        if (n_alive > 0) {
+            const Real z_centroid = sum_z / Real(n_alive);
+            t_centroid = z_centroid / kSpeedOfLight + m_centroid_t_offset;
+        }
+    }
+
     // ---- 2. Image-charge planes ----
     std::vector<Real> image_planes;
     for (auto const& el : lattice) {
@@ -168,9 +198,14 @@ void TrackingLoop::step (
             // (t_birth <= t) gather at t.
             const Real t_birth = ptd.rdata(RealSoA::t_birth)[ip];
             const Real dt_eff  = std::min(dt, std::max(Real(0.0), t + dt - t_birth));
+            // Field gather time: wallclock (default) or bunch-centroid-z/c
+            // (ImpactT compat). For freshly-emitted particles use the
+            // post-birth midpoint (sub-step emission), shifted to the
+            // centroid frame when applicable.
+            const Real t_phase = m_use_centroid_phase ? t_centroid : t;
             const Real t_field = (t_birth > t)
-                ? Real(0.5) * (t_birth + t + dt)
-                : t;
+                ? Real(0.5) * (t_birth + t + dt) - (t - t_phase)
+                : t_phase;
 
             // ImpactT-style behind-cathode drift. Particles with z < cathode_z
             // that have NEVER yet crossed (emerged == 0) advance at the

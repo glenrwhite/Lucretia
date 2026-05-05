@@ -19,10 +19,11 @@ p.addParameter('mesh_sc',       true,            @islogical);
 p.addParameter('z_init_spread', 1.6e-5,          @isnumeric);
 p.addParameter('long_thermal',  true,            @islogical);
 % Sigma_x diagnostic knobs
-p.addParameter('sc_adaptive',   false,           @islogical);
-p.addParameter('sc_pad_factor', 5.0,             @isnumeric);
-p.addParameter('mte_eV',        [],              @(x) isempty(x) || isnumeric(x));
-p.addParameter('geom_ncell',    [],              @(x) isempty(x) || (isnumeric(x) && numel(x)==3));
+p.addParameter('sc_adaptive',        false,      @islogical);
+p.addParameter('sc_pad_factor',      5.0,        @isnumeric);
+p.addParameter('mte_eV',             [],         @(x) isempty(x) || isnumeric(x));
+p.addParameter('geom_ncell',         [],         @(x) isempty(x) || (isnumeric(x) && numel(x)==3));
+p.addParameter('use_centroid_phase', false,      @islogical);   % ImpactT-style field phase
 % Custom ImpactT reference directory (for no-SC sanity checks, etc.).
 % Must contain ImpactT.in, partcl.data, rfdata*, and fort.18+24-26 from
 % a completed ImpactT run.
@@ -140,6 +141,16 @@ fprintf('\n');
 if opts.z_init_spread > 0
     tt.behind_cathode_z        = lattice{cat_idx}.z_cathode;
     tt.behind_cathode_betazini = betazini;
+end
+
+% ImpactT-style centroid-z field phase. ImpactT field formula is
+% cos(omega * z_centroid/c + phase) with NO time offset (refptcl(5)
+% initialized to phasini=Tini but overwritten by sgcenter every step,
+% effectively offset=0). Set t_eff = z_centroid/c.
+if opts.use_centroid_phase
+    tt.use_centroid_phase = true;
+    tt.centroid_t_offset  = 0.0;
+    fprintf('  CENTROID-PHASE field gather enabled  (offset=%g s)\n', tt.centroid_t_offset);
 end
 
 tt.enable_space_charge = opts.mesh_sc;

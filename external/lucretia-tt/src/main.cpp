@@ -729,6 +729,8 @@ int main (int argc, char* argv[])
         amrex::Real t_start      = 0.0;
         amrex::Real behind_cathode_z        = std::numeric_limits<amrex::Real>::lowest();
         amrex::Real behind_cathode_betazini = 0.0;
+        int         use_centroid_phase      = 0;
+        amrex::Real centroid_t_offset       = 0.0;
         {
             amrex::ParmParse pp_track("tracking");
             pp_track.query("dt", dt);
@@ -738,6 +740,8 @@ int main (int argc, char* argv[])
             pp_track.query("t_start",     t_start);
             pp_track.query("behind_cathode_z",        behind_cathode_z);
             pp_track.query("behind_cathode_betazini", behind_cathode_betazini);
+            pp_track.query("use_centroid_phase",      use_centroid_phase);
+            pp_track.query("centroid_t_offset",       centroid_t_offset);
         }
         if (dt_after <= 0.0) { dt_after = dt; }
 
@@ -750,6 +754,12 @@ int main (int argc, char* argv[])
                            << behind_cathode_betazini
                            << " (v=" << (behind_cathode_betazini * 299792458.0)
                            << " m/s)\n";
+        }
+        if (use_centroid_phase != 0) {
+            tracker.set_centroid_field_phase(true, centroid_t_offset);
+            amrex::Print() << "[tracking] centroid-z field phase enabled "
+                           << "(t_eff = z_centroid/c + offset; offset = "
+                           << centroid_t_offset << " s)\n";
         }
         amrex::Real t = t_start;
         bool        switched = false;
