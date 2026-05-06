@@ -258,13 +258,13 @@ function [bm, sl] = read_imp_final(impactt_dir, me, c, n_slice)
 fid = fopen(fullfile(impactt_dir, 'fort.50'), 'r');
 D = textscan(fid, '%f %f %f %f %f %f %f %f %f');
 fclose(fid);
-% fort.50 columns: x, px(=beta*gamma), y, py, z(or beta_z?), gamma, q, m, id
-% Per source code: pos in lab z, momentum normalized.
-xx = D{1}; px_n = D{2}; yy = D{3}; py_n = D{4}; col5 = D{5}; gam = D{6};
-% col5 in fort.50 is beta_z (close to 1 for relativistic). Compute pz from gamma.
-betaz = col5;
-betaz(betaz > 1) = 1;     % numerical clipping
-pz_n = sqrt(max(gam.^2 - 1 - px_n.^2 - py_n.^2, 0));   % beta_z*gamma reconstructed
+% fort.50 columns per IMPACT-T source (Distribution.f90 in active repo,
+% Pts1(9, Nptlocal) layout): (x, px, y, py, z, pz, q/m, q_macro, id)
+% with px/py/pz in normalised units = beta*gamma. Earlier interpretation of
+% col 5 as beta_z and col 6 as gamma was wrong; gamma = sqrt(1+|p|^2)
+% computed from cols 2,4,6 instead.
+xx = D{1}; px_n = D{2}; yy = D{3}; py_n = D{4}; zz = D{5}; pz_n = D{6};
+gam = sqrt(1 + px_n.^2 + py_n.^2 + pz_n.^2);
 
 % z-position from fort.50 not directly stored — fort.50 is at FIXED TIME, all
 % particles drifted to common t. The "z" we need is from fort.40 (initial)
