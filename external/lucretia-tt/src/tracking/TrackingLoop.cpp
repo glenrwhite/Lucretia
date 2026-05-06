@@ -801,7 +801,8 @@ void TrackingLoop::step_dkd (
                         const Real v1   = v10  + (v11  - v10 ) * ay;
                         E_self[cc] = v0 + (v1 - v0) * ax;
                     }
-                    constexpr Real kSelfForceFactor = Real(0.62);
+                    const Real kSelfForceFactor =
+                        m_self_force_disabled ? Real(0.0) : Real(0.62);
                     const Real qw_f = qw * kSelfForceFactor;
                     Real sc_boost;
                     if (m_sc_boost_bunch_mean) {
