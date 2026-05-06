@@ -127,6 +127,9 @@ end
 if isprop(obj, 'disable_self_force') && ~isempty(obj.disable_self_force) && obj.disable_self_force
     fprintf(f, 'tracking.disable_self_force = 1\n');
 end
+if isprop(obj, 'sc_use_b_field') && ~isempty(obj.sc_use_b_field) && obj.sc_use_b_field
+    fprintf(f, 'tracking.sc_use_b_field = 1\n');
+end
 if isprop(obj, 'trace_file') && ~isempty(obj.trace_file)
     fprintf(f, 'tracking.trace_file         = %s\n', char(obj.trace_file));
     if isprop(obj, 'trace_every') && ~isempty(obj.trace_every)

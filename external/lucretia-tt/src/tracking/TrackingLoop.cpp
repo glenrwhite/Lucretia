@@ -545,35 +545,56 @@ void TrackingLoop::step (
                                           : (sc_shape_order == 2 ? Real(1.27)
                                                                  : Real(0.62));
                 const Real qw_f = qw * kSelfForceFactor;
-                // sc_boost = 1/gamma = sqrt(1 - beta^2) — see comment at
-                // SC solve. Both the gathered IGF field and the self-force
-                // subtraction get the same boost-back factor (they are
-                // both computed in the bunch rest frame, with the same
-                // stretched-z geometry).
-                // Per-particle 1/gamma^2 boost (infinite-bin limit of
-                // ImpactT-style energy binning): use THIS particle's
-                // u^2 = ux^2 + uy^2 + uz^2 to compute its own gamma,
-                // not the bunch-mean. Critical for chirped bunches
-                // where head and tail differ by a factor of two or
-                // more in gamma — applying mean-gamma boost gives
-                // wrong forces to the off-mean particles and inflates
-                // slice emittance with mesh-noise spread.
-                constexpr Real c     = kSpeedOfLight;
-                constexpr Real inv_c2 = Real(1.0) / (c * c);
-                Real sc_boost;
-                if (m_sc_boost_bunch_mean) {
-                    const Real g_b = sc->last_gamma();
-                    sc_boost = Real(1.0) / (g_b * g_b);
+                const Real Ex_corr = E_sc[0] - qw_f * E_self[0];
+                const Real Ey_corr = E_sc[1] - qw_f * E_self[1];
+                const Real Ez_corr = E_sc[2] - qw_f * E_self[2];
+
+                if (m_sc_use_b_field) {
+                    // ImpactT-style: explicit SC B field, Boris handles
+                    // v×B (matches Field.f90:445-467). Equivalent to the
+                    // boost shortcut for synchronous particles; adds the
+                    // longitudinal v×B coupling for non-synchronous ones
+                    // (chromatic SC effect we previously missed). Solver
+                    // E_x,E_y are already E_x_lab,E_y_lab (transverse:
+                    // solver gives γ*E_rest=E_lab). E_z_solver = γ²*E_z_lab
+                    // because the gradient takes the rest-frame stretched
+                    // z step against a lab dz cell -- divide by γ² to get
+                    // E_z_lab.
+                    const Real g_b      = sc->last_gamma();
+                    const Real beta_z   = sc->last_beta_z();
+                    const Real inv_g2   = Real(1.0) / (g_b * g_b);
+                    constexpr Real inv_c = Real(1.0) / kSpeedOfLight;
+                    const Real beta_inv_c = beta_z * inv_c;
+
+                    Ex += Ex_corr;
+                    Ey += Ey_corr;
+                    if (!slice_sc) {
+                        Ez += Ez_corr * inv_g2;
+                    }
+                    Bx += -beta_inv_c * Ey_corr;
+                    By += +beta_inv_c * Ex_corr;
+                    // Bz: SC contributes 0
                 } else {
-                    const Real u2_p = ux*ux + uy*uy + uz*uz;
-                    sc_boost = Real(1.0) / (Real(1.0) + u2_p * inv_c2);
-                }
-                Ex += sc_boost * (E_sc[0] - qw_f * E_self[0]);
-                Ey += sc_boost * (E_sc[1] - qw_f * E_self[1]);
-                if (!slice_sc) {
-                    // Mesh-only mode: longitudinal from the 3D IGF
-                    // (with same boost factor as transverse).
-                    Ez += sc_boost * (E_sc[2] - qw_f * E_self[2]);
+                    // Boost shortcut: equivalent to v×B for synchronous
+                    // particles; misses non-synchronous coupling. Default
+                    // for backward compatibility.
+                    constexpr Real c     = kSpeedOfLight;
+                    constexpr Real inv_c2 = Real(1.0) / (c * c);
+                    Real sc_boost;
+                    if (m_sc_boost_bunch_mean) {
+                        const Real g_b = sc->last_gamma();
+                        sc_boost = Real(1.0) / (g_b * g_b);
+                    } else {
+                        const Real u2_p = ux*ux + uy*uy + uz*uz;
+                        sc_boost = Real(1.0) / (Real(1.0) + u2_p * inv_c2);
+                    }
+                    Ex += sc_boost * Ex_corr;
+                    Ey += sc_boost * Ey_corr;
+                    if (!slice_sc) {
+                        // Mesh-only mode: longitudinal from the 3D IGF
+                        // (with same boost factor as transverse).
+                        Ez += sc_boost * Ez_corr;
+                    }
                 }
                 // else: slice SC handles longitudinal — gathered below
                 // (after the sc_done label, so it still runs for
@@ -920,18 +941,38 @@ void TrackingLoop::step_dkd (
                                               : (sc_shape_order == 2 ? Real(1.27)
                                                                      : Real(0.62));
                     const Real qw_f = qw * kSelfForceFactor;
-                    Real sc_boost;
-                    if (m_sc_boost_bunch_mean) {
-                        const Real g_b = sc->last_gamma();
-                        sc_boost = Real(1.0) / (g_b * g_b);
+                    const Real Ex_corr = E_sc[0] - qw_f * E_self[0];
+                    const Real Ey_corr = E_sc[1] - qw_f * E_self[1];
+                    const Real Ez_corr = E_sc[2] - qw_f * E_self[2];
+
+                    if (m_sc_use_b_field) {
+                        const Real g_b      = sc->last_gamma();
+                        const Real beta_z   = sc->last_beta_z();
+                        const Real inv_g2   = Real(1.0) / (g_b * g_b);
+                        constexpr Real inv_c = Real(1.0) / kSpeedOfLight;
+                        const Real beta_inv_c = beta_z * inv_c;
+
+                        Ex += Ex_corr;
+                        Ey += Ey_corr;
+                        if (!slice_sc) {
+                            Ez += Ez_corr * inv_g2;
+                        }
+                        Bx += -beta_inv_c * Ey_corr;
+                        By += +beta_inv_c * Ex_corr;
                     } else {
-                        const Real u2_p = ux*ux + uy*uy + uz*uz;
-                        sc_boost = Real(1.0) / (Real(1.0) + u2_p * inv_c2);
-                    }
-                    Ex += sc_boost * (E_sc[0] - qw_f * E_self[0]);
-                    Ey += sc_boost * (E_sc[1] - qw_f * E_self[1]);
-                    if (!slice_sc) {
-                        Ez += sc_boost * (E_sc[2] - qw_f * E_self[2]);
+                        Real sc_boost;
+                        if (m_sc_boost_bunch_mean) {
+                            const Real g_b = sc->last_gamma();
+                            sc_boost = Real(1.0) / (g_b * g_b);
+                        } else {
+                            const Real u2_p = ux*ux + uy*uy + uz*uz;
+                            sc_boost = Real(1.0) / (Real(1.0) + u2_p * inv_c2);
+                        }
+                        Ex += sc_boost * Ex_corr;
+                        Ey += sc_boost * Ey_corr;
+                        if (!slice_sc) {
+                            Ez += sc_boost * Ez_corr;
+                        }
                     }
                 }
             }

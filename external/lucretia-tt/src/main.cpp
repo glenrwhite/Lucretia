@@ -791,6 +791,7 @@ int main (int argc, char* argv[])
         int         use_particle_phase      = 0;
         int         use_dkd_integrator      = 0;
         int         disable_self_force      = 0;
+        int         sc_use_b_field          = 0;
         std::string trace_file;
         int         trace_every             = 1;
         {
@@ -809,6 +810,7 @@ int main (int argc, char* argv[])
             pp_track.query("use_particle_phase",      use_particle_phase);
             pp_track.query("use_dkd_integrator",      use_dkd_integrator);
             pp_track.query("disable_self_force",      disable_self_force);
+            pp_track.query("sc_use_b_field",          sc_use_b_field);
             pp_track.query("trace_file",              trace_file);
             pp_track.query("trace_every",             trace_every);
         }
@@ -848,6 +850,11 @@ int main (int argc, char* argv[])
             tracker.set_self_force_disabled(true);
             amrex::Print() << "[tracking] SC self-force LUT subtraction DISABLED "
                            << "(diagnostic — kSelfForceFactor effectively 0)\n";
+        }
+        if (sc_use_b_field != 0) {
+            tracker.set_sc_use_b_field(true);
+            amrex::Print() << "[tracking] SC: explicit B field via Boris pusher "
+                           << "(matches ImpactT; replaces 1/gamma^2 boost shortcut)\n";
         }
         amrex::Real t = t_start;
         bool        switched = false;

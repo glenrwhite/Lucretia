@@ -35,6 +35,7 @@ p.addParameter('sc_rho_smooth_passes', 0, @isnumeric);                   % # of 
 p.addParameter('slice_radius_factor',  0, @isnumeric);                   % override slice SC bunch radius: a = factor * sigma_xy (default 2.0; pass 0 to use default)
 p.addParameter('sc_hybrid_z_adaptive', false, @islogical);               % SC mesh hybrid mode: static xy + adaptive z (overrides sc_static_xrad behavior in z)
 p.addParameter('sc_shape_order', 1, @isnumeric);                         % particle shape: 1 = CIC (default), 2 = TSC (smoother per-particle field gradient at ~3x deposit/gather cost)
+p.addParameter('sc_use_b_field', false, @islogical);                     % apply SC B field via Boris (matches ImpactT) -- captures non-synchronous v×B coupling
 p.parse(varargin{:});
 opts = p.Results;
 impactt_dir = char(opts.impactt_dir);
@@ -161,6 +162,10 @@ if opts.sc_shape_order ~= 1
     tt.sc_shape_order = round(opts.sc_shape_order);
     name = 'CIC'; if tt.sc_shape_order == 2, name = 'TSC'; end
     fprintf('  shape order = %d (%s)\n', tt.sc_shape_order, name);
+end
+if opts.sc_use_b_field
+    tt.sc_use_b_field = true;
+    fprintf('  SC B field via Boris (matches ImpactT v×B convention)\n');
 end
 fprintf('  sc_mode = %s (mesh=%d, slice=%d, image=%d, adaptive=%d)\n', sc_mode, ...
     tt.enable_space_charge, tt.enable_slice_sc, tt.sc_image_plane, tt.sc_adaptive);

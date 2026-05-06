@@ -133,6 +133,32 @@ public:
     void set_sc_boost_bunch_mean (bool on) noexcept { m_sc_boost_bunch_mean = on; }
     bool sc_boost_bunch_mean_enabled () const noexcept { return m_sc_boost_bunch_mean; }
 
+    /** Apply SC magnetic field explicitly via the Boris pusher (matches
+     *  ImpactT's algorithm) instead of the 1/gamma^2 boost shortcut.
+     *
+     *  Mathematically equivalent for SYNCHRONOUS particles (transverse
+     *  v=0; v_z=beta*c): both give F_x_lab = q*E_x_lab/gamma^2. For
+     *  NON-SYNCHRONOUS particles, only the explicit-B path captures the
+     *  v×B coupling -- in particular the longitudinal kick term
+     *      F_z_extra = q*(beta/c)*(v_x*E_x_lab + v_y*E_y_lab)
+     *  that ImpactT applies but the boost shortcut omits. This is a
+     *  chromatic-emittance-relevant coupling for the L0A regime.
+     *
+     *  When on, gathered fields go to the Boris pusher as:
+     *    Ex_in = Ex_solver         (= E_x_lab; transverse: solver gives γ*E_x_rest=E_x_lab)
+     *    Ey_in = Ey_solver         (= E_y_lab)
+     *    Ez_in = Ez_solver / γ²    (= E_z_lab; longitudinal: solver gives γ²*E_z_lab)
+     *    Bx_sc = -(β/c) * Ey_solver
+     *    By_sc = +(β/c) * Ex_solver
+     *    Bz_sc = 0
+     *  Boris's v×B then reproduces the 1/γ² synchronous reduction
+     *  automatically and adds the non-synchronous coupling.
+     *
+     *  Default: off (keeps the existing boost shortcut for backward
+     *  comparison). */
+    void set_sc_use_b_field (bool on) noexcept { m_sc_use_b_field = on; }
+    bool sc_use_b_field_enabled () const noexcept { return m_sc_use_b_field; }
+
     /** Use ImpactT-style drift-kick-drift integrator with first-order
      *  emission model. Replaces the default kick-drift scheme. The DKD
      *  step is:
@@ -177,6 +203,7 @@ private:
     bool        m_use_dkd_integrator      = false;
     bool        m_sc_boost_bunch_mean     = true;   // default: use sc->last_gamma() for 1/gamma^2 boost
     bool        m_self_force_disabled     = false;  // diagnostic: skip the self-force LUT subtraction
+    bool        m_sc_use_b_field          = false;  // off: 1/gamma^2 boost shortcut; on: explicit B + Boris (matches ImpactT)
 public:
     void set_self_force_disabled (bool on) noexcept { m_self_force_disabled = on; }
     bool self_force_disabled () const noexcept { return m_self_force_disabled; }
