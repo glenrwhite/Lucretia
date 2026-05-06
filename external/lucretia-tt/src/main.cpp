@@ -693,6 +693,8 @@ int main (int argc, char* argv[])
             pp_sc.query("enabled",  sc_enabled);
             pp_sc.query("comoving", sc_comoving);
             pp_sc.query("adaptive", sc_adaptive);
+            int sc_exact_range = 0;
+            pp_sc.query("exact_range", sc_exact_range);
             pp_sc.query("pad_factor", sc_pad_factor);
             pp_sc.query("min_pad_xy", sc_min_pad_xy);
             pp_sc.query("min_pad_z",  sc_min_pad_z);
@@ -710,13 +712,17 @@ int main (int argc, char* argv[])
                 if (sc_adaptive != 0) {
                     sc->set_adaptive(true, sc_pad_factor, sc_min_pad_xy, sc_min_pad_z);
                 }
+                if (sc_exact_range != 0) {
+                    sc->set_exact_range(true);
+                }
                 if (sc_image_enabled != 0) {
                     sc->set_image_plane(sc_image_z_cath, sc_image_cutoff);
                 }
                 amrex::Print() << "Space charge: enabled"
-                               << (sc_adaptive ? "  (adaptive mesh)"
-                                              : (sc_comoving ? "  (co-moving mesh)"
-                                                            : "  (static mesh)"))
+                               << (sc_exact_range ? "  (ImpactT-exact-range mesh)"
+                                                  : (sc_adaptive ? "  (adaptive padded mesh)"
+                                                                 : (sc_comoving ? "  (co-moving mesh)"
+                                                                                : "  (static mesh)")))
                                << (sc_image_enabled ? "  (cathode image charges)" : "")
                                << "\n";
             }

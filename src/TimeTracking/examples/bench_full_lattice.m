@@ -30,6 +30,7 @@ p.addParameter('sc_static_xrad', 0.015,@(x) isempty(x) || isnumeric(x));  % m: S
 p.addParameter('sc_pad_factor',  5.0,  @isnumeric);                       % adaptive: half-extent = pad_factor * sigma
 p.addParameter('slice_gamma_off', [],  @(x) isempty(x) || isnumeric(x));  % disable slice SC when bunch mean gamma >= this (lets 3D mesh handle longitudinal at high gamma)
 p.addParameter('disable_self_force', false, @islogical);                  % diagnostic: skip self-force LUT subtraction
+p.addParameter('sc_exact_range', false, @islogical);                      % ImpactT-style exact bunch range adaptive mesh (no padding, every step)
 p.parse(varargin{:});
 opts = p.Results;
 impactt_dir = char(opts.impactt_dir);
@@ -132,6 +133,11 @@ if ~isempty(opts.slice_gamma_off)
 end
 if opts.disable_self_force
     tt.disable_self_force = true;
+end
+if opts.sc_exact_range
+    tt.sc_exact_range = true;
+    tt.sc_adaptive = false;          % superseded
+    tt.sc_comoving = false;
 end
 fprintf('  sc_mode = %s (mesh=%d, slice=%d, image=%d, adaptive=%d)\n', sc_mode, ...
     tt.enable_space_charge, tt.enable_slice_sc, tt.sc_image_plane, tt.sc_adaptive);

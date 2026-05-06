@@ -148,6 +148,52 @@ amrex::Real SpaceCharge::compute_mean_z (particles::TimeBunch& bunch) const
 }
 
 
+bool SpaceCharge::compute_bunch_range (
+    particles::TimeBunch& bunch,
+    amrex::Real& xmin, amrex::Real& xmax,
+    amrex::Real& ymin, amrex::Real& ymax,
+    amrex::Real& zmin, amrex::Real& zmax) const
+{
+    using namespace amrex;
+    using namespace particles;
+
+    Real lo_x =  std::numeric_limits<Real>::max();
+    Real hi_x = -std::numeric_limits<Real>::max();
+    Real lo_y =  std::numeric_limits<Real>::max();
+    Real hi_y = -std::numeric_limits<Real>::max();
+    Real lo_z =  std::numeric_limits<Real>::max();
+    Real hi_z = -std::numeric_limits<Real>::max();
+    long n_alive = 0;
+
+    using PIter = ParIterSoA<RealSoA::nattribs, IntSoA::nattribs>;
+    constexpr int lev = 0;
+    for (PIter pti(bunch, lev); pti.isValid(); ++pti) {
+        auto& soa = pti.GetStructOfArrays();
+        const int np = pti.numParticles();
+        const auto& xs = soa.GetRealData(RealSoA::x);
+        const auto& ys = soa.GetRealData(RealSoA::y);
+        const auto& zs = soa.GetRealData(RealSoA::z);
+        const auto& alives = soa.GetIntData(IntSoA::alive);
+        for (int i = 0; i < np; ++i) {
+            if (alives[i] == 0) { continue; }   // skip parked dead particles
+            lo_x = std::min(lo_x, xs[i]);  hi_x = std::max(hi_x, xs[i]);
+            lo_y = std::min(lo_y, ys[i]);  hi_y = std::max(hi_y, ys[i]);
+            lo_z = std::min(lo_z, zs[i]);  hi_z = std::max(hi_z, zs[i]);
+            ++n_alive;
+        }
+    }
+    ParallelDescriptor::ReduceRealMin(lo_x);  ParallelDescriptor::ReduceRealMax(hi_x);
+    ParallelDescriptor::ReduceRealMin(lo_y);  ParallelDescriptor::ReduceRealMax(hi_y);
+    ParallelDescriptor::ReduceRealMin(lo_z);  ParallelDescriptor::ReduceRealMax(hi_z);
+    ParallelDescriptor::ReduceLongSum(n_alive);
+    if (n_alive == 0) { return false; }
+    xmin = lo_x;  xmax = hi_x;
+    ymin = lo_y;  ymax = hi_y;
+    zmin = lo_z;  zmax = hi_z;
+    return true;
+}
+
+
 bool SpaceCharge::compute_bunch_stats (
     particles::TimeBunch& bunch,
     amrex::Real& x_c,     amrex::Real& y_c,     amrex::Real& z_c,
@@ -480,12 +526,33 @@ void SpaceCharge::solve (particles::TimeBunch& bunch)
 {
     using namespace amrex;
 
+    // Exact-bunch-range adaptive (ImpactT-style): mesh resized every step
+    // to EXACTLY the alive-particle min/max in each axis, with NO padding
+    // and no hysteresis. Mirrors AccSimulator.f90:1724-1733
+    // (zadjmax=0.0d0; update_CompDom(grange,...)). Cell density per cell
+    // matches ImpactT, fixing the 4× sigma_gamma growth in L0A acceleration
+    // that the padded adaptive mode exhibited.
+    bool geom_changed = false;
+    if (m_exact_range) {
+        Real xmin, xmax, ymin, ymax, zmin, zmax;
+        if (compute_bunch_range(bunch, xmin, xmax, ymin, ymax, zmin, zmax)) {
+            // Guard against degenerate ranges (single particle, zero spread).
+            constexpr Real kMinHalfExtent = Real(1.0e-9);   // 1 nm floor
+            const Real x_c    = Real(0.5) * (xmin + xmax);
+            const Real y_c    = Real(0.5) * (ymin + ymax);
+            const Real z_c    = Real(0.5) * (zmin + zmax);
+            const Real half_x = std::max(Real(0.5) * (xmax - xmin), kMinHalfExtent);
+            const Real half_y = std::max(Real(0.5) * (ymax - ymin), kMinHalfExtent);
+            const Real half_z = std::max(Real(0.5) * (zmax - zmin), kMinHalfExtent);
+            resize(x_c, y_c, z_c, half_x, half_y, half_z);
+            geom_changed = true;
+        }
+    }
     // Adaptive resize: track the bunch's CURRENT sigmas and resize the
     // mesh to enclose ~pad_factor * sigma in each direction. Takes
     // priority over the simpler comoving recenter (and supersedes it
     // — adaptive does both).
-    bool geom_changed = false;
-    if (m_adaptive) {
+    else if (m_adaptive) {
         Real x_c, y_c, z_c, sx, sy, sz;
         if (compute_bunch_stats(bunch, x_c, y_c, z_c, sx, sy, sz)) {
             const Real pad_x = std::max(m_pad_factor * sx, m_min_pad_xy);

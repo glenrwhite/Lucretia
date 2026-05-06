@@ -92,6 +92,29 @@ public:
     }
     bool adaptive    () const noexcept { return m_adaptive; }
 
+    /** Use ImpactT-style "exact bunch range" adaptive mesh: the SC mesh
+     *  is shrunk every step to EXACTLY the alive-particle range in each
+     *  axis, with NO padding. Mirrors AccSimulator.f90:1724-1733
+     *  (zadjmax = 0.0d0; update_CompDom(grange, ...)).
+     *
+     *  Differences from set_adaptive:
+     *   - No pad_factor; mesh extent = (max - min) per axis from particles.
+     *   - No hysteresis: resize is computed every step (the mesh tracks
+     *     the bunch instantaneously).
+     *   - No min_pad floor.
+     *
+     *  Supersedes set_adaptive when on. Recommended for cross-code
+     *  calibration with ImpactT — keeps cell density per cell
+     *  consistent between codes. */
+    void set_exact_range (bool on) noexcept { m_exact_range = on; }
+    bool exact_range () const noexcept { return m_exact_range; }
+
+    bool compute_bunch_range (
+        particles::TimeBunch& bunch,
+        amrex::Real& xmin, amrex::Real& xmax,
+        amrex::Real& ymin, amrex::Real& ymax,
+        amrex::Real& zmin, amrex::Real& zmax) const;
+
     /** Enable cathode image-charge handling.
      *
      *  When enabled, deposit_charge also deposits a MIRROR rho with
@@ -274,6 +297,7 @@ private:
     amrex::MultiFab            m_Ez;         // V/m,    node-centered, 1 ghost
 
     amrex::Real                m_last_beta_z    = 0.0;
+    bool                       m_exact_range    = false;
     bool                       m_comoving       = false;
     bool                       m_adaptive       = false;
     amrex::Real                m_pad_factor     = 5.0;

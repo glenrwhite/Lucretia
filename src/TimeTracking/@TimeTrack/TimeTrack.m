@@ -48,6 +48,7 @@ properties
     enable_space_charge = false                                  % toggles ParmParse space_charge.enabled
     sc_comoving         = false                                  % SC mesh follows the bunch in z
     sc_adaptive         = false                                  % SC mesh resizes EVERY axis to track current bunch sigmas (supersedes sc_comoving)
+    sc_exact_range      = false                                  % SC mesh resized to EXACT alive-particle min/max each step (zero padding, ImpactT-style; supersedes sc_adaptive)
     sc_pad_factor       = 5.0                                    % adaptive: half-extent = max(pad_factor * sigma, min_pad)
     sc_min_pad_xy       = 1e-3                                   % adaptive: min transverse half-extent (m)
     sc_min_pad_z        = 1e-3                                   % adaptive: min longitudinal half-extent (m)
