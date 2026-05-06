@@ -2,6 +2,7 @@
 
 #include "BeamMonitor.H"
 #include "CathodeSource.H"
+#include "Collimator.H"
 #include "Drift3D.H"
 #include "FieldMap3D.H"
 #include "ImpactTField.H"
@@ -37,7 +38,8 @@ using KnownElements = std::variant<
     FieldMap3D,
     CathodeSource,
     ImpactTField,
-    WakeField
+    WakeField,
+    Collimator
 >;
 
 /** A lattice is an ordered sequence of elements. */

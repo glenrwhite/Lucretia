@@ -163,8 +163,12 @@ end
 % ====================================================================
 function [bm, sl] = compute_stats(b, me, c, n_slice)
 % Compute bunch-mean and slice stats from a particle dump struct.
+% FILTERS dead particles (collimator-killed, parked at z=-1e9).
 xx = double(b.x); yy = double(b.y); zz = double(b.z);
 px = double(b.px); py = double(b.py); pz = double(b.pz);
+alive = (zz > -1e6);   % dead particles parked at z=-1e9
+xx = xx(alive); yy = yy(alive); zz = zz(alive);
+px = px(alive); py = py(alive); pz = pz(alive);
 N  = numel(xx);
 p2 = px.*px + py.*py + pz.*pz;
 g  = sqrt(1 + p2/(me*c)^2);
@@ -340,12 +344,16 @@ fprintf('%s\n', repmat('-', 1, 100));
 for k = 1:numel(bunches)
     b = bunches{k};
     if numel(b.x) < 5, continue; end
+    xx=double(b.x); yy=double(b.y); zz=double(b.z);
     px=double(b.px); py=double(b.py); pz=double(b.pz);
+    alive = (zz > -1e6);   % filter dead (collimator-killed) particles
+    xx=xx(alive); zz=zz(alive); px=px(alive); py=py(alive); pz=pz(alive);
+    if numel(xx) < 5, continue; end
     gam = sqrt(1 + (px.^2+py.^2+pz.^2)/(me*c)^2);
     xp = px./max(pz,1e-30);
-    sx = std(double(b.x));
-    sz = std(double(b.z));
-    eps = norm_emittance(double(b.x), xp, gam);
+    sx = std(xx);
+    sz = std(zz);
+    eps = norm_emittance(xx, xp, gam);
     tk = b.time;
     if tk < ref.t(1) || tk > ref.t(end), continue; end
     g_imp = interp1(ref.t, ref.gamma,   tk, 'linear');
@@ -353,7 +361,7 @@ for k = 1:numel(bunches)
     sz_imp = interp1(ref.t, ref.sigma_z, tk, 'linear');
     eps_imp = interp1(ref.t, ref.eps_nx, tk, 'linear');
     fprintf('%-9.2f %-8.1f | %-7.2f %-7.2f | %-9.3f %-9.3f | %-9.4f %-9.4f | %-10.3f %-10.3f\n', ...
-        tk*1e9, mean(double(b.z))*1e3, mean(gam), g_imp, ...
+        tk*1e9, mean(zz)*1e3, mean(gam), g_imp, ...
         sx*1e3, sx_imp*1e3, sz*1e3, sz_imp*1e3, ...
         eps*1e6, eps_imp*1e6);
 end

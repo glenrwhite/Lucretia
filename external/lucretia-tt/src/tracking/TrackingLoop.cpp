@@ -527,6 +527,16 @@ void TrackingLoop::step (
             }
         }, el);
     }
+
+    // ---- 6. Aperture collimators ----
+    for (auto const& el : lattice) {
+        std::visit([&] (auto const& e) {
+            using T = std::decay_t<decltype(e)>;
+            if constexpr (std::is_same_v<T, elements::Collimator>) {
+                e.apply(bunch);
+            }
+        }, el);
+    }
 }
 
 
@@ -860,6 +870,16 @@ void TrackingLoop::step_dkd (
             using T = std::decay_t<decltype(e)>;
             if constexpr (std::is_same_v<T, elements::WakeField>) {
                 e.apply_wake(bunch, dt);
+            }
+        }, el);
+    }
+
+    // ---- 9. Aperture collimators (kill particles outside x/y bounds) ----
+    for (auto const& el : lattice) {
+        std::visit([&] (auto const& e) {
+            using T = std::decay_t<decltype(e)>;
+            if constexpr (std::is_same_v<T, elements::Collimator>) {
+                e.apply(bunch);
             }
         }, el);
     }

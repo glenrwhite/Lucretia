@@ -268,6 +268,23 @@ lucretiatt::elements::Lattice build_lattice ()
                 transverse_alpha, transverse_truncate,
                 longitudinal_thermal != 0, z_init_spread));
         }
+        else if (type == "collimator") {
+            amrex::Real z_start = 0.0;
+            amrex::Real z_end   = 0.0;
+            amrex::Real xmin    = -1e30, xmax = 1e30;
+            amrex::Real ymin    = -1e30, ymax = 1e30;
+            int         kill_bk = 0;
+            pp_el.query("z_start",       z_start);
+            pp_el.query("z_end",         z_end);
+            pp_el.query("xmin",          xmin);
+            pp_el.query("xmax",          xmax);
+            pp_el.query("ymin",          ymin);
+            pp_el.query("ymax",          ymax);
+            pp_el.query("kill_backward", kill_bk);
+            lattice.emplace_back(Collimator(name, z_start, z_end,
+                                            xmin, xmax, ymin, ymax,
+                                            kill_bk != 0));
+        }
         else if (type == "wakefield") {
             amrex::Real z_start  = 0.0;
             amrex::Real z_end    = 0.0;

@@ -221,16 +221,35 @@ for k = 1:numel(lat_lines)
     case -11
         % Collimator / backward-particle filter. ImpactT format:
         %   "0 0 0 -11 z dz xmin xmax ymin ymax /!name:..."
-        % NOT YET IMPLEMENTED in lucretia-tt -- particles that would be
-        % killed by this collimator (e.g. backward-bouncing electrons
-        % off the gun field, or particles outside the rectangular
-        % aperture) remain in the simulation. For typical photoinjector
-        % runs with well-tuned guns the effect is small (few-particle
-        % contamination at the bunch tail), but for stop_bkw configurations
-        % with significant gun-field reflection it would matter.
-        % TODO: add a Collimator element type (z, z-thickness, x/y aperture)
-        % and a particle-removal step in TrackingLoop.
-        warnings{end+1} = sprintf('skipping %s (type -11, collimator/stop -- not yet implemented)', nm); %#ok<AGROW>
+        % i.e. v(5)=z_start, v(6)=dz (negative dz = stop_bkw mode -- kill
+        % particles with pz<0 in the stop region), v(7..8)=xmin/xmax,
+        % v(9..10)=ymin/ymax. For dz>0, the collimator is active from
+        % z_start to z_start+dz; for dz<0, it kills backward particles
+        % with no aperture restriction (xmin..ymax all 0).
+        if numel(v) >= 10
+            z_start = v(5);
+            dz      = v(6);
+            xmin    = v(7);
+            xmax    = v(8);
+            ymin    = v(9);
+            ymax    = v(10);
+            if dz < 0
+                % stop_bkw: kill backward particles in ALL z (use full
+                % lattice extent). No aperture cut.
+                lattice{end+1} = timetracking.Collimator('name', nm, ...
+                    'z_start',       -1, ...
+                    'z_end',         elem_z_max + 100, ...
+                    'kill_backward', true); %#ok<AGROW>
+            else
+                lattice{end+1} = timetracking.Collimator('name', nm, ...
+                    'z_start', z_start, 'z_end', z_start + dz, ...
+                    'xmin',    xmin,    'xmax',  xmax, ...
+                    'ymin',    ymin,    'ymax',  ymax); %#ok<AGROW>
+            end
+        else
+            warnings{end+1} = sprintf( ...
+                'skipping %s (type -11 with too few fields)', nm); %#ok<AGROW>
+        end
     case -6
         % Wakefield element. ImpactT format:
         %   "0 -1 0 -6 long_on trans_on z_start z_end iris_a gap_g period_L /!name:..."
