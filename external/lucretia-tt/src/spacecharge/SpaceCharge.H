@@ -92,6 +92,35 @@ public:
     }
     bool adaptive    () const noexcept { return m_adaptive; }
 
+    /** Hybrid mesh mode: STATIC transverse (xy frozen at the constructor's
+     *  initial RealBox xy extent) + ADAPTIVE longitudinal (z resizes per
+     *  step to track the bunch's CURRENT sigma_z).
+     *
+     *  Motivation: the IGF accuracy degrades when cell aspect ratio in the
+     *  z-stretched solver coords gets extreme (1:1:gamma at large gamma).
+     *  Pure adaptive lets sigma_z->small drive cells->small in z, and the
+     *  IGF then produces noticeable transverse SC error from the high
+     *  cell aspect (verified to ~10% under at gamma=12 in test_relativistic_pencil).
+     *  Pure static keeps cells coarse but loses longitudinal resolution
+     *  for compressed bunches. Hybrid: keep xy resolution (where the IGF
+     *  Green function is best behaved) and let z adapt.
+     *
+     *  When on, supersedes set_adaptive (which adapts all three axes) and
+     *  set_comoving (z-shift only). Use set_adaptive xor set_hybrid_z_adaptive
+     *  xor set_exact_range; setting more than one yields the highest-priority
+     *  mode (exact_range > hybrid_z_adaptive > adaptive > comoving).
+     *
+     *  Default off. */
+    void set_hybrid_z_adaptive (bool on,
+                                amrex::Real pad_factor = amrex::Real(5.0),
+                                amrex::Real min_pad_z  = amrex::Real(1.0e-3)) noexcept
+    {
+        m_hybrid_z   = on;
+        m_pad_factor = pad_factor;
+        m_min_pad_z  = min_pad_z;
+    }
+    bool hybrid_z_adaptive () const noexcept { return m_hybrid_z; }
+
     /** Use ImpactT-style "exact bunch range" adaptive mesh: the SC mesh
      *  is shrunk every step to EXACTLY the alive-particle range in each
      *  axis, with NO padding. Mirrors AccSimulator.f90:1724-1733
@@ -312,6 +341,7 @@ private:
 
     amrex::Real                m_last_beta_z    = 0.0;
     bool                       m_exact_range    = false;
+    bool                       m_hybrid_z       = false;
     bool                       m_comoving       = false;
     bool                       m_adaptive       = false;
     amrex::Real                m_pad_factor     = 5.0;

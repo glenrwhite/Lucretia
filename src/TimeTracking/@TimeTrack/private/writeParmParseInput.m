@@ -155,6 +155,9 @@ if obj.enable_space_charge
     if isprop(obj, 'sc_exact_range') && obj.sc_exact_range
         fprintf(f, 'space_charge.exact_range = 1\n');
     end
+    if isprop(obj, 'sc_hybrid_z_adaptive') && obj.sc_hybrid_z_adaptive
+        fprintf(f, 'space_charge.hybrid_z_adaptive = 1\n');
+    end
     if isprop(obj, 'sc_image_plane') && obj.sc_image_plane
         fprintf(f, 'space_charge.image_plane_enabled = 1\n');
         fprintf(f, 'space_charge.image_plane_z = %.10g\n', obj.sc_image_plane_z);

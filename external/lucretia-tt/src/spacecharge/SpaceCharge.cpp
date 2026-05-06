@@ -599,6 +599,38 @@ void SpaceCharge::solve (particles::TimeBunch& bunch)
             geom_changed = true;
         }
     }
+    // Hybrid mode: STATIC xy + ADAPTIVE z. Keeps the well-conditioned
+    // transverse cell aspect (per task #24's IGF-discretization
+    // observation that high cell aspect degrades transverse SC accuracy)
+    // while letting z resolve compressed bunches. Higher priority than
+    // pure adaptive but lower than exact_range.
+    else if (m_hybrid_z) {
+        Real x_c, y_c, z_c, sx, sy, sz;
+        if (compute_bunch_stats(bunch, x_c, y_c, z_c, sx, sy, sz)) {
+            const Real pad_z = std::max(m_pad_factor * sz, m_min_pad_z);
+
+            auto const* lo_p = m_geom.ProbLo();
+            auto const* hi_p = m_geom.ProbHi();
+            const Real cur_xy_x_c  = Real(0.5) * (hi_p[0] + lo_p[0]);
+            const Real cur_xy_y_c  = Real(0.5) * (hi_p[1] + lo_p[1]);
+            const Real cur_half_x  = Real(0.5) * (hi_p[0] - lo_p[0]);
+            const Real cur_half_y  = Real(0.5) * (hi_p[1] - lo_p[1]);
+            const Real cur_half_z  = Real(0.5) * (hi_p[2] - lo_p[2]);
+            const Real cur_z_c     = Real(0.5) * (hi_p[2] + lo_p[2]);
+
+            // Trigger only on z change: 2x size hysteresis or > 50% half-extent
+            // centroid drift in z. xy half-extent + xy centroid stay frozen.
+            const bool first_call   = (m_n_recenters == 0);
+            const bool z_size_drift = pad_z > Real(2.0) * cur_half_z ||
+                                      pad_z < Real(0.5) * cur_half_z;
+            const bool z_cent_drift = std::abs(z_c - cur_z_c) > Real(0.5) * cur_half_z;
+
+            if (first_call || z_size_drift || z_cent_drift) {
+                resize(cur_xy_x_c, cur_xy_y_c, z_c, cur_half_x, cur_half_y, pad_z);
+                geom_changed = true;
+            }
+        }
+    }
     // Adaptive resize: track the bunch's CURRENT sigmas and resize the
     // mesh to enclose ~pad_factor * sigma in each direction. Takes
     // priority over the simpler comoving recenter (and supersedes it

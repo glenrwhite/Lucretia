@@ -707,12 +707,17 @@ int main (int argc, char* argv[])
             pp_sc.query("slice_gamma_off",     slice_gamma_off);
             int sc_rho_smooth_passes = 0;
             pp_sc.query("rho_smooth_passes",   sc_rho_smooth_passes);
+            int sc_hybrid_z = 0;
+            pp_sc.query("hybrid_z_adaptive",   sc_hybrid_z);
             if (sc_enabled != 0) {
                 sc = std::make_unique<lucretiatt::spacecharge::SpaceCharge>(
                     geom, ba, dm);
                 sc->set_comoving(sc_comoving != 0);
                 if (sc_adaptive != 0) {
                     sc->set_adaptive(true, sc_pad_factor, sc_min_pad_xy, sc_min_pad_z);
+                }
+                if (sc_hybrid_z != 0) {
+                    sc->set_hybrid_z_adaptive(true, sc_pad_factor, sc_min_pad_z);
                 }
                 if (sc_exact_range != 0) {
                     sc->set_exact_range(true);
@@ -725,9 +730,10 @@ int main (int argc, char* argv[])
                 }
                 amrex::Print() << "Space charge: enabled"
                                << (sc_exact_range ? "  (ImpactT-exact-range mesh)"
-                                                  : (sc_adaptive ? "  (adaptive padded mesh)"
-                                                                 : (sc_comoving ? "  (co-moving mesh)"
-                                                                                : "  (static mesh)")))
+                                                  : (sc_hybrid_z   ? "  (hybrid: static-xy + adaptive-z)"
+                                                  : (sc_adaptive   ? "  (adaptive padded mesh)"
+                                                  : (sc_comoving   ? "  (co-moving mesh)"
+                                                                   : "  (static mesh)"))))
                                << (sc_image_enabled ? "  (cathode image charges)" : "");
                 if (sc_rho_smooth_passes > 0) {
                     amrex::Print() << "  (rho-smooth " << sc_rho_smooth_passes << " pass)";
