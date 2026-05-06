@@ -492,6 +492,57 @@ void SpaceCharge::deposit_charge (particles::TimeBunch& bunch)
 }
 
 
+void SpaceCharge::smooth_rho ()
+{
+    using namespace amrex;
+    if (m_rho_smooth_passes <= 0) { return; }
+    int verbose = 0;
+    amrex::ParmParse("space_charge").query("verbose", verbose);
+    if (verbose > 0) {
+        amrex::Print() << "[SpaceCharge] smooth_rho: " << m_rho_smooth_passes << " passes\n";
+    }
+
+    // Scratch with same layout + ghosts as m_rho. Reused across passes.
+    MultiFab scratch(m_rho.boxArray(), m_rho.DistributionMap(),
+                     m_rho.nComp(), m_rho.nGrowVect());
+
+    constexpr Real inv64 = Real(1.0) / Real(64.0);
+    for (int pass = 0; pass < m_rho_smooth_passes; ++pass) {
+        // Copy current rho (incl. ghosts) into scratch and refresh
+        // ghost cells from neighbours. With OPEN BC the ghost values
+        // are 0 (FillBoundary on a periodicity()=none geometry leaves
+        // them untouched after the explicit setVal we do at deposit).
+        MultiFab::Copy(scratch, m_rho, 0, 0, m_rho.nComp(), m_rho.nGrowVect());
+        scratch.FillBoundary(m_geom.periodicity());
+
+        for (MFIter mfi(m_rho, TilingIfNotGPU()); mfi.isValid(); ++mfi) {
+            Box const& vbox = mfi.validbox();
+            auto const& src = scratch.const_array(mfi);
+            auto       dst  = m_rho.array(mfi);
+
+            ParallelFor(vbox, [=] AMREX_GPU_DEVICE (int i, int j, int k) {
+                // Separable 3D binomial (1,2,1)/4 in each axis.
+                // Outer-product weights: w(dx,dy,dz) = wx*wy*wz where
+                // w_a = 1 if |a|=1, 2 if a=0. Sum over 3^3 cube,
+                // normalised by 4^3 = 64.
+                Real s = Real(0.0);
+                for (int dz = -1; dz <= 1; ++dz) {
+                    const Real wz = (dz == 0) ? Real(2.0) : Real(1.0);
+                    for (int dy = -1; dy <= 1; ++dy) {
+                        const Real wy = (dy == 0) ? Real(2.0) : Real(1.0);
+                        for (int dx = -1; dx <= 1; ++dx) {
+                            const Real wx = (dx == 0) ? Real(2.0) : Real(1.0);
+                            s += wx * wy * wz * src(i + dx, j + dy, k + dz);
+                        }
+                    }
+                }
+                dst(i, j, k) = s * inv64;
+            });
+        }
+    }
+}
+
+
 void SpaceCharge::compute_E_from_phi ()
 {
     using namespace amrex;
@@ -620,6 +671,7 @@ void SpaceCharge::solve (particles::TimeBunch& bunch)
     m_last_beta_z = compute_mean_beta_z(bunch);
 
     deposit_charge(bunch);
+    smooth_rho();
 
     auto const* dx = m_geom.CellSize();
     const Real inv_g = std::sqrt(Real(1.0) - m_last_beta_z * m_last_beta_z);

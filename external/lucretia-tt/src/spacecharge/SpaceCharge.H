@@ -115,6 +115,19 @@ public:
         amrex::Real& ymin, amrex::Real& ymax,
         amrex::Real& zmin, amrex::Real& zmax) const;
 
+    /** Set the number of binomial-smoother passes applied to rho after
+     *  deposit and before the IGF Poisson solve. Each pass convolves rho
+     *  with the 3x3x3 separable (1,2,1)/4 kernel (volume-preserving;
+     *  zero phase shift; isotropic Gaussian-equivalent sigma ~ 0.7*dx
+     *  per pass). Useful when the per-cell particle count is low and
+     *  CIC deposit is noisy.
+     *
+     *  Default: 0 (no smoothing). 1 pass cuts per-cell shot noise by
+     *  ~2x; 2 passes ~4x; each pass costs one rho copy + one stencil
+     *  pass over the mesh (cheap relative to the IGF FFT). */
+    void set_rho_smooth_passes (int n) noexcept { m_rho_smooth_passes = std::max(0, n); }
+    int  rho_smooth_passes () const noexcept { return m_rho_smooth_passes; }
+
     /** Enable cathode image-charge handling.
      *
      *  When enabled, deposit_charge also deposits a MIRROR rho with
@@ -256,6 +269,7 @@ private:
     amrex::Real compute_mean_beta_z (particles::TimeBunch& bunch) const;
     amrex::Real compute_mean_z      (particles::TimeBunch& bunch) const;
     void deposit_charge          (particles::TimeBunch& bunch);
+    void smooth_rho              ();
     void compute_E_from_phi      ();
     void build_self_force_lut    ();
 
@@ -306,6 +320,7 @@ private:
     bool                       m_image_plane_enabled = false;
     amrex::Real                m_image_plane_z       = 0.0;
     amrex::Real                m_image_cutoff        = 0.05;     // m
+    int                        m_rho_smooth_passes = 0;
     int                        m_n_recenters    = 0;
     int                        m_n_lut_rebuilds = 1;     // counts the constructor build
 

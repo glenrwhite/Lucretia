@@ -55,6 +55,7 @@ properties
     sc_image_plane      = false                                  % cathode image-charge handling: deposit mirror charges on the SC mesh so the IGF Poisson satisfies phi=0 on the cathode plane
     sc_image_plane_z    = 0.0                                    % m: lab-frame cathode plane (mirror axis)
     sc_image_cutoff     = 0.05                                   % m: image deposit only fires for particles within this distance of the cathode (matches IMPACT-T's Zimage)
+    sc_rho_smooth_passes = 0                                     % # of binomial (1,2,1)/4 smoother passes applied to deposited rho before IGF solve (0 = off; 1-2 cuts CIC noise without losing physical signal)
     sc_verbose          = 0                                      % space_charge.verbose: 0 = quiet, 1 = print recenter / per-step diagnostics
     enable_slice_sc     = false                                  % toggles ParmParse space_charge.slice_enabled (1D longitudinal slice SC, mesh-free in z)
     slice_sc_n          = 256                                    % # of z-slices for the slice SC bunch density estimator

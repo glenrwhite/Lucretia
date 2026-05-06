@@ -705,6 +705,8 @@ int main (int argc, char* argv[])
             pp_sc.query("slice_n",             slice_n);
             pp_sc.query("slice_radius_factor", slice_radius_factor);
             pp_sc.query("slice_gamma_off",     slice_gamma_off);
+            int sc_rho_smooth_passes = 0;
+            pp_sc.query("rho_smooth_passes",   sc_rho_smooth_passes);
             if (sc_enabled != 0) {
                 sc = std::make_unique<lucretiatt::spacecharge::SpaceCharge>(
                     geom, ba, dm);
@@ -718,13 +720,19 @@ int main (int argc, char* argv[])
                 if (sc_image_enabled != 0) {
                     sc->set_image_plane(sc_image_z_cath, sc_image_cutoff);
                 }
+                if (sc_rho_smooth_passes > 0) {
+                    sc->set_rho_smooth_passes(sc_rho_smooth_passes);
+                }
                 amrex::Print() << "Space charge: enabled"
                                << (sc_exact_range ? "  (ImpactT-exact-range mesh)"
                                                   : (sc_adaptive ? "  (adaptive padded mesh)"
                                                                  : (sc_comoving ? "  (co-moving mesh)"
                                                                                 : "  (static mesh)")))
-                               << (sc_image_enabled ? "  (cathode image charges)" : "")
-                               << "\n";
+                               << (sc_image_enabled ? "  (cathode image charges)" : "");
+                if (sc_rho_smooth_passes > 0) {
+                    amrex::Print() << "  (rho-smooth " << sc_rho_smooth_passes << " pass)";
+                }
+                amrex::Print() << "\n";
             }
             if (slice_sc_enabled != 0) {
                 slice_sc = std::make_unique<lucretiatt::spacecharge::SpaceChargeSlice>(

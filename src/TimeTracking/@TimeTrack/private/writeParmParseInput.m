@@ -160,6 +160,9 @@ if obj.enable_space_charge
         fprintf(f, 'space_charge.image_plane_z = %.10g\n', obj.sc_image_plane_z);
         fprintf(f, 'space_charge.image_cutoff = %.10g\n', obj.sc_image_cutoff);
     end
+    if isprop(obj, 'sc_rho_smooth_passes') && ~isempty(obj.sc_rho_smooth_passes) && obj.sc_rho_smooth_passes > 0
+        fprintf(f, 'space_charge.rho_smooth_passes = %d\n', round(obj.sc_rho_smooth_passes));
+    end
     if isprop(obj, 'sc_verbose') && ~isempty(obj.sc_verbose) && obj.sc_verbose > 0
         fprintf(f, 'space_charge.verbose = %d\n', round(obj.sc_verbose));
     end

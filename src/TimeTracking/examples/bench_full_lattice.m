@@ -31,6 +31,7 @@ p.addParameter('sc_pad_factor',  5.0,  @isnumeric);                       % adap
 p.addParameter('slice_gamma_off', [],  @(x) isempty(x) || isnumeric(x));  % disable slice SC when bunch mean gamma >= this (lets 3D mesh handle longitudinal at high gamma)
 p.addParameter('disable_self_force', false, @islogical);                  % diagnostic: skip self-force LUT subtraction
 p.addParameter('sc_exact_range', false, @islogical);                      % ImpactT-style exact bunch range adaptive mesh (no padding, every step)
+p.addParameter('sc_rho_smooth_passes', 0, @isnumeric);                   % # of binomial-smoother passes on rho before IGF solve (0 = off; 1-2 cuts CIC noise)
 p.parse(varargin{:});
 opts = p.Results;
 impactt_dir = char(opts.impactt_dir);
@@ -138,6 +139,9 @@ if opts.sc_exact_range
     tt.sc_exact_range = true;
     tt.sc_adaptive = false;          % superseded
     tt.sc_comoving = false;
+end
+if opts.sc_rho_smooth_passes > 0
+    tt.sc_rho_smooth_passes = round(opts.sc_rho_smooth_passes);
 end
 fprintf('  sc_mode = %s (mesh=%d, slice=%d, image=%d, adaptive=%d)\n', sc_mode, ...
     tt.enable_space_charge, tt.enable_slice_sc, tt.sc_image_plane, tt.sc_adaptive);
