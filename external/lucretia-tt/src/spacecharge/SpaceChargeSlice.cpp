@@ -238,6 +238,7 @@ void SpaceChargeSlice::compute (particles::TimeBunch& bunch)
 amrex::Real SpaceChargeSlice::E_z_at (amrex::Real z) const noexcept
 {
     if (m_dz <= amrex::Real(0.0)) { return amrex::Real(0.0); }
+    if (m_gamma >= m_gamma_off)   { return amrex::Real(0.0); }
     const amrex::Real f = (z - m_z_lo) / m_dz - amrex::Real(0.5);
     if (f <= amrex::Real(0.0))               { return m_Ez_slice.front(); }
     if (f >= amrex::Real(m_n_slices - 1))    { return m_Ez_slice.back();  }

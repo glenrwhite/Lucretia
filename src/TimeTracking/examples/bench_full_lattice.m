@@ -28,6 +28,7 @@ p.addParameter('tag',         'bench_full', @(x) ischar(x) || isstring(x));
 p.addParameter('sc_mode',     'full', @(x) ischar(x) || isstring(x));   % 'full' (mesh+slice), 'mesh', 'slice', 'off'
 p.addParameter('sc_static_xrad', 0.015,@(x) isempty(x) || isnumeric(x));  % m: STATIC mesh ±xrad (default 15 mm = matches ImpactT; pass [] to use adaptive)
 p.addParameter('sc_pad_factor',  5.0,  @isnumeric);                       % adaptive: half-extent = pad_factor * sigma
+p.addParameter('slice_gamma_off', [],  @(x) isempty(x) || isnumeric(x));  % disable slice SC when bunch mean gamma >= this (lets 3D mesh handle longitudinal at high gamma)
 p.parse(varargin{:});
 opts = p.Results;
 impactt_dir = char(opts.impactt_dir);
@@ -125,6 +126,9 @@ if ~isempty(opts.sc_static_xrad)
         xrad, 2*xrad/tt.geom_ncell(1)*1e3, 2*z_half/tt.geom_ncell(3)*1e3);
 end
 tt.sc_pad_factor = opts.sc_pad_factor;
+if ~isempty(opts.slice_gamma_off)
+    tt.slice_sc_gamma_off = opts.slice_gamma_off;
+end
 fprintf('  sc_mode = %s (mesh=%d, slice=%d, image=%d, adaptive=%d)\n', sc_mode, ...
     tt.enable_space_charge, tt.enable_slice_sc, tt.sc_image_plane, tt.sc_adaptive);
 

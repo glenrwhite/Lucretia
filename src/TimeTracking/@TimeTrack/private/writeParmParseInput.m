@@ -169,6 +169,9 @@ if isprop(obj, 'enable_slice_sc') && obj.enable_slice_sc
     if isprop(obj, 'slice_sc_radius_factor') && ~isempty(obj.slice_sc_radius_factor)
         fprintf(f, 'space_charge.slice_radius_factor = %.6g\n', obj.slice_sc_radius_factor);
     end
+    if isprop(obj, 'slice_sc_gamma_off') && ~isempty(obj.slice_sc_gamma_off)
+        fprintf(f, 'space_charge.slice_gamma_off = %.6g\n', obj.slice_sc_gamma_off);
+    end
 end
 
 fprintf(f, '\nout_dir = %s\n', obj.output_dir);

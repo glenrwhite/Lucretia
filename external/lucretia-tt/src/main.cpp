@@ -26,6 +26,7 @@
 
 #include <algorithm>
 #include <fstream>
+#include <cmath>
 #include <limits>
 #include <memory>
 #include <sstream>
@@ -687,6 +688,7 @@ int main (int argc, char* argv[])
             int slice_sc_enabled  = 0;
             int slice_n           = 256;
             amrex::Real slice_radius_factor = 2.0;
+            amrex::Real slice_gamma_off     = std::numeric_limits<amrex::Real>::infinity();
             amrex::ParmParse pp_sc("space_charge");
             pp_sc.query("enabled",  sc_enabled);
             pp_sc.query("comoving", sc_comoving);
@@ -700,6 +702,7 @@ int main (int argc, char* argv[])
             pp_sc.query("slice_enabled",       slice_sc_enabled);
             pp_sc.query("slice_n",             slice_n);
             pp_sc.query("slice_radius_factor", slice_radius_factor);
+            pp_sc.query("slice_gamma_off",     slice_gamma_off);
             if (sc_enabled != 0) {
                 sc = std::make_unique<lucretiatt::spacecharge::SpaceCharge>(
                     geom, ba, dm);
@@ -720,10 +723,16 @@ int main (int argc, char* argv[])
             if (slice_sc_enabled != 0) {
                 slice_sc = std::make_unique<lucretiatt::spacecharge::SpaceChargeSlice>(
                     slice_n, slice_radius_factor);
+                slice_sc->set_gamma_off(slice_gamma_off);
                 amrex::Print() << "1D longitudinal slice SC: enabled  (n_slices="
                                << slice_n
                                << ",  bunch_radius_factor=" << slice_radius_factor
-                               << " * sigma_xy)\n";
+                               << " * sigma_xy"
+                               << (std::isfinite(slice_gamma_off)
+                                   ? std::string(",  off above gamma=") +
+                                     std::to_string(slice_gamma_off)
+                                   : std::string(""))
+                               << ")\n";
             }
         }
 

@@ -4,6 +4,7 @@
 
 #include <AMReX_REAL.H>
 
+#include <limits>
 #include <vector>
 
 
@@ -45,6 +46,16 @@ public:
     explicit SpaceChargeSlice (int n_slices = 256,
                                amrex::Real radius_factor = amrex::Real(2.0));
 
+    /** Disable slice SC contribution above this gamma threshold. The
+     *  disk-stack formula transforms to the rest frame via z_rest = g·z_lab,
+     *  but at high gamma the cumulative contribution over many drift steps
+     *  empirically over-counts vs ImpactT's mesh longitudinal SC (which
+     *  is invariant under z-boost). Above gamma_off, E_z_at returns 0
+     *  and lets the 3D mesh SC handle longitudinal exclusively.
+     *  Default = +inf (always on). */
+    void set_gamma_off (amrex::Real gamma_off) noexcept { m_gamma_off = gamma_off; }
+    amrex::Real gamma_off () const noexcept { return m_gamma_off; }
+
     /** Re-bin charge into z-slices and recompute E_z(z_slice).
      *
      *  - Computes bunch z extrema, mean beta_z, RMS sigma_xy, total bunch
@@ -77,6 +88,7 @@ private:
     amrex::Real m_a       = 0.0;     // characteristic transverse radius
     amrex::Real m_gamma   = 1.0;
     amrex::Real m_total_Q = 0.0;
+    amrex::Real m_gamma_off = std::numeric_limits<amrex::Real>::infinity();
 
     std::vector<amrex::Real> m_Q_slice;   // physical charge per slice (C)
     std::vector<amrex::Real> m_Ez_slice;  // E_z at slice centre (V/m)
