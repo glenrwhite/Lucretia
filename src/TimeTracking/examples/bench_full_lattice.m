@@ -26,7 +26,7 @@ p.addParameter('dt_change_t', [],     @(x) isempty(x) || isnumeric(x));   % s: w
 p.addParameter('n_slice',     30,    @isnumeric);
 p.addParameter('tag',         'bench_full', @(x) ischar(x) || isstring(x));
 p.addParameter('sc_mode',     'full', @(x) ischar(x) || isstring(x));   % 'full' (mesh+slice), 'mesh', 'slice', 'off'
-p.addParameter('sc_static_xrad', [],   @(x) isempty(x) || isnumeric(x));  % m: if set, use STATIC mesh ±xrad (matching ImpactT) instead of adaptive
+p.addParameter('sc_static_xrad', 0.015,@(x) isempty(x) || isnumeric(x));  % m: STATIC mesh ±xrad (default 15 mm = matches ImpactT; pass [] to use adaptive)
 p.addParameter('sc_pad_factor',  5.0,  @isnumeric);                       % adaptive: half-extent = pad_factor * sigma
 p.parse(varargin{:});
 opts = p.Results;
