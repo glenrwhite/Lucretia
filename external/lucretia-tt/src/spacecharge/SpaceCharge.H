@@ -157,6 +157,31 @@ public:
     void set_rho_smooth_passes (int n) noexcept { m_rho_smooth_passes = std::max(0, n); }
     int  rho_smooth_passes () const noexcept { return m_rho_smooth_passes; }
 
+    /** Particle deposit/gather shape order. 1 = CIC (linear, 8-node cloud,
+     *  current default). 2 = TSC (quadratic, 27-node cloud).
+     *
+     *  TSC has wider deposit footprint, so per-particle field gradients
+     *  seen on gather are smoother. Standard photoinjector PIC codes use
+     *  TSC by default for emittance studies; CIC is common in low-noise
+     *  contexts where per-particle counts are high.
+     *
+     *  Cost: TSC deposit + gather ~27/8 = 3.4x CIC (per-particle work).
+     *  IGF Poisson solve unchanged. Self-force LUT is rebuilt for the
+     *  active shape order.
+     *
+     *  Default: 1 (CIC). */
+    void set_shape_order (int order)
+    {
+        AMREX_ALWAYS_ASSERT_WITH_MESSAGE(order == 1 || order == 2,
+            "SpaceCharge::set_shape_order: only 1 (CIC) or 2 (TSC) supported");
+        if (order != m_shape_order) {
+            m_shape_order = order;
+            build_self_force_lut();
+            ++m_n_lut_rebuilds;
+        }
+    }
+    int shape_order () const noexcept { return m_shape_order; }
+
     /** Enable cathode image-charge handling.
      *
      *  When enabled, deposit_charge also deposits a MIRROR rho with
@@ -351,6 +376,7 @@ private:
     amrex::Real                m_image_plane_z       = 0.0;
     amrex::Real                m_image_cutoff        = 0.05;     // m
     int                        m_rho_smooth_passes = 0;
+    int                        m_shape_order    = 1;     // 1 = CIC, 2 = TSC
     int                        m_n_recenters    = 0;
     int                        m_n_lut_rebuilds = 1;     // counts the constructor build
 

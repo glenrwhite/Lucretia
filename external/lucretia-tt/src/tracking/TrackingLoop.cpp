@@ -25,6 +25,55 @@ namespace {
 // 1 / (4 pi eps0) -- Coulomb constant in SI (m / F)
 constexpr amrex::Real kCoulombConstant = amrex::Real(8.987551787e9);
 
+// TSC (triangle-shape-cloud) shape function weights. Particle is at
+// fractional position p in [-0.5, 0.5) relative to the NEAREST node.
+AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
+void tsc_weights (amrex::Real p, amrex::Real& w_lo, amrex::Real& w_mid, amrex::Real& w_hi) noexcept
+{
+    using amrex::Real;
+    const Real half_minus_p = Real(0.5) - p;
+    const Real half_plus_p  = Real(0.5) + p;
+    w_lo  = Real(0.5) * half_minus_p * half_minus_p;
+    w_mid = Real(0.75) - p * p;
+    w_hi  = Real(0.5) * half_plus_p  * half_plus_p;
+}
+
+// TSC gather: 27-node weighted sum of a nodal field at the particle position.
+// Mirrors deposit symmetry so the kick is consistent with the deposit shape.
+AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
+amrex::Real tsc_gather (amrex::Array4<const amrex::Real> const& field,
+                        amrex::Real x, amrex::Real y, amrex::Real z,
+                        amrex::GpuArray<amrex::Real, 3> const& dxi,
+                        amrex::GpuArray<amrex::Real, 3> const& lo) noexcept
+{
+    using amrex::Real;
+    const Real fx = (x - lo[0]) * dxi[0];
+    const Real fy = (y - lo[1]) * dxi[1];
+    const Real fz = (z - lo[2]) * dxi[2];
+    const int  ix = int(amrex::Math::round(fx));
+    const int  iy = int(amrex::Math::round(fy));
+    const int  iz = int(amrex::Math::round(fz));
+    const Real px = fx - Real(ix);
+    const Real py = fy - Real(iy);
+    const Real pz = fz - Real(iz);
+    Real wx[3], wy[3], wz[3];
+    tsc_weights(px, wx[0], wx[1], wx[2]);
+    tsc_weights(py, wy[0], wy[1], wy[2]);
+    tsc_weights(pz, wz[0], wz[1], wz[2]);
+    Real result = Real(0.0);
+    for (int kk = 0; kk < 3; ++kk) {
+        const Real wzz = wz[kk];
+        for (int jj = 0; jj < 3; ++jj) {
+            const Real wyz = wzz * wy[jj];
+            for (int ii = 0; ii < 3; ++ii) {
+                result += field(ix - 1 + ii, iy - 1 + jj, iz - 1 + kk)
+                        * wx[ii] * wyz;
+            }
+        }
+    }
+    return result;
+}
+
 } // anonymous
 
 
@@ -161,6 +210,7 @@ void TrackingLoop::step (
     // MFIter constructions that AMReX rejects when nested with PIter.
     Array4<const Real> Ex_sc_arr, Ey_sc_arr, Ez_sc_arr;
     Box                sc_box;
+    int                sc_shape_order = 1;     // 1 = CIC, 2 = TSC
     if (sc) {
         sc->solve(bunch);
         dxi_sc = sc->dxi();
@@ -173,6 +223,7 @@ void TrackingLoop::step (
         Ey_sc_arr = sc->Ey_array();
         Ez_sc_arr = sc->Ez_array();
         sc_box    = sc->mesh_box();
+        sc_shape_order = sc->shape_order();
     }
 
     // 1D longitudinal slice SC: solved (re-binned + integrated) once per
@@ -385,44 +436,70 @@ void TrackingLoop::step (
                 const Real fx_sc = (x - lo_sc[0]) * dxi_sc[0];
                 const Real fy_sc = (y - lo_sc[1]) * dxi_sc[1];
                 const Real fz_sc = (z - lo_sc[2]) * dxi_sc[2];
-                const int  ix_sc = int(std::floor(fx_sc));
-                const int  iy_sc = int(std::floor(fy_sc));
-                const int  iz_sc = int(std::floor(fz_sc));
-                if (ix_sc < sc_box.smallEnd(0) || ix_sc + 1 > sc_box.bigEnd(0) ||
-                    iy_sc < sc_box.smallEnd(1) || iy_sc + 1 > sc_box.bigEnd(1) ||
-                    iz_sc < sc_box.smallEnd(2) || iz_sc + 1 > sc_box.bigEnd(2))
+
+                // Footprint check: CIC needs {floor, floor+1}; TSC needs
+                // {round-1, round, round+1}. Both fit in valid+1-ghost.
+                int ix_lo, iy_lo, iz_lo, ix_hi, iy_hi, iz_hi;
+                if (sc_shape_order == 1) {
+                    ix_lo = int(std::floor(fx_sc));     ix_hi = ix_lo + 1;
+                    iy_lo = int(std::floor(fy_sc));     iy_hi = iy_lo + 1;
+                    iz_lo = int(std::floor(fz_sc));     iz_hi = iz_lo + 1;
+                } else {
+                    const int ix_n = int(std::round(fx_sc));
+                    const int iy_n = int(std::round(fy_sc));
+                    const int iz_n = int(std::round(fz_sc));
+                    ix_lo = ix_n - 1;  ix_hi = ix_n + 1;
+                    iy_lo = iy_n - 1;  iy_hi = iy_n + 1;
+                    iz_lo = iz_n - 1;  iz_hi = iz_n + 1;
+                }
+                if (ix_lo < sc_box.smallEnd(0) || ix_hi > sc_box.bigEnd(0) ||
+                    iy_lo < sc_box.smallEnd(1) || iy_hi > sc_box.bigEnd(1) ||
+                    iz_lo < sc_box.smallEnd(2) || iz_hi > sc_box.bigEnd(2))
                 {
                     goto sc_done;   // exit the SC block; keep external E,B
                 }
-                auto E_sc = ablastr::particles::doGatherVectorFieldNodal(
-                    ParticleReal(x), ParticleReal(y), ParticleReal(z),
-                    Ex_sc_arr, Ey_sc_arr, Ez_sc_arr,
-                    dxi_sc, lo_sc);
+                amrex::GpuArray<Real, 3> E_sc{};
+                if (sc_shape_order == 1) {
+                    auto E_cic = ablastr::particles::doGatherVectorFieldNodal(
+                        ParticleReal(x), ParticleReal(y), ParticleReal(z),
+                        Ex_sc_arr, Ey_sc_arr, Ez_sc_arr,
+                        dxi_sc, lo_sc);
+                    E_sc[0] = E_cic[0]; E_sc[1] = E_cic[1]; E_sc[2] = E_cic[2];
+                } else {
+                    E_sc[0] = tsc_gather(Ex_sc_arr, x, y, z, dxi_sc, lo_sc);
+                    E_sc[1] = tsc_gather(Ey_sc_arr, x, y, z, dxi_sc, lo_sc);
+                    E_sc[2] = tsc_gather(Ez_sc_arr, x, y, z, dxi_sc, lo_sc);
+                }
 
                 // Subtract Coulomb field of this particle's own deposited
-                // CIC cloud (8 weighted point charges at the surrounding
-                // nodes). Removes the self-interaction the IGF + gather
-                // chain would otherwise carry. Implementation: trilinear
-                // interp of a precomputed shape table (built once per
-                // SpaceCharge in build_self_force_lut, see SpaceCharge.cpp)
-                // indexed on the particle's fractional cell position. The
-                // table holds E per unit qw=1 -- the per-particle qw
-                // factor is applied after the lookup. ~20 cycles +
-                // 8 cached reads per particle vs ~150 cycles for the
-                // 8 sqrt+div sum that this replaces.
+                // shape cloud (8 nodes for CIC, 27 for TSC). Removes the
+                // self-interaction the IGF + gather chain would otherwise
+                // carry. Implementation: trilinear interp of a precomputed
+                // shape table built once per SpaceCharge (see
+                // build_self_force_lut). The table is built for the active
+                // shape order with matching index conventions:
+                //   CIC: indexed by (wx_frac, wy_frac, wz_frac) in [0, 1)
+                //   TSC: indexed by (px, py, pz) in [-0.5, +0.5)
                 const Real w  = ptd.rdata(RealSoA::w)[ip];
                 const Real qw = q * w * kCoulombConstant;
 
-                const Real fx = (x - lo_sc[0]) * dxi_sc[0];
-                const Real fy = (y - lo_sc[1]) * dxi_sc[1];
-                const Real fz = (z - lo_sc[2]) * dxi_sc[2];
-                const Real wx_frac = fx - std::floor(fx);
-                const Real wy_frac = fy - std::floor(fy);
-                const Real wz_frac = fz - std::floor(fz);
-
-                const Real tx = wx_frac * Real(sf_n);
-                const Real ty = wy_frac * Real(sf_n);
-                const Real tz = wz_frac * Real(sf_n);
+                Real tx, ty, tz;
+                if (sc_shape_order == 1) {
+                    const Real wx_frac = fx_sc - std::floor(fx_sc);
+                    const Real wy_frac = fy_sc - std::floor(fy_sc);
+                    const Real wz_frac = fz_sc - std::floor(fz_sc);
+                    tx = wx_frac * Real(sf_n);
+                    ty = wy_frac * Real(sf_n);
+                    tz = wz_frac * Real(sf_n);
+                } else {
+                    // TSC: p in [-0.5, +0.5), LUT samples at (p+0.5)*N
+                    const Real px = fx_sc - std::round(fx_sc);
+                    const Real py = fy_sc - std::round(fy_sc);
+                    const Real pz = fz_sc - std::round(fz_sc);
+                    tx = (px + Real(0.5)) * Real(sf_n);
+                    ty = (py + Real(0.5)) * Real(sf_n);
+                    tz = (pz + Real(0.5)) * Real(sf_n);
+                }
                 int ix_t = int(tx); if (ix_t >= sf_n) ix_t = sf_n - 1;
                 int iy_t = int(ty); if (iy_t >= sf_n) iy_t = sf_n - 1;
                 int iz_t = int(tz); if (iz_t >= sf_n) iz_t = sf_n - 1;
@@ -458,9 +535,15 @@ void TrackingLoop::step (
 
                 // Empirical fudge factor: Coulomb-of-point-charges over-
                 // corrects vs the smeared IGF cloud. Calibrated on the
-                // uniform-sphere test (1000 macros, R = 1 mm).
+                // uniform-sphere test (1000 macros, R = 1 mm). TSC's
+                // 27-node cloud has a smaller per-node Coulomb self-sum
+                // than CIC's 8-node cloud (charge is spread further from
+                // the particle), so the multiplicative compensation is
+                // roughly 2x larger.
                 const Real kSelfForceFactor =
-                    m_self_force_disabled ? Real(0.0) : Real(0.62);
+                    m_self_force_disabled ? Real(0.0)
+                                          : (sc_shape_order == 2 ? Real(1.27)
+                                                                 : Real(0.62));
                 const Real qw_f = qw * kSelfForceFactor;
                 // sc_boost = 1/gamma = sqrt(1 - beta^2) — see comment at
                 // SC solve. Both the gathered IGF field and the self-force
@@ -669,6 +752,7 @@ void TrackingLoop::step_dkd (
     int                sf_n      = 0;
     Array4<const Real> Ex_sc_arr, Ey_sc_arr, Ez_sc_arr;
     Box                sc_box;
+    int                sc_shape_order = 1;     // 1 = CIC, 2 = TSC
     if (sc) {
         sc->solve(bunch);
         dxi_sc    = sc->dxi();
@@ -681,6 +765,7 @@ void TrackingLoop::step_dkd (
         Ey_sc_arr = sc->Ey_array();
         Ez_sc_arr = sc->Ez_array();
         sc_box    = sc->mesh_box();
+        sc_shape_order = sc->shape_order();
     }
     if (slice_sc) {
         slice_sc->compute(bunch);
@@ -745,30 +830,59 @@ void TrackingLoop::step_dkd (
                 const Real fx_sc = (x - lo_sc[0]) * dxi_sc[0];
                 const Real fy_sc = (y - lo_sc[1]) * dxi_sc[1];
                 const Real fz_sc = (z - lo_sc[2]) * dxi_sc[2];
-                const int  ix_sc = int(std::floor(fx_sc));
-                const int  iy_sc = int(std::floor(fy_sc));
-                const int  iz_sc = int(std::floor(fz_sc));
-                if (!(ix_sc < sc_box.smallEnd(0)
-                   || ix_sc + 1 > sc_box.bigEnd(0)
-                   || iy_sc < sc_box.smallEnd(1)
-                   || iy_sc + 1 > sc_box.bigEnd(1)
-                   || iz_sc < sc_box.smallEnd(2)
-                   || iz_sc + 1 > sc_box.bigEnd(2)))
+
+                int ix_lo, iy_lo, iz_lo, ix_hi, iy_hi, iz_hi;
+                if (sc_shape_order == 1) {
+                    ix_lo = int(std::floor(fx_sc));     ix_hi = ix_lo + 1;
+                    iy_lo = int(std::floor(fy_sc));     iy_hi = iy_lo + 1;
+                    iz_lo = int(std::floor(fz_sc));     iz_hi = iz_lo + 1;
+                } else {
+                    const int ix_n = int(std::round(fx_sc));
+                    const int iy_n = int(std::round(fy_sc));
+                    const int iz_n = int(std::round(fz_sc));
+                    ix_lo = ix_n - 1;  ix_hi = ix_n + 1;
+                    iy_lo = iy_n - 1;  iy_hi = iy_n + 1;
+                    iz_lo = iz_n - 1;  iz_hi = iz_n + 1;
+                }
+                if (!(ix_lo < sc_box.smallEnd(0)
+                   || ix_hi > sc_box.bigEnd(0)
+                   || iy_lo < sc_box.smallEnd(1)
+                   || iy_hi > sc_box.bigEnd(1)
+                   || iz_lo < sc_box.smallEnd(2)
+                   || iz_hi > sc_box.bigEnd(2)))
                 {
-                    auto E_sc = ablastr::particles::doGatherVectorFieldNodal(
-                        ParticleReal(x), ParticleReal(y), ParticleReal(z),
-                        Ex_sc_arr, Ey_sc_arr, Ez_sc_arr,
-                        dxi_sc, lo_sc);
+                    amrex::GpuArray<Real, 3> E_sc{};
+                    if (sc_shape_order == 1) {
+                        auto E_cic = ablastr::particles::doGatherVectorFieldNodal(
+                            ParticleReal(x), ParticleReal(y), ParticleReal(z),
+                            Ex_sc_arr, Ey_sc_arr, Ez_sc_arr,
+                            dxi_sc, lo_sc);
+                        E_sc[0] = E_cic[0]; E_sc[1] = E_cic[1]; E_sc[2] = E_cic[2];
+                    } else {
+                        E_sc[0] = tsc_gather(Ex_sc_arr, x, y, z, dxi_sc, lo_sc);
+                        E_sc[1] = tsc_gather(Ey_sc_arr, x, y, z, dxi_sc, lo_sc);
+                        E_sc[2] = tsc_gather(Ez_sc_arr, x, y, z, dxi_sc, lo_sc);
+                    }
 
                     const Real w  = ptd.rdata(RealSoA::w)[ip];
                     const Real qw = q * w * kCoulombConstant;
 
-                    const Real wx_frac = fx_sc - std::floor(fx_sc);
-                    const Real wy_frac = fy_sc - std::floor(fy_sc);
-                    const Real wz_frac = fz_sc - std::floor(fz_sc);
-                    const Real tx = wx_frac * Real(sf_n);
-                    const Real ty = wy_frac * Real(sf_n);
-                    const Real tz = wz_frac * Real(sf_n);
+                    Real tx, ty, tz;
+                    if (sc_shape_order == 1) {
+                        const Real wx_frac = fx_sc - std::floor(fx_sc);
+                        const Real wy_frac = fy_sc - std::floor(fy_sc);
+                        const Real wz_frac = fz_sc - std::floor(fz_sc);
+                        tx = wx_frac * Real(sf_n);
+                        ty = wy_frac * Real(sf_n);
+                        tz = wz_frac * Real(sf_n);
+                    } else {
+                        const Real px = fx_sc - std::round(fx_sc);
+                        const Real py = fy_sc - std::round(fy_sc);
+                        const Real pz = fz_sc - std::round(fz_sc);
+                        tx = (px + Real(0.5)) * Real(sf_n);
+                        ty = (py + Real(0.5)) * Real(sf_n);
+                        tz = (pz + Real(0.5)) * Real(sf_n);
+                    }
                     int ix_t = int(tx); if (ix_t >= sf_n) ix_t = sf_n - 1;
                     int iy_t = int(ty); if (iy_t >= sf_n) iy_t = sf_n - 1;
                     int iz_t = int(tz); if (iz_t >= sf_n) iz_t = sf_n - 1;
@@ -802,7 +916,9 @@ void TrackingLoop::step_dkd (
                         E_self[cc] = v0 + (v1 - v0) * ax;
                     }
                     const Real kSelfForceFactor =
-                        m_self_force_disabled ? Real(0.0) : Real(0.62);
+                        m_self_force_disabled ? Real(0.0)
+                                              : (sc_shape_order == 2 ? Real(1.27)
+                                                                     : Real(0.62));
                     const Real qw_f = qw * kSelfForceFactor;
                     Real sc_boost;
                     if (m_sc_boost_bunch_mean) {

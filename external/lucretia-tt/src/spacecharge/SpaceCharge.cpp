@@ -20,6 +20,21 @@ namespace spacecharge {
 
 namespace {
 constexpr amrex::Real kSpeedOfLight = amrex::Real(299792458.0);
+
+// TSC (triangle-shape-cloud / quadratic spline) shape function weights.
+// Particle is at fractional position p in [-0.5, 0.5) relative to the
+// NEAREST node. Returns weights for the three surrounding nodes
+// (node-1, node, node+1) which sum to 1.
+AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
+void tsc_weights (amrex::Real p, amrex::Real& w_lo, amrex::Real& w_mid, amrex::Real& w_hi) noexcept
+{
+    using amrex::Real;
+    const Real half_minus_p = Real(0.5) - p;
+    const Real half_plus_p  = Real(0.5) + p;
+    w_lo  = Real(0.5) * half_minus_p * half_minus_p;
+    w_mid = Real(0.75) - p * p;
+    w_hi  = Real(0.5) * half_plus_p  * half_plus_p;
+}
 }
 
 
@@ -84,37 +99,84 @@ void SpaceCharge::build_self_force_lut ()
         m_self_force_lut[c].assign(total, 0.0);
     }
 
-    for (int ix = 0; ix <= N; ++ix) {
-        const Real wx_frac = Real(ix) / Real(N);
-        for (int iy = 0; iy <= N; ++iy) {
-            const Real wy_frac = Real(iy) / Real(N);
-            for (int iz = 0; iz <= N; ++iz) {
-                const Real wz_frac = Real(iz) / Real(N);
+    if (m_shape_order == 1) {
+        // CIC: 8-node cube. LUT indexed by wx_frac in [0,1) (fractional
+        // position within cell whose lo-corner is the deposit base node).
+        for (int ix = 0; ix <= N; ++ix) {
+            const Real wx_frac = Real(ix) / Real(N);
+            for (int iy = 0; iy <= N; ++iy) {
+                const Real wy_frac = Real(iy) / Real(N);
+                for (int iz = 0; iz <= N; ++iz) {
+                    const Real wz_frac = Real(iz) / Real(N);
 
-                Real Ex_unit = 0.0, Ey_unit = 0.0, Ez_unit = 0.0;
-                for (int a = 0; a < 2; ++a) {
-                    const Real wa   = (a == 0) ? (Real(1.0) - wx_frac) : wx_frac;
-                    const Real rx_v = (wx_frac - Real(a)) * dx;
-                    for (int b = 0; b < 2; ++b) {
-                        const Real wb   = (b == 0) ? (Real(1.0) - wy_frac) : wy_frac;
-                        const Real ry_v = (wy_frac - Real(b)) * dy;
-                        for (int cc = 0; cc < 2; ++cc) {
-                            const Real wc   = (cc == 0) ? (Real(1.0) - wz_frac) : wz_frac;
-                            const Real rz_v = (wz_frac - Real(cc)) * dz;
-                            const Real r2 = rx_v*rx_v + ry_v*ry_v + rz_v*rz_v + eps2;
-                            const Real r3_inv = Real(1.0) / (r2 * std::sqrt(r2));
-                            const Real factor = wa * wb * wc * r3_inv;
-                            Ex_unit += factor * rx_v;
-                            Ey_unit += factor * ry_v;
-                            Ez_unit += factor * rz_v;
+                    Real Ex_unit = 0.0, Ey_unit = 0.0, Ez_unit = 0.0;
+                    for (int a = 0; a < 2; ++a) {
+                        const Real wa   = (a == 0) ? (Real(1.0) - wx_frac) : wx_frac;
+                        const Real rx_v = (wx_frac - Real(a)) * dx;
+                        for (int b = 0; b < 2; ++b) {
+                            const Real wb   = (b == 0) ? (Real(1.0) - wy_frac) : wy_frac;
+                            const Real ry_v = (wy_frac - Real(b)) * dy;
+                            for (int cc = 0; cc < 2; ++cc) {
+                                const Real wc   = (cc == 0) ? (Real(1.0) - wz_frac) : wz_frac;
+                                const Real rz_v = (wz_frac - Real(cc)) * dz;
+                                const Real r2 = rx_v*rx_v + ry_v*ry_v + rz_v*rz_v + eps2;
+                                const Real r3_inv = Real(1.0) / (r2 * std::sqrt(r2));
+                                const Real factor = wa * wb * wc * r3_inv;
+                                Ex_unit += factor * rx_v;
+                                Ey_unit += factor * ry_v;
+                                Ez_unit += factor * rz_v;
+                            }
                         }
                     }
-                }
 
-                const int idx = ix * stride2 + iy * stride1 + iz;
-                m_self_force_lut[0][idx] = Ex_unit;
-                m_self_force_lut[1][idx] = Ey_unit;
-                m_self_force_lut[2][idx] = Ez_unit;
+                    const int idx = ix * stride2 + iy * stride1 + iz;
+                    m_self_force_lut[0][idx] = Ex_unit;
+                    m_self_force_lut[1][idx] = Ey_unit;
+                    m_self_force_lut[2][idx] = Ez_unit;
+                }
+            }
+        }
+    } else {
+        // TSC: 27-node cube around NEAREST node. LUT indexed by p in
+        // [-0.5, +0.5). The N+1 samples span [-0.5, +0.5] inclusive
+        // (LUT_idx = (p + 0.5) * N), so trilinear interp in TrackingLoop
+        // uses the same indexing pattern.
+        Real wxs[3], wys[3], wzs[3];
+        for (int ix = 0; ix <= N; ++ix) {
+            const Real px = Real(ix) / Real(N) - Real(0.5);
+            tsc_weights(px, wxs[0], wxs[1], wxs[2]);
+            for (int iy = 0; iy <= N; ++iy) {
+                const Real py = Real(iy) / Real(N) - Real(0.5);
+                tsc_weights(py, wys[0], wys[1], wys[2]);
+                for (int iz = 0; iz <= N; ++iz) {
+                    const Real pz = Real(iz) / Real(N) - Real(0.5);
+                    tsc_weights(pz, wzs[0], wzs[1], wzs[2]);
+
+                    Real Ex_unit = 0.0, Ey_unit = 0.0, Ez_unit = 0.0;
+                    for (int kk = 0; kk < 3; ++kk) {
+                        const Real wk   = wzs[kk];
+                        const Real rz_v = (pz - Real(kk - 1)) * dz;   // (kk-1) ∈ {-1,0,1}
+                        for (int jj = 0; jj < 3; ++jj) {
+                            const Real wj   = wys[jj];
+                            const Real ry_v = (py - Real(jj - 1)) * dy;
+                            for (int ii = 0; ii < 3; ++ii) {
+                                const Real wi   = wxs[ii];
+                                const Real rx_v = (px - Real(ii - 1)) * dx;
+                                const Real r2 = rx_v*rx_v + ry_v*ry_v + rz_v*rz_v + eps2;
+                                const Real r3_inv = Real(1.0) / (r2 * std::sqrt(r2));
+                                const Real factor = wi * wj * wk * r3_inv;
+                                Ex_unit += factor * rx_v;
+                                Ey_unit += factor * ry_v;
+                                Ez_unit += factor * rz_v;
+                            }
+                        }
+                    }
+
+                    const int idx = ix * stride2 + iy * stride1 + iz;
+                    m_self_force_lut[0][idx] = Ex_unit;
+                    m_self_force_lut[1][idx] = Ey_unit;
+                    m_self_force_lut[2][idx] = Ez_unit;
+                }
             }
         }
     }
@@ -425,47 +487,89 @@ void SpaceCharge::deposit_charge (particles::TimeBunch& bunch)
         const auto& ws = soa.GetRealData(RealSoA::w);
         const auto& alives = soa.GetIntData(IntSoA::alive);
 
-        for (int p = 0; p < np; ++p) {
-            // Skip dead particles (e.g. cathode re-cross kills): they
-            // remain in the bunch container for ID stability, but they
-            // don't contribute to the SC charge density.
-            if (alives[p] == 0) { continue; }
+        if (m_shape_order == 1) {
+            // CIC deposit (8-node cube, base = floor(fx))
+            for (int p = 0; p < np; ++p) {
+                if (alives[p] == 0) { continue; }
 
-            const Real fx = (xs[p] - lo[0]) * inv_dx;
-            const Real fy = (ys[p] - lo[1]) * inv_dy;
-            const Real fz = (zs[p] - lo[2]) * inv_dz;
-            const int  ix = int(std::floor(fx));
-            const int  iy = int(std::floor(fy));
-            const int  iz = int(std::floor(fz));
-            const Real wx1 = fx - Real(ix);   const Real wx0 = Real(1.0) - wx1;
-            const Real wy1 = fy - Real(iy);   const Real wy0 = Real(1.0) - wy1;
-            const Real wz1 = fz - Real(iz);   const Real wz0 = Real(1.0) - wz1;
-            const Real qw = qs[p] * ws[p] * inv_dV;
+                const Real fx = (xs[p] - lo[0]) * inv_dx;
+                const Real fy = (ys[p] - lo[1]) * inv_dy;
+                const Real fz = (zs[p] - lo[2]) * inv_dz;
+                const int  ix = int(std::floor(fx));
+                const int  iy = int(std::floor(fy));
+                const int  iz = int(std::floor(fz));
+                const Real wx1 = fx - Real(ix);   const Real wx0 = Real(1.0) - wx1;
+                const Real wy1 = fy - Real(iy);   const Real wy0 = Real(1.0) - wy1;
+                const Real wz1 = fz - Real(iz);   const Real wz0 = Real(1.0) - wz1;
+                const Real qw = qs[p] * ws[p] * inv_dV;
 
-            // Direct deposit (real charge at z_p). Image charges, when
-            // enabled, are NOT deposited here -- they're computed via a
-            // second IGF solve with a z-shifted Green function (see
-            // SpaceCharge::solve).
-            //
-            // Particles outside m_rho's footprint don't contribute to SC.
-            // (They still get tracked through the lattice, just without
-            // SC defocus from this solve. This matches IMPACT-T's
-            // behavior of dropping particles from SC outside the mesh.)
-            if (ix     >= glo[0] && ix + 1 <= ghi[0] &&
-                iy     >= glo[1] && iy + 1 <= ghi[1] &&
-                iz     >= glo[2] && iz + 1 <= ghi[2])
-            {
-                rho_arr(ix  , iy  , iz  ) += qw * wx0 * wy0 * wz0;
-                rho_arr(ix+1, iy  , iz  ) += qw * wx1 * wy0 * wz0;
-                rho_arr(ix  , iy+1, iz  ) += qw * wx0 * wy1 * wz0;
-                rho_arr(ix+1, iy+1, iz  ) += qw * wx1 * wy1 * wz0;
-                rho_arr(ix  , iy  , iz+1) += qw * wx0 * wy0 * wz1;
-                rho_arr(ix+1, iy  , iz+1) += qw * wx1 * wy0 * wz1;
-                rho_arr(ix  , iy+1, iz+1) += qw * wx0 * wy1 * wz1;
-                rho_arr(ix+1, iy+1, iz+1) += qw * wx1 * wy1 * wz1;
-                ++total_deposited;
-            } else {
-                ++total_outside;
+                // Direct deposit (real charge at z_p). Image charges, when
+                // enabled, are NOT deposited here -- they're computed via a
+                // second IGF solve with a z-shifted Green function (see
+                // SpaceCharge::solve).
+                //
+                // Particles outside m_rho's footprint don't contribute to SC.
+                // (They still get tracked through the lattice, just without
+                // SC defocus from this solve. This matches IMPACT-T's
+                // behavior of dropping particles from SC outside the mesh.)
+                if (ix     >= glo[0] && ix + 1 <= ghi[0] &&
+                    iy     >= glo[1] && iy + 1 <= ghi[1] &&
+                    iz     >= glo[2] && iz + 1 <= ghi[2])
+                {
+                    rho_arr(ix  , iy  , iz  ) += qw * wx0 * wy0 * wz0;
+                    rho_arr(ix+1, iy  , iz  ) += qw * wx1 * wy0 * wz0;
+                    rho_arr(ix  , iy+1, iz  ) += qw * wx0 * wy1 * wz0;
+                    rho_arr(ix+1, iy+1, iz  ) += qw * wx1 * wy1 * wz0;
+                    rho_arr(ix  , iy  , iz+1) += qw * wx0 * wy0 * wz1;
+                    rho_arr(ix+1, iy  , iz+1) += qw * wx1 * wy0 * wz1;
+                    rho_arr(ix  , iy+1, iz+1) += qw * wx0 * wy1 * wz1;
+                    rho_arr(ix+1, iy+1, iz+1) += qw * wx1 * wy1 * wz1;
+                    ++total_deposited;
+                } else {
+                    ++total_outside;
+                }
+            }
+        } else {
+            // TSC deposit (27-node cube, base = round(fx) - 1)
+            Real wx[3], wy[3], wz[3];
+            for (int p = 0; p < np; ++p) {
+                if (alives[p] == 0) { continue; }
+
+                const Real fx = (xs[p] - lo[0]) * inv_dx;
+                const Real fy = (ys[p] - lo[1]) * inv_dy;
+                const Real fz = (zs[p] - lo[2]) * inv_dz;
+                const int  ix = int(std::round(fx));   // nearest NODE
+                const int  iy = int(std::round(fy));
+                const int  iz = int(std::round(fz));
+                const Real px = fx - Real(ix);          // [-0.5, 0.5)
+                const Real py = fy - Real(iy);
+                const Real pz = fz - Real(iz);
+                tsc_weights(px, wx[0], wx[1], wx[2]);
+                tsc_weights(py, wy[0], wy[1], wy[2]);
+                tsc_weights(pz, wz[0], wz[1], wz[2]);
+                const Real qw = qs[p] * ws[p] * inv_dV;
+
+                // 27-node footprint fits in [ix-1, ix+1] etc.
+                if (ix - 1 >= glo[0] && ix + 1 <= ghi[0] &&
+                    iy - 1 >= glo[1] && iy + 1 <= ghi[1] &&
+                    iz - 1 >= glo[2] && iz + 1 <= ghi[2])
+                {
+                    for (int kk = 0; kk < 3; ++kk) {
+                        const Real wzz = wz[kk];
+                        const int  zk  = iz - 1 + kk;
+                        for (int jj = 0; jj < 3; ++jj) {
+                            const Real wyy = wy[jj];
+                            const int  yj  = iy - 1 + jj;
+                            const Real wyz = wzz * wyy;
+                            for (int ii = 0; ii < 3; ++ii) {
+                                rho_arr(ix - 1 + ii, yj, zk) += qw * wx[ii] * wyz;
+                            }
+                        }
+                    }
+                    ++total_deposited;
+                } else {
+                    ++total_outside;
+                }
             }
         }
     }

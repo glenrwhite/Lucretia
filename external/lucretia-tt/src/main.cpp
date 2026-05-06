@@ -709,6 +709,8 @@ int main (int argc, char* argv[])
             pp_sc.query("rho_smooth_passes",   sc_rho_smooth_passes);
             int sc_hybrid_z = 0;
             pp_sc.query("hybrid_z_adaptive",   sc_hybrid_z);
+            int sc_shape_order = 1;
+            pp_sc.query("shape_order",         sc_shape_order);
             if (sc_enabled != 0) {
                 sc = std::make_unique<lucretiatt::spacecharge::SpaceCharge>(
                     geom, ba, dm);
@@ -728,6 +730,9 @@ int main (int argc, char* argv[])
                 if (sc_rho_smooth_passes > 0) {
                     sc->set_rho_smooth_passes(sc_rho_smooth_passes);
                 }
+                if (sc_shape_order != 1) {
+                    sc->set_shape_order(sc_shape_order);
+                }
                 amrex::Print() << "Space charge: enabled"
                                << (sc_exact_range ? "  (ImpactT-exact-range mesh)"
                                                   : (sc_hybrid_z   ? "  (hybrid: static-xy + adaptive-z)"
@@ -737,6 +742,10 @@ int main (int argc, char* argv[])
                                << (sc_image_enabled ? "  (cathode image charges)" : "");
                 if (sc_rho_smooth_passes > 0) {
                     amrex::Print() << "  (rho-smooth " << sc_rho_smooth_passes << " pass)";
+                }
+                if (sc_shape_order != 1) {
+                    amrex::Print() << "  (shape order=" << sc_shape_order
+                                   << " " << (sc_shape_order == 2 ? "TSC" : "?") << ")";
                 }
                 amrex::Print() << "\n";
             }
