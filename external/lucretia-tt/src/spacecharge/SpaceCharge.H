@@ -12,6 +12,7 @@
 #include <AMReX_REAL.H>
 
 #include <array>
+#include <cmath>
 #include <vector>
 
 
@@ -143,6 +144,11 @@ public:
 
     /** Last beta_z used in the solve. */
     amrex::Real last_beta_z () const noexcept { return m_last_beta_z; }
+    /** Last bunch-mean gamma used to stretch the z mesh in the solve. */
+    amrex::Real last_gamma  () const noexcept
+    { const amrex::Real b = m_last_beta_z;
+      const amrex::Real ig = std::sqrt(amrex::Real(1.0) - b*b);
+      return (ig > amrex::Real(0.0)) ? amrex::Real(1.0)/ig : amrex::Real(1.0); }
     /** Number of times the mesh has been recentered (or resized) since construction. */
     int n_recenters () const noexcept { return m_n_recenters; }
     /** Number of times the self-force LUT has been rebuilt since construction. */

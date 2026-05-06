@@ -120,6 +120,19 @@ public:
     void set_particle_phase (bool on) noexcept { m_use_particle_phase = on; }
     bool particle_phase_enabled () const noexcept { return m_use_particle_phase; }
 
+    /** Use BUNCH-MEAN gamma instead of per-particle gamma for the SC
+     *  Lorentz boost-back factor (1/gamma^2). Default true (matches the
+     *  IGF solver's stretched-z mesh convention: the solver stretches by
+     *  bunch-mean gamma, so the boost-back must use the same gamma).
+     *
+     *  Setting false reverts to per-particle gamma — formally the
+     *  "infinite-bin energy-binning limit" but with only a SINGLE solve
+     *  it's an inconsistent approximation that empirically over-amplifies
+     *  the head/tail energy spread of chirped bunches in L0A acceleration
+     *  (sigma_gamma 4× too big at LCLS L0A exit). */
+    void set_sc_boost_bunch_mean (bool on) noexcept { m_sc_boost_bunch_mean = on; }
+    bool sc_boost_bunch_mean_enabled () const noexcept { return m_sc_boost_bunch_mean; }
+
     /** Use ImpactT-style drift-kick-drift integrator with first-order
      *  emission model. Replaces the default kick-drift scheme. The DKD
      *  step is:
@@ -162,6 +175,7 @@ private:
     bool        m_use_midstep_field       = false;
     bool        m_use_particle_phase      = false;
     bool        m_use_dkd_integrator      = false;
+    bool        m_sc_boost_bunch_mean     = true;   // default: use sc->last_gamma() for 1/gamma^2 boost
 };
 
 } // namespace tracking

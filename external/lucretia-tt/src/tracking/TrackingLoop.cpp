@@ -476,8 +476,14 @@ void TrackingLoop::step (
                 // slice emittance with mesh-noise spread.
                 constexpr Real c     = kSpeedOfLight;
                 constexpr Real inv_c2 = Real(1.0) / (c * c);
-                const Real u2_p     = ux*ux + uy*uy + uz*uz;
-                const Real sc_boost = Real(1.0) / (Real(1.0) + u2_p * inv_c2);   // 1/gamma^2
+                Real sc_boost;
+                if (m_sc_boost_bunch_mean) {
+                    const Real g_b = sc->last_gamma();
+                    sc_boost = Real(1.0) / (g_b * g_b);
+                } else {
+                    const Real u2_p = ux*ux + uy*uy + uz*uz;
+                    sc_boost = Real(1.0) / (Real(1.0) + u2_p * inv_c2);
+                }
                 Ex += sc_boost * (E_sc[0] - qw_f * E_self[0]);
                 Ey += sc_boost * (E_sc[1] - qw_f * E_self[1]);
                 if (!slice_sc) {
@@ -796,9 +802,14 @@ void TrackingLoop::step_dkd (
                     }
                     constexpr Real kSelfForceFactor = Real(0.62);
                     const Real qw_f = qw * kSelfForceFactor;
-                    const Real u2_p     = ux*ux + uy*uy + uz*uz;
-                    const Real sc_boost = Real(1.0)
-                        / (Real(1.0) + u2_p * inv_c2);
+                    Real sc_boost;
+                    if (m_sc_boost_bunch_mean) {
+                        const Real g_b = sc->last_gamma();
+                        sc_boost = Real(1.0) / (g_b * g_b);
+                    } else {
+                        const Real u2_p = ux*ux + uy*uy + uz*uz;
+                        sc_boost = Real(1.0) / (Real(1.0) + u2_p * inv_c2);
+                    }
                     Ex += sc_boost * (E_sc[0] - qw_f * E_self[0]);
                     Ey += sc_boost * (E_sc[1] - qw_f * E_self[1]);
                     if (!slice_sc) {
