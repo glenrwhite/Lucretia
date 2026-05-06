@@ -26,7 +26,8 @@ properties
     dt           = 1e-12                                         % s, initial dt
     n_steps      = 100
     dt_change_t  = []                                            % s, time at which to switch dt (empty = no switch)
-    dt_after     = []                                            % s, dt to use after dt_change_t (empty = same as dt)
+    dt_change_z  = []                                            % m, lab z at which to switch dt when bunch centroid crosses (mirrors ImpactT type-(-4) element)
+    dt_after     = []                                            % s, dt to use after dt_change_t / dt_change_z (empty = same as dt)
     t_start      = []                                            % s, initial sim time (empty = 0)
     behind_cathode_z        = []                                 % m, ImpactT-style behind-cathode drift turns ON below this z
     behind_cathode_betazini = []                                 % dimensionless, universal v/c for behind-cathode drift

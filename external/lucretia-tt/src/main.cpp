@@ -725,6 +725,7 @@ int main (int argc, char* argv[])
         amrex::Real dt           = 1.0e-12;
         int         n_steps      = 100;
         amrex::Real dt_change_t  = std::numeric_limits<amrex::Real>::infinity();
+        amrex::Real dt_change_z  = std::numeric_limits<amrex::Real>::infinity();
         amrex::Real dt_after     = -1.0;
         amrex::Real t_start      = 0.0;
         amrex::Real behind_cathode_z        = std::numeric_limits<amrex::Real>::lowest();
@@ -741,6 +742,7 @@ int main (int argc, char* argv[])
             pp_track.query("dt", dt);
             pp_track.query("n_steps", n_steps);
             pp_track.query("dt_change_t", dt_change_t);
+            pp_track.query("dt_change_z", dt_change_z);
             pp_track.query("dt_after",    dt_after);
             pp_track.query("t_start",     t_start);
             pp_track.query("behind_cathode_z",        behind_cathode_z);
@@ -884,13 +886,48 @@ int main (int argc, char* argv[])
                        << " step(s)\n";
 
         for (int s = 1; s <= n_steps; ++s) {
-            const amrex::Real cur_dt = (t >= dt_change_t) ? dt_after : dt;
+            // Switch dt either at a wall-clock time (dt_change_t) OR when the
+            // bunch z-centroid passes a lab z position (dt_change_z). The
+            // z-trigger mirrors ImpactT's `change_timestep_1` element, which
+            // fires when the bunch reaches a specified z (not at a fixed t).
+            // Either trigger latches `switched` permanently.
+            if (!switched && dt_change_z < std::numeric_limits<amrex::Real>::infinity()) {
+                // Compute bunch-mean z over alive particles (single-rank
+                // sweep; cheap because we only do it until the latch fires).
+                using namespace amrex;
+                using namespace lucretiatt::particles;
+                using PIter = ParIterSoA<RealSoA::nattribs, IntSoA::nattribs>;
+                Real sum_z = 0.0;  long n_alive = 0;
+                for (PIter pti(bunch, 0); pti.isValid(); ++pti) {
+                    auto& soa = pti.GetStructOfArrays();
+                    const int np = pti.numParticles();
+                    const auto& zs     = soa.GetRealData(RealSoA::z);
+                    const auto& alives = soa.GetIntData(IntSoA::alive);
+                    for (int i = 0; i < np; ++i) {
+                        if (alives[i] == 0) continue;
+                        sum_z += zs[i];
+                        ++n_alive;
+                    }
+                }
+                ParallelDescriptor::ReduceRealSum(sum_z);
+                ParallelDescriptor::ReduceLongSum(n_alive);
+                if (n_alive > 0 && (sum_z / Real(n_alive)) >= dt_change_z) {
+                    amrex::Print() << "[tracking] switched dt: "
+                                   << dt << " -> " << dt_after
+                                   << " s at z_centroid = "
+                                   << (sum_z / Real(n_alive)) << " m"
+                                   << " (target z = " << dt_change_z << " m, t = "
+                                   << t << " s, step " << s << ")\n";
+                    switched = true;
+                }
+            }
             if (!switched && t >= dt_change_t) {
                 amrex::Print() << "[tracking] switched dt: "
                                << dt << " -> " << dt_after
                                << " s at t = " << t << " s (step " << s << ")\n";
                 switched = true;
             }
+            const amrex::Real cur_dt = switched ? dt_after : dt;
             tracker.step(bunch, lattice, t, cur_dt, sc.get(), slice_sc.get());
             t += cur_dt;
             maybe_dump(writer.get(), lattice, bunch, s, t);

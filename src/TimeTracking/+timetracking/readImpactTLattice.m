@@ -368,13 +368,14 @@ if ~isnan(z_stop)
 end
 
 if isempty(dt_schedule)
-    tracking.dt        = max(dt0, 0.5e-12);
+    tracking.dt          = max(dt0, 0.5e-12);
     % Steps to reach z_target at average c (relativistic post-cathode).
-    c_light            = 299792458.0;
-    n_to_target        = ceil((z_target / (0.5 * c_light)) / tracking.dt);
-    tracking.n_steps   = max(1000, n_to_target + 200);
-    tracking.dt_change = [];
-    tracking.dt_after  = [];
+    c_light              = 299792458.0;
+    n_to_target          = ceil((z_target / (0.5 * c_light)) / tracking.dt);
+    tracking.n_steps     = max(1000, n_to_target + 200);
+    tracking.dt_change   = [];
+    tracking.dt_change_z = [];
+    tracking.dt_after    = [];
 else
     tracking.dt = dt0;
     if numel(dt_schedule) > 1
@@ -387,8 +388,12 @@ else
     c_light   = 299792458.0;
     beta_avg  = 0.5;                          % cathode -> gun exit average
     t_to_z    = z_switch / (beta_avg * c_light);
-    tracking.dt_change = Tini + t_to_z;
-    tracking.dt_after  = dt_after;
+    % Expose BOTH triggers; the caller picks one. dt_change_z fires when
+    % the bunch z-centroid passes z_switch (mirrors ImpactT exactly);
+    % dt_change is the rough wall-clock equivalent for backward-compat.
+    tracking.dt_change   = Tini + t_to_z;
+    tracking.dt_change_z = z_switch;
+    tracking.dt_after    = dt_after;
     % n_steps suggestion: enough small-dt steps to reach the switch,
     % plus enough big-dt steps to reach z_target at c after that.
     n_pre  = ceil(t_to_z / tracking.dt);

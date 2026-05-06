@@ -21,9 +21,13 @@ p.addParameter('n_macros',    50000, @isnumeric);
 p.addParameter('n_steps',     9000,  @isnumeric);   % ~16.6 ns to match ImpactT end
 p.addParameter('dt_initial',  0.3e-12, @isnumeric);
 p.addParameter('dt_after',    4e-12,  @isnumeric);
-p.addParameter('dt_change_t', 1.5e-9, @isnumeric);
+p.addParameter('dt_change_z', [],     @(x) isempty(x) || isnumeric(x));   % m: z at which dt switches (overrides dt_change_t; matches ImpactT type-(-4))
+p.addParameter('dt_change_t', [],     @(x) isempty(x) || isnumeric(x));   % s: wall-clock fallback if dt_change_z is empty
 p.addParameter('n_slice',     30,    @isnumeric);
 p.addParameter('tag',         'bench_full', @(x) ischar(x) || isstring(x));
+p.addParameter('sc_mode',     'full', @(x) ischar(x) || isstring(x));   % 'full' (mesh+slice), 'mesh', 'slice', 'off'
+p.addParameter('sc_static_xrad', [],   @(x) isempty(x) || isnumeric(x));  % m: if set, use STATIC mesh ±xrad (matching ImpactT) instead of adaptive
+p.addParameter('sc_pad_factor',  5.0,  @isnumeric);                       % adaptive: half-extent = pad_factor * sigma
 p.parse(varargin{:});
 opts = p.Results;
 impactt_dir = char(opts.impactt_dir);
@@ -81,7 +85,17 @@ tt.geom_ncell = geom_imp.ncell(:).';
 % Tracking schedule
 tt.t_start     = Tini;
 tt.dt          = opts.dt_initial;
-tt.dt_change_t = opts.dt_change_t;
+% Prefer z-trigger (matches ImpactT exactly); fall back to t-trigger or
+% to whatever readImpactTLattice extracted from the type-(-4) element.
+if ~isempty(opts.dt_change_z)
+    tt.dt_change_z = opts.dt_change_z;
+elseif ~isempty(opts.dt_change_t)
+    tt.dt_change_t = opts.dt_change_t;
+elseif isfield(tracking_imp, 'dt_change_z') && ~isempty(tracking_imp.dt_change_z)
+    tt.dt_change_z = tracking_imp.dt_change_z;
+elseif isfield(tracking_imp, 'dt_change') && ~isempty(tracking_imp.dt_change)
+    tt.dt_change_t = tracking_imp.dt_change;
+end
 tt.dt_after    = opts.dt_after;
 tt.n_steps     = opts.n_steps;
 
@@ -89,13 +103,30 @@ tt.n_steps     = opts.n_steps;
 tt.behind_cathode_z        = 0.0;
 tt.behind_cathode_betazini = sqrt(1.0 - 1.0/(1.0 + Bkenergy/Bmass)^2);
 
-% Space charge: full 3D adaptive + 1D slice longitudinal + cathode image
-tt.enable_space_charge = true;
-tt.sc_adaptive         = true;
-tt.enable_slice_sc     = true;
-tt.sc_image_plane      = true;
+% Space charge: configurable. 'full' = 3D adaptive + 1D slice + cathode image.
+sc_mode = lower(char(opts.sc_mode));
+tt.enable_space_charge = ismember(sc_mode, {'full', 'mesh'});
+tt.sc_adaptive         = ismember(sc_mode, {'full', 'mesh'});
+tt.enable_slice_sc     = ismember(sc_mode, {'full', 'slice'});
+tt.sc_image_plane      = ismember(sc_mode, {'full', 'mesh'});
 tt.sc_image_plane_z    = 0.0;
 tt.sc_image_cutoff     = 0.05;
+% Optional: STATIC SC mesh ±xrad transverse (ImpactT convention) instead
+% of per-step adaptive sizing. Reduces LUT-noise by giving more particles
+% per cell at the cost of mesh resolution.
+if ~isempty(opts.sc_static_xrad)
+    xrad = opts.sc_static_xrad;
+    z_half = 0.005;  % co-moving z half-span (5 mm = ~4 sigma_z at L0A exit)
+    tt.geom_lo = [-xrad, -xrad, -z_half];
+    tt.geom_hi = [ xrad,  xrad,  z_half];
+    tt.sc_adaptive = false;
+    tt.sc_comoving = true;   % co-move in z; mesh size stays fixed at 2*z_half
+    fprintf('  STATIC mesh: xrad=%.3f m  (cell_xy=%.4f mm, cell_z=%.4f mm)\n', ...
+        xrad, 2*xrad/tt.geom_ncell(1)*1e3, 2*z_half/tt.geom_ncell(3)*1e3);
+end
+tt.sc_pad_factor = opts.sc_pad_factor;
+fprintf('  sc_mode = %s (mesh=%d, slice=%d, image=%d, adaptive=%d)\n', sc_mode, ...
+    tt.enable_space_charge, tt.enable_slice_sc, tt.sc_image_plane, tt.sc_adaptive);
 
 tt.work_dir = ['/tmp/bench_full_' char(opts.tag)];
 if exist(tt.work_dir, 'dir'), rmdir(tt.work_dir, 's'); end

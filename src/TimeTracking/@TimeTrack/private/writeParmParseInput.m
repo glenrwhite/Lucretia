@@ -95,6 +95,9 @@ fprintf(f, 'tracking.n_steps = %d\n',    obj.n_steps);
 if isprop(obj, 'dt_change_t') && ~isempty(obj.dt_change_t)
     fprintf(f, 'tracking.dt_change_t = %.10g\n', obj.dt_change_t);
 end
+if isprop(obj, 'dt_change_z') && ~isempty(obj.dt_change_z)
+    fprintf(f, 'tracking.dt_change_z = %.10g\n', obj.dt_change_z);
+end
 if isprop(obj, 'dt_after') && ~isempty(obj.dt_after)
     fprintf(f, 'tracking.dt_after    = %.10g\n', obj.dt_after);
 end
