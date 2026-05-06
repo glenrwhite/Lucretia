@@ -36,6 +36,7 @@ properties
     use_midstep_field       = []                                 % logical: gather external field at midstep particle position (subsumed by use_dkd_integrator when set)
     use_particle_phase      = []                                 % logical: per-particle phase t_eff = z_particle/c (test mode for chirp investigation)
     use_dkd_integrator      = true                               % logical: ImpactT-style drift-kick-drift + first-order emission (default ON; cleanest cross-code calibration)
+    disable_self_force      = []                                 % logical (diagnostic): skip the SC self-force LUT subtraction
     trace_file              = ''                                 % path: per-step bunch-mean diagnostics (CSV) for cross-code comparison
     trace_every             = 1                                  % step interval for trace rows (1 = every step)
     geom_lo    = [-0.05, -0.05,  0.0]                            % m

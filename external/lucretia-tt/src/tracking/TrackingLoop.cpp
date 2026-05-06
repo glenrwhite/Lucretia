@@ -459,7 +459,8 @@ void TrackingLoop::step (
                 // Empirical fudge factor: Coulomb-of-point-charges over-
                 // corrects vs the smeared IGF cloud. Calibrated on the
                 // uniform-sphere test (1000 macros, R = 1 mm).
-                constexpr Real kSelfForceFactor = Real(0.62);
+                const Real kSelfForceFactor =
+                    m_self_force_disabled ? Real(0.0) : Real(0.62);
                 const Real qw_f = qw * kSelfForceFactor;
                 // sc_boost = 1/gamma = sqrt(1 - beta^2) — see comment at
                 // SC solve. Both the gathered IGF field and the self-force

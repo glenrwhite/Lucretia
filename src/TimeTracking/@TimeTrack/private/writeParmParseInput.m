@@ -124,6 +124,9 @@ end
 if isprop(obj, 'use_dkd_integrator') && ~isempty(obj.use_dkd_integrator) && obj.use_dkd_integrator
     fprintf(f, 'tracking.use_dkd_integrator = 1\n');
 end
+if isprop(obj, 'disable_self_force') && ~isempty(obj.disable_self_force) && obj.disable_self_force
+    fprintf(f, 'tracking.disable_self_force = 1\n');
+end
 if isprop(obj, 'trace_file') && ~isempty(obj.trace_file)
     fprintf(f, 'tracking.trace_file         = %s\n', char(obj.trace_file));
     if isprop(obj, 'trace_every') && ~isempty(obj.trace_every)

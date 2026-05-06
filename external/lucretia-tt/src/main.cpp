@@ -761,6 +761,7 @@ int main (int argc, char* argv[])
         int         use_midstep_field       = 0;
         int         use_particle_phase      = 0;
         int         use_dkd_integrator      = 0;
+        int         disable_self_force      = 0;
         std::string trace_file;
         int         trace_every             = 1;
         {
@@ -778,6 +779,7 @@ int main (int argc, char* argv[])
             pp_track.query("use_midstep_field",       use_midstep_field);
             pp_track.query("use_particle_phase",      use_particle_phase);
             pp_track.query("use_dkd_integrator",      use_dkd_integrator);
+            pp_track.query("disable_self_force",      disable_self_force);
             pp_track.query("trace_file",              trace_file);
             pp_track.query("trace_every",             trace_every);
         }
@@ -812,6 +814,11 @@ int main (int argc, char* argv[])
             tracker.set_dkd_integrator(true);
             amrex::Print() << "[tracking] ImpactT-style drift-kick-drift "
                            << "integrator + first-order emission enabled\n";
+        }
+        if (disable_self_force != 0) {
+            tracker.set_self_force_disabled(true);
+            amrex::Print() << "[tracking] SC self-force LUT subtraction DISABLED "
+                           << "(diagnostic — kSelfForceFactor effectively 0)\n";
         }
         amrex::Real t = t_start;
         bool        switched = false;

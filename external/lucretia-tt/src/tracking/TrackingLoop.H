@@ -176,6 +176,10 @@ private:
     bool        m_use_particle_phase      = false;
     bool        m_use_dkd_integrator      = false;
     bool        m_sc_boost_bunch_mean     = true;   // default: use sc->last_gamma() for 1/gamma^2 boost
+    bool        m_self_force_disabled     = false;  // diagnostic: skip the self-force LUT subtraction
+public:
+    void set_self_force_disabled (bool on) noexcept { m_self_force_disabled = on; }
+    bool self_force_disabled () const noexcept { return m_self_force_disabled; }
 };
 
 } // namespace tracking
