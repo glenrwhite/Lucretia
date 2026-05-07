@@ -705,6 +705,8 @@ int main (int argc, char* argv[])
             pp_sc.query("slice_n",             slice_n);
             pp_sc.query("slice_radius_factor", slice_radius_factor);
             pp_sc.query("slice_gamma_off",     slice_gamma_off);
+            int slice_profile = 0;
+            pp_sc.query("slice_profile",       slice_profile);
             int sc_rho_smooth_passes = 0;
             pp_sc.query("rho_smooth_passes",   sc_rho_smooth_passes);
             int sc_hybrid_z = 0;
@@ -753,8 +755,10 @@ int main (int argc, char* argv[])
                 slice_sc = std::make_unique<lucretiatt::spacecharge::SpaceChargeSlice>(
                     slice_n, slice_radius_factor);
                 slice_sc->set_gamma_off(slice_gamma_off);
+                slice_sc->set_profile(slice_profile);
                 amrex::Print() << "1D longitudinal slice SC: enabled  (n_slices="
                                << slice_n
+                               << ",  profile=" << (slice_profile == 1 ? "Gaussian-disk" : "uniform-disk")
                                << ",  bunch_radius_factor=" << slice_radius_factor
                                << " * sigma_xy"
                                << (std::isfinite(slice_gamma_off)

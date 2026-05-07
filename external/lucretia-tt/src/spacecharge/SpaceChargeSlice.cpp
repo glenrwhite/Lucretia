@@ -198,19 +198,24 @@ void SpaceChargeSlice::compute (particles::TimeBunch& bunch)
 
     // ---- Pass 3: E_z at each slice centre via disk-stack sum ----
     //
-    // Standard 1D longitudinal SC kernel for a uniform-radius round
-    // bunch (Lawson-Greenstein-ish), Lorentz-boosted via mean gamma:
-    //   E_z(z_i) = (1/(2 pi eps0 a^2)) * Σ_j Q_j * sign(d) *
-    //                 (1 - g|d| / sqrt(g²d² + a²))
-    // d = z_i - z_j;  g = m_gamma. The formula is the rest-frame
-    // disk-stack with the substitution z_rest = g * z_lab.
+    // Two profile modes (m_profile):
+    //   0 = uniform disk (Lawson; default; backward compat):
+    //       E_z(d) = (1/(2π eps0 a²)) * Σ_j Q_j * sign(d) *
+    //                  (1 - γ|d| / sqrt(γ²d² + a²))
+    //   1 = Gaussian disk (analytic on-axis field of 2D Gaussian sheet):
+    //       E_z(d) = (1/(4π eps0 σ²)) * Σ_j Q_j * sign(d) * Φ(γ|d|/σ)
+    //       Φ(s)  = 1 - sqrt(π/2) * s * exp(s²/2) * erfc(s/sqrt(2))
+    //       Has correct near-field (Φ(0)=1) and far-field (Φ→1/s²) limits.
+    //       Uses sigma_xy directly (no radius_factor for Gaussian mode).
     //
-    // For self (i==j) the "1 - g|d|/..." factor → 1, but sign(d) is 0
-    // by our convention (regularize with sign(0)=0), so the diagonal
-    // contributes nothing. Physically, an infinitely thin disk
-    // contributes 0 to its own on-axis field.
-    const Real prefactor = Real(1.0) / (Real(2.0) * kPi * kEps0 * m_a * m_a);
-    const Real g2        = m_gamma * m_gamma;
+    // For self (i==j) sign(d)=0 → diagonal contributes nothing.
+    const Real g2 = m_gamma * m_gamma;
+    const Real sigma_xy_g = (m_a > Real(0.0) ? m_a / m_radius_factor : Real(1.0e-9));
+    const Real prefactor_uniform  = Real(1.0) / (Real(2.0) * kPi * kEps0 * m_a * m_a);
+    const Real prefactor_gauss    = Real(1.0) / (Real(4.0) * kPi * kEps0 * sigma_xy_g * sigma_xy_g);
+    const Real inv_sigma_g        = Real(1.0) / sigma_xy_g;
+    constexpr Real kSqrtPiOver2   = Real(1.2533141373155001);   // sqrt(π/2)
+    constexpr Real kInvSqrt2      = Real(0.7071067811865476);   // 1/sqrt(2)
 
 #ifdef AMREX_USE_OMP
     #pragma omp parallel for schedule(static) if (m_n_slices > 32)
@@ -223,13 +228,32 @@ void SpaceChargeSlice::compute (particles::TimeBunch& bunch)
             if (Qj == Real(0.0)) { continue; }
             const Real z_j = m_z_lo + (Real(j) + Real(0.5)) * m_dz;
             const Real d   = z_i - z_j;
-            if (d == Real(0.0)) { continue; }            // self → 0
-            const Real ad   = std::abs(d);
-            const Real root = std::sqrt(g2 * ad * ad + m_a * m_a);
-            const Real factor = (Real(1.0) - m_gamma * ad / root);
-            // sign(d) * factor = (d>0 ? +1 : -1) * factor
+            if (d == Real(0.0)) { continue; }
+            const Real ad = std::abs(d);
+            Real factor;
+            if (m_profile == 1) {
+                // Gaussian: Φ(s) = 1 - sqrt(π/2)*s*exp(s²/2)*erfc(s/sqrt(2))
+                // Use s = γ|d|/σ.
+                const Real s   = m_gamma * ad * inv_sigma_g;
+                const Real s2  = s * s;
+                // For large s, exp(s²/2)*erfc(s/sqrt(2)) underflows-overflows;
+                // use asymptotic Φ(s) ≈ 1/s² - 3/s^4 for s > 6.
+                if (s > Real(6.0)) {
+                    const Real inv_s2 = Real(1.0) / s2;
+                    factor = inv_s2 * (Real(1.0) - Real(3.0) * inv_s2);
+                } else {
+                    const Real ssh = s * kInvSqrt2;
+                    factor = Real(1.0) - kSqrtPiOver2 * s * std::exp(Real(0.5) * s2)
+                                                       * std::erfc(ssh);
+                }
+            } else {
+                // Uniform disk
+                const Real root = std::sqrt(g2 * ad * ad + m_a * m_a);
+                factor = Real(1.0) - m_gamma * ad / root;
+            }
             Ez += Qj * (d > Real(0.0) ? factor : -factor);
         }
+        const Real prefactor = (m_profile == 1) ? prefactor_gauss : prefactor_uniform;
         m_Ez_slice[i] = prefactor * Ez;
     }
 }

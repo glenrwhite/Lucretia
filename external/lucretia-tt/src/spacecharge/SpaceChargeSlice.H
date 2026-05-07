@@ -56,6 +56,20 @@ public:
     void set_gamma_off (amrex::Real gamma_off) noexcept { m_gamma_off = gamma_off; }
     amrex::Real gamma_off () const noexcept { return m_gamma_off; }
 
+    /** Slice transverse profile for the on-axis E_z formula:
+     *    0 = uniform disk (default; current Lawson disk-stack with a=
+     *        radius_factor*sigma_xy):
+     *           E_z(d) = (Q/(2π eps0 a^2)) * sign(d) * (1 - γ|d|/sqrt(γ²d²+a²))
+     *    1 = Gaussian disk (uses sigma_xy directly; no radius_factor):
+     *           E_z(d) = (Q/(4π eps0 σ²)) * sign(d) * Φ(γ|d|/σ)
+     *           Φ(s)  = 1 - sqrt(π/2)*s*exp(s²/2)*erfc(s/sqrt(2))
+     *    Φ has the correct near-field (Φ(0)=1) and far-field
+     *    (Φ→1/s² → Coulomb) limits and is the analytic on-axis field
+     *    for a 2D Gaussian charge sheet of total charge Q with transverse
+     *    rms σ. Default 0 for backward compatibility. */
+    void set_profile (int profile) noexcept { m_profile = (profile == 1) ? 1 : 0; }
+    int  profile     () const noexcept { return m_profile; }
+
     /** Re-bin charge into z-slices and recompute E_z(z_slice).
      *
      *  - Computes bunch z extrema, mean beta_z, RMS sigma_xy, total bunch
@@ -89,6 +103,7 @@ private:
     amrex::Real m_gamma   = 1.0;
     amrex::Real m_total_Q = 0.0;
     amrex::Real m_gamma_off = std::numeric_limits<amrex::Real>::infinity();
+    int         m_profile   = 0;     // 0 = uniform disk, 1 = Gaussian disk
 
     std::vector<amrex::Real> m_Q_slice;   // physical charge per slice (C)
     std::vector<amrex::Real> m_Ez_slice;  // E_z at slice centre (V/m)

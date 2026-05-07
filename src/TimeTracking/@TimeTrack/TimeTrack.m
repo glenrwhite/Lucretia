@@ -64,6 +64,7 @@ properties
     slice_sc_n          = 256                                    % # of z-slices for the slice SC bunch density estimator
     slice_sc_radius_factor = 2.0                                 % bunch_radius (for the disk-stack formula) = factor * sigma_xy
     slice_sc_gamma_off  = []                                     % if set, slice SC disabled when bunch mean gamma >= this value (lets 3D mesh handle longitudinal at high energy where slice over-counts vs ImpactT)
+    slice_sc_profile    = 0                                      % slice SC transverse profile: 0 = uniform disk (default), 1 = Gaussian disk (analytic 2D Gaussian sheet on-axis E_z, uses sigma_xy directly)
     target              = 'cpu'                                  % 'cpu' | 'gpu'  -- combined with mpi_nranks selects the binary
     mpi_nranks          = 1                                      % >1 -> mpirun -np N (requires MPI-enabled binary)
     mpi_binary          = ''                                     % deprecated (use target+mpi_nranks); '' -> autodetect
