@@ -130,6 +130,9 @@ end
 if isprop(obj, 'sc_use_b_field') && ~isempty(obj.sc_use_b_field) && obj.sc_use_b_field
     fprintf(f, 'tracking.sc_use_b_field = 1\n');
 end
+if isprop(obj, 'self_force_direct') && ~isempty(obj.self_force_direct) && obj.self_force_direct
+    fprintf(f, 'tracking.self_force_direct = 1\n');
+end
 if isprop(obj, 'trace_file') && ~isempty(obj.trace_file)
     fprintf(f, 'tracking.trace_file         = %s\n', char(obj.trace_file));
     if isprop(obj, 'trace_every') && ~isempty(obj.trace_every)

@@ -38,6 +38,76 @@ void tsc_weights (amrex::Real p, amrex::Real& w_lo, amrex::Real& w_mid, amrex::R
     w_hi  = Real(0.5) * half_plus_p  * half_plus_p;
 }
 
+// Direct self-force computation: Coulomb sum from the deposited cloud
+// of THIS particle at its own position. Replaces the LUT lookup, which
+// is invalid when adaptive mesh changes cell sizes between the LUT
+// build and the gather. Returns E_self[3] in unit (qw*kCoulomb) — the
+// caller multiplies by qw_f = qw * kSelfForceFactor to get the field.
+//
+// shape_order: 1 = CIC (8-node cube), 2 = TSC (27-node cube)
+// frac_x/y/z: CIC uses [0, 1) (fractional position from cell low-corner);
+//              TSC uses [-0.5, +0.5) (fractional position from nearest node).
+// dx, dy, dz: cell sizes (lab frame).
+// eps2: softening for r²=0 (matches the LUT build).
+AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
+void self_force_direct (int shape_order,
+                        amrex::Real frac_x, amrex::Real frac_y, amrex::Real frac_z,
+                        amrex::Real dx, amrex::Real dy, amrex::Real dz,
+                        amrex::Real eps2,
+                        amrex::Real* E_self) noexcept
+{
+    using amrex::Real;
+    E_self[0] = Real(0.0); E_self[1] = Real(0.0); E_self[2] = Real(0.0);
+    if (shape_order == 1) {
+        // CIC: 8-node cube. wa = (a==0 ? 1-frac : frac). r_v = (frac-a)*dx.
+        for (int a = 0; a < 2; ++a) {
+            const Real wa   = (a == 0) ? (Real(1.0) - frac_x) : frac_x;
+            const Real rx_v = (frac_x - Real(a)) * dx;
+            for (int b = 0; b < 2; ++b) {
+                const Real wb   = (b == 0) ? (Real(1.0) - frac_y) : frac_y;
+                const Real ry_v = (frac_y - Real(b)) * dy;
+                for (int cc = 0; cc < 2; ++cc) {
+                    const Real wc   = (cc == 0) ? (Real(1.0) - frac_z) : frac_z;
+                    const Real rz_v = (frac_z - Real(cc)) * dz;
+                    const Real r2 = rx_v*rx_v + ry_v*ry_v + rz_v*rz_v + eps2;
+                    const Real r3_inv = Real(1.0) / (r2 * std::sqrt(r2));
+                    const Real factor = wa * wb * wc * r3_inv;
+                    E_self[0] += factor * rx_v;
+                    E_self[1] += factor * ry_v;
+                    E_self[2] += factor * rz_v;
+                }
+            }
+        }
+    } else {
+        // TSC: 27-node cube around nearest node. p in [-0.5, +0.5).
+        // Weights: w0 = 0.5*(0.5-p)^2, w1 = 0.75-p^2, w2 = 0.5*(0.5+p)^2.
+        // Distance from particle to nodes (i-1, i, i+1) along each axis:
+        //   r = (p - (k-1))*dx for k=0,1,2 (relative offset -1, 0, +1)
+        Real wx[3], wy[3], wz[3];
+        tsc_weights(frac_x, wx[0], wx[1], wx[2]);
+        tsc_weights(frac_y, wy[0], wy[1], wy[2]);
+        tsc_weights(frac_z, wz[0], wz[1], wz[2]);
+        for (int kk = 0; kk < 3; ++kk) {
+            const Real wzz  = wz[kk];
+            const Real rz_v = (frac_z - Real(kk - 1)) * dz;
+            for (int jj = 0; jj < 3; ++jj) {
+                const Real wyy  = wy[jj];
+                const Real ry_v = (frac_y - Real(jj - 1)) * dy;
+                for (int ii = 0; ii < 3; ++ii) {
+                    const Real wxx  = wx[ii];
+                    const Real rx_v = (frac_x - Real(ii - 1)) * dx;
+                    const Real r2 = rx_v*rx_v + ry_v*ry_v + rz_v*rz_v + eps2;
+                    const Real r3_inv = Real(1.0) / (r2 * std::sqrt(r2));
+                    const Real factor = wxx * wyy * wzz * r3_inv;
+                    E_self[0] += factor * rx_v;
+                    E_self[1] += factor * ry_v;
+                    E_self[2] += factor * rz_v;
+                }
+            }
+        }
+    }
+}
+
 // TSC gather: 27-node weighted sum of a nodal field at the particle position.
 // Mirrors deposit symmetry so the kick is consistent with the deposit shape.
 AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
@@ -483,54 +553,76 @@ void TrackingLoop::step (
                 const Real w  = ptd.rdata(RealSoA::w)[ip];
                 const Real qw = q * w * kCoulombConstant;
 
-                Real tx, ty, tz;
-                if (sc_shape_order == 1) {
-                    const Real wx_frac = fx_sc - std::floor(fx_sc);
-                    const Real wy_frac = fy_sc - std::floor(fy_sc);
-                    const Real wz_frac = fz_sc - std::floor(fz_sc);
-                    tx = wx_frac * Real(sf_n);
-                    ty = wy_frac * Real(sf_n);
-                    tz = wz_frac * Real(sf_n);
-                } else {
-                    // TSC: p in [-0.5, +0.5), LUT samples at (p+0.5)*N
-                    const Real px = fx_sc - std::round(fx_sc);
-                    const Real py = fy_sc - std::round(fy_sc);
-                    const Real pz = fz_sc - std::round(fz_sc);
-                    tx = (px + Real(0.5)) * Real(sf_n);
-                    ty = (py + Real(0.5)) * Real(sf_n);
-                    tz = (pz + Real(0.5)) * Real(sf_n);
-                }
-                int ix_t = int(tx); if (ix_t >= sf_n) ix_t = sf_n - 1;
-                int iy_t = int(ty); if (iy_t >= sf_n) iy_t = sf_n - 1;
-                int iz_t = int(tz); if (iz_t >= sf_n) iz_t = sf_n - 1;
-                if (ix_t < 0) ix_t = 0;
-                if (iy_t < 0) iy_t = 0;
-                if (iz_t < 0) iz_t = 0;
-                const Real ax = tx - Real(ix_t);
-                const Real ay = ty - Real(iy_t);
-                const Real az = tz - Real(iz_t);
-                const int  s1 = sf_n + 1;
-                const int  s2 = s1 * s1;
-                const int  i000 = ix_t * s2 + iy_t * s1 + iz_t;
-
                 Real E_self[3];
-                for (int c = 0; c < 3; ++c) {
-                    const Real* T = sf_lut[c];
-                    const Real v000 = T[i000];
-                    const Real v001 = T[i000 + 1];
-                    const Real v010 = T[i000 + s1];
-                    const Real v011 = T[i000 + s1 + 1];
-                    const Real v100 = T[i000 + s2];
-                    const Real v101 = T[i000 + s2 + 1];
-                    const Real v110 = T[i000 + s2 + s1];
-                    const Real v111 = T[i000 + s2 + s1 + 1];
-                    const Real v00  = v000 + (v001 - v000) * az;
-                    const Real v01  = v010 + (v011 - v010) * az;
-                    const Real v10  = v100 + (v101 - v100) * az;
-                    const Real v11  = v110 + (v111 - v110) * az;
-                    const Real v0   = v00  + (v01  - v00 ) * ay;
-                    const Real v1   = v10  + (v11  - v10 ) * ay;
-                    E_self[c] = v0 + (v1 - v0) * ax;
+                if (m_self_force_direct) {
+                    // Direct mode: compute Coulomb sum from CURRENT cell sizes.
+                    // Bypasses the LUT (which assumes static cell aspect/size and
+                    // produces noise when adaptive mesh resizes between rebuilds).
+                    Real frac_x, frac_y, frac_z;
+                    if (sc_shape_order == 1) {
+                        frac_x = fx_sc - std::floor(fx_sc);
+                        frac_y = fy_sc - std::floor(fy_sc);
+                        frac_z = fz_sc - std::floor(fz_sc);
+                    } else {
+                        frac_x = fx_sc - std::round(fx_sc);
+                        frac_y = fy_sc - std::round(fy_sc);
+                        frac_z = fz_sc - std::round(fz_sc);
+                    }
+                    const Real dx_cell = Real(1.0) / dxi_sc[0];
+                    const Real dy_cell = Real(1.0) / dxi_sc[1];
+                    const Real dz_cell = Real(1.0) / dxi_sc[2];
+                    const Real eps2    = Real(1.0e-6) * (dx_cell * dx_cell);
+                    self_force_direct(sc_shape_order, frac_x, frac_y, frac_z,
+                                      dx_cell, dy_cell, dz_cell, eps2, E_self);
+                } else {
+                    // LUT mode: trilinear interpolation of pre-built table.
+                    Real tx, ty, tz;
+                    if (sc_shape_order == 1) {
+                        const Real wx_frac = fx_sc - std::floor(fx_sc);
+                        const Real wy_frac = fy_sc - std::floor(fy_sc);
+                        const Real wz_frac = fz_sc - std::floor(fz_sc);
+                        tx = wx_frac * Real(sf_n);
+                        ty = wy_frac * Real(sf_n);
+                        tz = wz_frac * Real(sf_n);
+                    } else {
+                        const Real px = fx_sc - std::round(fx_sc);
+                        const Real py = fy_sc - std::round(fy_sc);
+                        const Real pz = fz_sc - std::round(fz_sc);
+                        tx = (px + Real(0.5)) * Real(sf_n);
+                        ty = (py + Real(0.5)) * Real(sf_n);
+                        tz = (pz + Real(0.5)) * Real(sf_n);
+                    }
+                    int ix_t = int(tx); if (ix_t >= sf_n) ix_t = sf_n - 1;
+                    int iy_t = int(ty); if (iy_t >= sf_n) iy_t = sf_n - 1;
+                    int iz_t = int(tz); if (iz_t >= sf_n) iz_t = sf_n - 1;
+                    if (ix_t < 0) ix_t = 0;
+                    if (iy_t < 0) iy_t = 0;
+                    if (iz_t < 0) iz_t = 0;
+                    const Real ax = tx - Real(ix_t);
+                    const Real ay = ty - Real(iy_t);
+                    const Real az = tz - Real(iz_t);
+                    const int  s1 = sf_n + 1;
+                    const int  s2 = s1 * s1;
+                    const int  i000 = ix_t * s2 + iy_t * s1 + iz_t;
+
+                    for (int c = 0; c < 3; ++c) {
+                        const Real* T = sf_lut[c];
+                        const Real v000 = T[i000];
+                        const Real v001 = T[i000 + 1];
+                        const Real v010 = T[i000 + s1];
+                        const Real v011 = T[i000 + s1 + 1];
+                        const Real v100 = T[i000 + s2];
+                        const Real v101 = T[i000 + s2 + 1];
+                        const Real v110 = T[i000 + s2 + s1];
+                        const Real v111 = T[i000 + s2 + s1 + 1];
+                        const Real v00  = v000 + (v001 - v000) * az;
+                        const Real v01  = v010 + (v011 - v010) * az;
+                        const Real v10  = v100 + (v101 - v100) * az;
+                        const Real v11  = v110 + (v111 - v110) * az;
+                        const Real v0   = v00  + (v01  - v00 ) * ay;
+                        const Real v1   = v10  + (v11  - v10 ) * ay;
+                        E_self[c] = v0 + (v1 - v0) * ax;
+                    }
                 }
 
                 // Empirical fudge factor: Coulomb-of-point-charges over-
@@ -888,53 +980,72 @@ void TrackingLoop::step_dkd (
                     const Real w  = ptd.rdata(RealSoA::w)[ip];
                     const Real qw = q * w * kCoulombConstant;
 
-                    Real tx, ty, tz;
-                    if (sc_shape_order == 1) {
-                        const Real wx_frac = fx_sc - std::floor(fx_sc);
-                        const Real wy_frac = fy_sc - std::floor(fy_sc);
-                        const Real wz_frac = fz_sc - std::floor(fz_sc);
-                        tx = wx_frac * Real(sf_n);
-                        ty = wy_frac * Real(sf_n);
-                        tz = wz_frac * Real(sf_n);
-                    } else {
-                        const Real px = fx_sc - std::round(fx_sc);
-                        const Real py = fy_sc - std::round(fy_sc);
-                        const Real pz = fz_sc - std::round(fz_sc);
-                        tx = (px + Real(0.5)) * Real(sf_n);
-                        ty = (py + Real(0.5)) * Real(sf_n);
-                        tz = (pz + Real(0.5)) * Real(sf_n);
-                    }
-                    int ix_t = int(tx); if (ix_t >= sf_n) ix_t = sf_n - 1;
-                    int iy_t = int(ty); if (iy_t >= sf_n) iy_t = sf_n - 1;
-                    int iz_t = int(tz); if (iz_t >= sf_n) iz_t = sf_n - 1;
-                    if (ix_t < 0) ix_t = 0;
-                    if (iy_t < 0) iy_t = 0;
-                    if (iz_t < 0) iz_t = 0;
-                    const Real ax = tx - Real(ix_t);
-                    const Real ay = ty - Real(iy_t);
-                    const Real az = tz - Real(iz_t);
-                    const int  s1 = sf_n + 1;
-                    const int  s2 = s1 * s1;
-                    const int  i000 = ix_t * s2 + iy_t * s1 + iz_t;
-
                     Real E_self[3];
-                    for (int cc = 0; cc < 3; ++cc) {
-                        const Real* T = sf_lut[cc];
-                        const Real v000 = T[i000];
-                        const Real v001 = T[i000 + 1];
-                        const Real v010 = T[i000 + s1];
-                        const Real v011 = T[i000 + s1 + 1];
-                        const Real v100 = T[i000 + s2];
-                        const Real v101 = T[i000 + s2 + 1];
-                        const Real v110 = T[i000 + s2 + s1];
-                        const Real v111 = T[i000 + s2 + s1 + 1];
-                        const Real v00  = v000 + (v001 - v000) * az;
-                        const Real v01  = v010 + (v011 - v010) * az;
-                        const Real v10  = v100 + (v101 - v100) * az;
-                        const Real v11  = v110 + (v111 - v110) * az;
-                        const Real v0   = v00  + (v01  - v00 ) * ay;
-                        const Real v1   = v10  + (v11  - v10 ) * ay;
-                        E_self[cc] = v0 + (v1 - v0) * ax;
+                    if (m_self_force_direct) {
+                        Real frac_x, frac_y, frac_z;
+                        if (sc_shape_order == 1) {
+                            frac_x = fx_sc - std::floor(fx_sc);
+                            frac_y = fy_sc - std::floor(fy_sc);
+                            frac_z = fz_sc - std::floor(fz_sc);
+                        } else {
+                            frac_x = fx_sc - std::round(fx_sc);
+                            frac_y = fy_sc - std::round(fy_sc);
+                            frac_z = fz_sc - std::round(fz_sc);
+                        }
+                        const Real dx_cell = Real(1.0) / dxi_sc[0];
+                        const Real dy_cell = Real(1.0) / dxi_sc[1];
+                        const Real dz_cell = Real(1.0) / dxi_sc[2];
+                        const Real eps2    = Real(1.0e-6) * (dx_cell * dx_cell);
+                        self_force_direct(sc_shape_order, frac_x, frac_y, frac_z,
+                                          dx_cell, dy_cell, dz_cell, eps2, E_self);
+                    } else {
+                        Real tx, ty, tz;
+                        if (sc_shape_order == 1) {
+                            const Real wx_frac = fx_sc - std::floor(fx_sc);
+                            const Real wy_frac = fy_sc - std::floor(fy_sc);
+                            const Real wz_frac = fz_sc - std::floor(fz_sc);
+                            tx = wx_frac * Real(sf_n);
+                            ty = wy_frac * Real(sf_n);
+                            tz = wz_frac * Real(sf_n);
+                        } else {
+                            const Real px = fx_sc - std::round(fx_sc);
+                            const Real py = fy_sc - std::round(fy_sc);
+                            const Real pz = fz_sc - std::round(fz_sc);
+                            tx = (px + Real(0.5)) * Real(sf_n);
+                            ty = (py + Real(0.5)) * Real(sf_n);
+                            tz = (pz + Real(0.5)) * Real(sf_n);
+                        }
+                        int ix_t = int(tx); if (ix_t >= sf_n) ix_t = sf_n - 1;
+                        int iy_t = int(ty); if (iy_t >= sf_n) iy_t = sf_n - 1;
+                        int iz_t = int(tz); if (iz_t >= sf_n) iz_t = sf_n - 1;
+                        if (ix_t < 0) ix_t = 0;
+                        if (iy_t < 0) iy_t = 0;
+                        if (iz_t < 0) iz_t = 0;
+                        const Real ax = tx - Real(ix_t);
+                        const Real ay = ty - Real(iy_t);
+                        const Real az = tz - Real(iz_t);
+                        const int  s1 = sf_n + 1;
+                        const int  s2 = s1 * s1;
+                        const int  i000 = ix_t * s2 + iy_t * s1 + iz_t;
+
+                        for (int cc = 0; cc < 3; ++cc) {
+                            const Real* T = sf_lut[cc];
+                            const Real v000 = T[i000];
+                            const Real v001 = T[i000 + 1];
+                            const Real v010 = T[i000 + s1];
+                            const Real v011 = T[i000 + s1 + 1];
+                            const Real v100 = T[i000 + s2];
+                            const Real v101 = T[i000 + s2 + 1];
+                            const Real v110 = T[i000 + s2 + s1];
+                            const Real v111 = T[i000 + s2 + s1 + 1];
+                            const Real v00  = v000 + (v001 - v000) * az;
+                            const Real v01  = v010 + (v011 - v010) * az;
+                            const Real v10  = v100 + (v101 - v100) * az;
+                            const Real v11  = v110 + (v111 - v110) * az;
+                            const Real v0   = v00  + (v01  - v00 ) * ay;
+                            const Real v1   = v10  + (v11  - v10 ) * ay;
+                            E_self[cc] = v0 + (v1 - v0) * ax;
+                        }
                     }
                     const Real kSelfForceFactor =
                         m_self_force_disabled ? Real(0.0)

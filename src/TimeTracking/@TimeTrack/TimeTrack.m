@@ -38,6 +38,7 @@ properties
     use_dkd_integrator      = true                               % logical: ImpactT-style drift-kick-drift + first-order emission (default ON; cleanest cross-code calibration)
     disable_self_force      = []                                 % logical (diagnostic): skip the SC self-force LUT subtraction
     sc_use_b_field          = []                                 % logical: apply SC B field explicitly via Boris (matches ImpactT). Captures non-synchronous v×B coupling. Default off (1/gamma^2 boost shortcut).
+    self_force_direct       = []                                 % logical: compute self-force directly each step (no LUT). Costs ~7x per particle but eliminates LUT-rebuild noise with adaptive mesh.
     trace_file              = ''                                 % path: per-step bunch-mean diagnostics (CSV) for cross-code comparison
     trace_every             = 1                                  % step interval for trace rows (1 = every step)
     geom_lo    = [-0.05, -0.05,  0.0]                            % m

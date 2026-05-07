@@ -37,6 +37,7 @@ p.addParameter('sc_hybrid_z_adaptive', false, @islogical);               % SC me
 p.addParameter('sc_shape_order', 1, @isnumeric);                         % particle shape: 1 = CIC (default), 2 = TSC (smoother per-particle field gradient at ~3x deposit/gather cost)
 p.addParameter('sc_use_b_field', false, @islogical);                     % apply SC B field via Boris (matches ImpactT) -- captures non-synchronous v×B coupling
 p.addParameter('slice_profile',  0,   @isnumeric);                       % slice SC transverse profile: 0 = uniform disk (default), 1 = Gaussian disk
+p.addParameter('self_force_direct', false, @islogical);                  % compute SC self-force directly each step (no LUT; ~7x cost; avoids LUT-rebuild noise w/ adaptive mesh)
 p.parse(varargin{:});
 opts = p.Results;
 impactt_dir = char(opts.impactt_dir);
@@ -172,6 +173,10 @@ if opts.slice_profile ~= 0
     tt.slice_sc_profile = round(opts.slice_profile);
     name = 'uniform-disk'; if tt.slice_sc_profile == 1, name = 'Gaussian-disk'; end
     fprintf('  slice SC profile = %d (%s)\n', tt.slice_sc_profile, name);
+end
+if opts.self_force_direct
+    tt.self_force_direct = true;
+    fprintf('  self-force computed directly each step (no LUT)\n');
 end
 fprintf('  sc_mode = %s (mesh=%d, slice=%d, image=%d, adaptive=%d)\n', sc_mode, ...
     tt.enable_space_charge, tt.enable_slice_sc, tt.sc_image_plane, tt.sc_adaptive);

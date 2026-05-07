@@ -133,6 +133,25 @@ public:
     void set_sc_boost_bunch_mean (bool on) noexcept { m_sc_boost_bunch_mean = on; }
     bool sc_boost_bunch_mean_enabled () const noexcept { return m_sc_boost_bunch_mean; }
 
+    /** Compute the SC self-force subtraction term DIRECTLY from cell
+     *  sizes at gather time, instead of looking up a pre-built table.
+     *
+     *  The LUT (built once at SpaceCharge construction, rebuilt on
+     *  cell aspect ratio change >5%) returns the Coulomb field of the
+     *  particle's own deposited cloud at its position, normalised by
+     *  qw*kCoulomb. With adaptive mesh the cell sizes change every step,
+     *  causing repeated LUT rebuilds and resize-discontinuity noise that
+     *  inflates per-particle SC kicks (eps_nx grows).
+     *
+     *  Direct mode computes the same Coulomb sum (8 nodes for CIC,
+     *  27 for TSC) at gather time using the CURRENT cell sizes. ~7x
+     *  more per-particle work than the LUT lookup but produces no
+     *  rebuild noise. Result is bit-equivalent to a freshly-built LUT.
+     *
+     *  Default off (LUT used). */
+    void set_self_force_direct (bool on) noexcept { m_self_force_direct = on; }
+    bool self_force_direct_enabled () const noexcept { return m_self_force_direct; }
+
     /** Apply SC magnetic field explicitly via the Boris pusher (matches
      *  ImpactT's algorithm) instead of the 1/gamma^2 boost shortcut.
      *
@@ -203,6 +222,7 @@ private:
     bool        m_use_dkd_integrator      = false;
     bool        m_sc_boost_bunch_mean     = true;   // default: use sc->last_gamma() for 1/gamma^2 boost
     bool        m_self_force_disabled     = false;  // diagnostic: skip the self-force LUT subtraction
+    bool        m_self_force_direct       = false;  // off: LUT lookup; on: direct Coulomb sum each step (no rebuild noise w/ adaptive mesh)
     bool        m_sc_use_b_field          = false;  // off: 1/gamma^2 boost shortcut; on: explicit B + Boris (matches ImpactT)
 public:
     void set_self_force_disabled (bool on) noexcept { m_self_force_disabled = on; }
