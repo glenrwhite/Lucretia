@@ -199,6 +199,7 @@ amrex::Real SpaceCharge::compute_mean_z (particles::TimeBunch& bunch) const
         const auto& alives = soa.GetIntData(IntSoA::alive);
         for (int i = 0; i < np; ++i) {
             if (alives[i] == 0) { continue; }
+            if (m_z_filter_min_active && zs[i] < m_z_filter_min) { continue; }
             sum_z += zs[i];
             ++n_alive;
         }
@@ -237,7 +238,12 @@ bool SpaceCharge::compute_bunch_range (
         const auto& zs = soa.GetRealData(RealSoA::z);
         const auto& alives = soa.GetIntData(IntSoA::alive);
         for (int i = 0; i < np; ++i) {
-            if (alives[i] == 0) { continue; }   // skip parked dead particles
+            if (alives[i] == 0) { continue; }
+            // Optional z-filter: skip particles below cathode plane.
+            // Matches ImpactT's flagpos=1 mode during emission, which
+            // confines the SC mesh to z>=cathode_z so behind-cathode
+            // drifting particles don't extend the mesh below the plane.
+            if (m_z_filter_min_active && zs[i] < m_z_filter_min) { continue; }
             lo_x = std::min(lo_x, xs[i]);  hi_x = std::max(hi_x, xs[i]);
             lo_y = std::min(lo_y, ys[i]);  hi_y = std::max(hi_y, ys[i]);
             lo_z = std::min(lo_z, zs[i]);  hi_z = std::max(hi_z, zs[i]);
@@ -278,11 +284,11 @@ bool SpaceCharge::compute_bunch_stats (
         const auto& zs = soa.GetRealData(RealSoA::z);
         const auto& alives = soa.GetIntData(IntSoA::alive);
         for (int i = 0; i < np; ++i) {
-            // Skip dead particles (e.g. cathode re-cross kills, parked
-            // at z=-1e9 by TrackingLoop). Including them would skew
-            // the centroid and sigmas catastrophically and trigger
-            // the adaptive mesh to enclose a 10^9 m extent.
+            // Skip dead particles (parked at z=-1e9). Including them would
+            // skew the centroid catastrophically.
             if (alives[i] == 0) { continue; }
+            // Optional z-filter: skip particles below cathode plane.
+            if (m_z_filter_min_active && zs[i] < m_z_filter_min) { continue; }
             sum_x  += xs[i];        sum_y  += ys[i];        sum_z  += zs[i];
             sum_x2 += xs[i]*xs[i];  sum_y2 += ys[i]*ys[i];  sum_z2 += zs[i]*zs[i];
             ++n_alive;
@@ -412,12 +418,14 @@ amrex::Real SpaceCharge::compute_mean_beta_z (particles::TimeBunch& bunch) const
     for (PIter pti(bunch, lev); pti.isValid(); ++pti) {
         auto& soa = pti.GetStructOfArrays();
         const int np = pti.numParticles();
+        const auto& zs  = soa.GetRealData(RealSoA::z);
         const auto& uxs = soa.GetRealData(RealSoA::px);
         const auto& uys = soa.GetRealData(RealSoA::py);
         const auto& uzs = soa.GetRealData(RealSoA::pz);
         const auto& alives = soa.GetIntData(IntSoA::alive);
         for (int i = 0; i < np; ++i) {
             if (alives[i] == 0) { continue; }
+            if (m_z_filter_min_active && zs[i] < m_z_filter_min) { continue; }
             const Real ux = uxs[i];
             const Real uy = uys[i];
             const Real uz = uzs[i];
@@ -491,6 +499,9 @@ void SpaceCharge::deposit_charge (particles::TimeBunch& bunch)
             // CIC deposit (8-node cube, base = floor(fx))
             for (int p = 0; p < np; ++p) {
                 if (alives[p] == 0) { continue; }
+                // Optional z-filter: skip particles below cathode plane.
+                // Matches ImpactT's `flagpos=1` mode in Depositor.f90:273.
+                if (m_z_filter_min_active && zs[p] < m_z_filter_min) { continue; }
 
                 const Real fx = (xs[p] - lo[0]) * inv_dx;
                 const Real fy = (ys[p] - lo[1]) * inv_dy;
@@ -534,6 +545,7 @@ void SpaceCharge::deposit_charge (particles::TimeBunch& bunch)
             Real wx[3], wy[3], wz[3];
             for (int p = 0; p < np; ++p) {
                 if (alives[p] == 0) { continue; }
+                if (m_z_filter_min_active && zs[p] < m_z_filter_min) { continue; }
 
                 const Real fx = (xs[p] - lo[0]) * inv_dx;
                 const Real fy = (ys[p] - lo[1]) * inv_dy;

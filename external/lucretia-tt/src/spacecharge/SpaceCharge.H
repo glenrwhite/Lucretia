@@ -157,6 +157,23 @@ public:
     void set_rho_smooth_passes (int n) noexcept { m_rho_smooth_passes = std::max(0, n); }
     int  rho_smooth_passes () const noexcept { return m_rho_smooth_passes; }
 
+    /** Restrict SC to particles with z >= z_min. When `on` is true, the
+     *  charge deposit, the centroid/sigma, the bunch-range (for adaptive),
+     *  and the bunch-mean beta_z all skip particles with z < z_min. Useful
+     *  during cathode emission when behind-cathode-drifting particles
+     *  shouldn't extend the SC mesh below the cathode plane (matches
+     *  ImpactT's `flagpos=1` mode; see AccSimulator.f90:1469-1473 +
+     *  Depositor.f90:273).
+     *
+     *  When off (default), all alive particles contribute regardless of z. */
+    void set_z_filter_min (bool on, amrex::Real z_min = amrex::Real(0.0)) noexcept
+    {
+        m_z_filter_min_active = on;
+        m_z_filter_min        = z_min;
+    }
+    bool        z_filter_min_active () const noexcept { return m_z_filter_min_active; }
+    amrex::Real z_filter_min        () const noexcept { return m_z_filter_min; }
+
     /** Particle deposit/gather shape order. 1 = CIC (linear, 8-node cloud,
      *  current default). 2 = TSC (quadratic, 27-node cloud).
      *
@@ -377,6 +394,8 @@ private:
     amrex::Real                m_image_cutoff        = 0.05;     // m
     int                        m_rho_smooth_passes = 0;
     int                        m_shape_order    = 1;     // 1 = CIC, 2 = TSC
+    bool                       m_z_filter_min_active = false;
+    amrex::Real                m_z_filter_min        = 0.0;
     int                        m_n_recenters    = 0;
     int                        m_n_lut_rebuilds = 1;     // counts the constructor build
 

@@ -831,6 +831,14 @@ int main (int argc, char* argv[])
                            << behind_cathode_betazini
                            << " (v=" << (behind_cathode_betazini * 299792458.0)
                            << " m/s)\n";
+            // Also auto-enable the SC z-filter so behind-cathode drifting
+            // particles don't extend the SC mesh below the cathode plane
+            // (matches ImpactT's flagpos=1 mode during emission).
+            if (sc) {
+                sc->set_z_filter_min(true, behind_cathode_z);
+                amrex::Print() << "[tracking] SC z-filter enabled at z="
+                               << behind_cathode_z << " m (skip particles below cathode)\n";
+            }
         }
         if (use_centroid_phase != 0) {
             tracker.set_centroid_field_phase(true, centroid_t_offset);
