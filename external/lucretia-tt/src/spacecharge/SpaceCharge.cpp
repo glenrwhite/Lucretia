@@ -12,7 +12,11 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
+#include <cstdint>
 #include <memory>
+#include <string>
+#include <vector>
 
 
 namespace lucretiatt {
@@ -694,6 +698,8 @@ void SpaceCharge::solve (particles::TimeBunch& bunch)
     using namespace amrex;
     using namespace particles;
 
+    ++m_solve_count;
+
     // ---- Resize-jump diagnostic: capture E_old at all alive particle
     // positions BEFORE any resize/deposit/solve. Re-gather after the
     // solve to quantify the per-particle field discontinuity caused by
@@ -970,6 +976,71 @@ void SpaceCharge::solve (particles::TimeBunch& bunch)
     }
 
     compute_E_from_phi();
+
+    // ---- Mesh-field dump (cross-code comparison harness) ----
+    // When configured, write the entire SC field state to a binary file
+    // at this exact solve count. Format documented in SpaceCharge.H.
+    if (m_dump_field_at_step > 0 && m_solve_count == m_dump_field_at_step) {
+        auto const* lo_p = m_geom.ProbLo();
+        auto const* dx_p = m_geom.CellSize();
+        const int nx = m_geom.Domain().length(0) + 1;   // nodal counts
+        const int ny = m_geom.Domain().length(1) + 1;
+        const int nz = m_geom.Domain().length(2) + 1;
+        const Real inv_g = std::sqrt(Real(1.0) - m_last_beta_z * m_last_beta_z);
+        const Real gamma_b = (inv_g > Real(0.0)) ? Real(1.0) / inv_g : Real(1.0);
+
+        std::string path = m_dump_field_path;
+        if (path.empty()) {
+            path = std::string("/tmp/sc_field_dump_step")
+                 + std::to_string(m_dump_field_at_step) + ".bin";
+        }
+        FILE* f = std::fopen(path.c_str(), "wb");
+        AMREX_ALWAYS_ASSERT_WITH_MESSAGE(f != nullptr,
+            "SpaceCharge::solve: failed to open dump_field path for writing");
+        std::int32_t hdr[3] = {nx, ny, nz};
+        std::fwrite(hdr,  sizeof(std::int32_t), 3, f);
+        double lo3[3] = {(double)lo_p[0], (double)lo_p[1], (double)lo_p[2]};
+        double dx3[3] = {(double)dx_p[0], (double)dx_p[1], (double)dx_p[2]};
+        std::fwrite(lo3,  sizeof(double), 3, f);
+        std::fwrite(dx3,  sizeof(double), 3, f);
+        double gb_d = (double)gamma_b;
+        std::fwrite(&gb_d, sizeof(double), 1, f);
+
+        auto write_fab = [&](MultiFab const& mf) {
+            // Single-FAB layout assumed (forced in the constructor).
+            MFIter mfi(mf);
+            Array4<const Real> arr = mf.const_array(mfi);
+            // Iterate lab order (i fastest), include ghost-extended Box for
+            // E components if needed. Use the valid+ghost box.
+            auto const& gbox = mf[mfi].box();
+            const int gx = gbox.length(0);
+            const int gy = gbox.length(1);
+            const int gz = gbox.length(2);
+            // Take only the (nx, ny, nz) interior nodes starting at smallEnd.
+            const auto se = gbox.smallEnd();
+            std::vector<double> buf((std::size_t)nx * ny * nz);
+            for (int k = 0; k < nz; ++k)
+                for (int j = 0; j < ny; ++j)
+                    for (int i = 0; i < nx; ++i) {
+                        buf[(std::size_t)((k * ny + j) * nx + i)] =
+                            (double)arr(se[0] + i, se[1] + j, se[2] + k, 0);
+                    }
+            std::fwrite(buf.data(), sizeof(double), buf.size(), f);
+            (void)gx; (void)gy; (void)gz;
+        };
+        write_fab(m_rho);
+        write_fab(m_phi);
+        write_fab(m_Ex);
+        write_fab(m_Ey);
+        write_fab(m_Ez);
+        std::fclose(f);
+        amrex::Print() << "[SC.dump_field] wrote " << path
+                       << " at solve_count=" << m_solve_count
+                       << " (n=" << nx << "x" << ny << "x" << nz
+                       << ", lo=" << lo_p[0] << "," << lo_p[1] << "," << lo_p[2]
+                       << ", dx=" << dx_p[0] << "," << dx_p[1] << "," << dx_p[2]
+                       << ", gamma_b=" << gamma_b << ")\n";
+    }
 
     int verbose = 0;
     amrex::ParmParse("space_charge").query("verbose", verbose);

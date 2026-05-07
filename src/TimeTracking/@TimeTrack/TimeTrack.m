@@ -65,6 +65,8 @@ properties
     sc_shape_order      = 1                                      % particle deposit/gather shape: 1 = CIC (linear, 8-node), 2 = TSC (quadratic, 27-node, smoother field gradients at ~3x cost)
     sc_verbose          = 0                                      % space_charge.verbose: 0 = quiet, 1 = print recenter / per-step diagnostics
     sc_diag_resize_jump = 0                                      % space_charge.diag_resize_jump: 1 = print per-particle dE statistics on each mesh resize (diagnostic of field-discontinuity noise); 0 = off
+    sc_dump_field_at_step = 0                                    % space_charge.dump_field_at_step: write rho/phi/Ex/Ey/Ez mesh values to a binary file at this solve count (default 0 = off; cross-code SC field comparison harness)
+    sc_dump_field_path  = ''                                     % path for sc_dump_field; empty -> /tmp/sc_field_dump_step<N>.bin
     enable_slice_sc     = false                                  % toggles ParmParse space_charge.slice_enabled (1D longitudinal slice SC, mesh-free in z)
     slice_sc_n          = 256                                    % # of z-slices for the slice SC bunch density estimator
     slice_sc_radius_factor = 2.0                                 % bunch_radius (for the disk-stack formula) = factor * sigma_xy

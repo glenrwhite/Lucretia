@@ -706,6 +706,10 @@ int main (int argc, char* argv[])
             pp_sc.query("integer_cell_shift", sc_integer_cell_shift);
             int sc_diag_resize_jump = 0;
             pp_sc.query("diag_resize_jump", sc_diag_resize_jump);
+            int sc_dump_field_at_step = 0;
+            pp_sc.query("dump_field_at_step", sc_dump_field_at_step);
+            std::string sc_dump_field_path;
+            pp_sc.query("dump_field_path", sc_dump_field_path);
             pp_sc.query("image_plane_enabled", sc_image_enabled);
             pp_sc.query("image_plane_z",       sc_image_z_cath);
             pp_sc.query("image_cutoff",        sc_image_cutoff);
@@ -735,6 +739,9 @@ int main (int argc, char* argv[])
                 }
                 if (sc_diag_resize_jump != 0) {
                     sc->set_diag_resize_jump(true);
+                }
+                if (sc_dump_field_at_step > 0) {
+                    sc->set_dump_field_at_step(sc_dump_field_at_step, sc_dump_field_path);
                 }
                 if (sc_hybrid_z != 0) {
                     sc->set_hybrid_z_adaptive(true, sc_pad_factor, sc_min_pad_z);

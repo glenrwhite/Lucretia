@@ -190,6 +190,12 @@ if obj.enable_space_charge
     if isprop(obj, 'sc_diag_resize_jump') && ~isempty(obj.sc_diag_resize_jump) && obj.sc_diag_resize_jump > 0
         fprintf(f, 'space_charge.diag_resize_jump = %d\n', round(obj.sc_diag_resize_jump));
     end
+    if isprop(obj, 'sc_dump_field_at_step') && ~isempty(obj.sc_dump_field_at_step) && obj.sc_dump_field_at_step > 0
+        fprintf(f, 'space_charge.dump_field_at_step = %d\n', round(obj.sc_dump_field_at_step));
+        if isprop(obj, 'sc_dump_field_path') && ~isempty(obj.sc_dump_field_path)
+            fprintf(f, 'space_charge.dump_field_path = %s\n', obj.sc_dump_field_path);
+        end
+    end
 end
 if isprop(obj, 'enable_slice_sc') && obj.enable_slice_sc
     if ~obj.enable_space_charge

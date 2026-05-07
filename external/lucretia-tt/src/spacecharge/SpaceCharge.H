@@ -12,6 +12,7 @@
 #include <AMReX_REAL.H>
 
 #include <array>
+#include <string>
 #include <cmath>
 #include <vector>
 
@@ -152,6 +153,28 @@ public:
      *  by the resize-jump diagnostic to convert dE -> implied momentum
      *  kick. No effect on the physics. */
     void set_diag_dt_hint (amrex::Real dt) noexcept { m_diag_dt_hint = dt; }
+
+    /** Dump mesh SC fields (rho, phi, Ex, Ey, Ez) to a binary file at a
+     *  specific solve count. Set step > 0 to enable; default 0 = off.
+     *  When the m_solve_count-th call to solve() runs, after the field
+     *  computation completes, the mesh data + geometry are written to
+     *  /tmp/sc_field_dump_step<N>.bin. Format:
+     *    int32 nx, ny, nz
+     *    double lo[3]      (RealBox lo, lab coords)
+     *    double dx[3]      (cell sizes, lab coords)
+     *    double gamma_b    (bunch-mean gamma used in solver)
+     *    double rho [nx*ny*nz]   row-major (x fastest)
+     *    double phi [nx*ny*nz]
+     *    double Ex  [nx*ny*nz]
+     *    double Ey  [nx*ny*nz]
+     *    double Ez  [nx*ny*nz]
+     *  Used for cross-code SC field comparison. */
+    void set_dump_field_at_step (int step, std::string path = std::string()) noexcept
+    {
+        m_dump_field_at_step = step;
+        m_dump_field_path    = path;
+    }
+    int dump_field_at_step () const noexcept { return m_dump_field_at_step; }
 
     /** Hybrid mesh mode: STATIC transverse (xy frozen at the constructor's
      *  initial RealBox xy extent) + ADAPTIVE longitudinal (z resizes per
@@ -456,6 +479,9 @@ private:
     bool                       m_diag_resize_jump = false; // diagnostic: per-particle dE at resize
     amrex::Real                m_diag_dt_hint     = 0.0;   // dt for dp = qE*dt readout (set by caller)
     int                        m_diag_jump_count  = 0;     // # resize-jump events reported so far
+    int                        m_dump_field_at_step = 0;   // diagnostic: dump mesh SC fields at this solve count
+    std::string                m_dump_field_path  = "";   // path; auto-generated if empty
+    int                        m_solve_count      = 0;    // counts solve() calls
     bool                       m_image_plane_enabled = false;
     amrex::Real                m_image_plane_z       = 0.0;
     amrex::Real                m_image_cutoff        = 0.05;     // m
