@@ -53,6 +53,7 @@ properties
     sc_exact_range      = false                                  % SC mesh resized to EXACT alive-particle min/max each step (zero padding, ImpactT-style; supersedes sc_adaptive)
     sc_hybrid_z_adaptive = false                                 % SC mesh: STATIC xy + ADAPTIVE z (resize z each step to track sigma_z, keep xy frozen at initial RealBox)
     sc_pad_factor       = 5.0                                    % adaptive: half-extent = max(pad_factor * sigma, min_pad)
+    sc_resize_hyst      = 2.0                                    % adaptive: resize triggers when new pad > hyst*current OR < (1/hyst)*current. Larger = fewer resizes (less noise but coarser tracking).
     sc_min_pad_xy       = 1e-3                                   % adaptive: min transverse half-extent (m)
     sc_min_pad_z        = 1e-3                                   % adaptive: min longitudinal half-extent (m)
     sc_image_plane      = false                                  % cathode image-charge handling: deposit mirror charges on the SC mesh so the IGF Poisson satisfies phi=0 on the cathode plane

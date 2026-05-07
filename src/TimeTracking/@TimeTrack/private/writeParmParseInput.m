@@ -151,6 +151,9 @@ if obj.enable_space_charge
         if isprop(obj, 'sc_pad_factor') && ~isempty(obj.sc_pad_factor)
             fprintf(f, 'space_charge.pad_factor = %.6g\n', obj.sc_pad_factor);
         end
+        if isprop(obj, 'sc_resize_hyst') && ~isempty(obj.sc_resize_hyst) && obj.sc_resize_hyst ~= 2.0
+            fprintf(f, 'space_charge.resize_hyst = %.6g\n', obj.sc_resize_hyst);
+        end
         if isprop(obj, 'sc_min_pad_xy') && ~isempty(obj.sc_min_pad_xy)
             fprintf(f, 'space_charge.min_pad_xy = %.6g\n', obj.sc_min_pad_xy);
         end

@@ -771,17 +771,18 @@ void SpaceCharge::solve (particles::TimeBunch& bunch)
             const Real cur_y_c    = Real(0.5) * (hi_p[1] + lo_p[1]);
             const Real cur_z_c    = Real(0.5) * (hi_p[2] + lo_p[2]);
 
-            // Trigger sparingly: only resize when sigmas have at least
-            // doubled or halved (factor-2 hysteresis) or the centroid
-            // has drifted past 50% of current half-extent. Tighter
-            // triggers cause LUT-rebuild thrashing every step, which
-            // empirically degrades transverse-SC accuracy in
-            // photoinjector runs (the per-step LUT noise overwhelms
-            // the bunch's own SC field).
+            // Trigger sparingly. Tighter triggers cause field-discontinuity
+            // noise to dominate per-step kicks, inflating eps_nx in the gun
+            // region (verified by tasks #33+#34). Factor-3 size hysteresis
+            // and 50% centroid threshold gives a few resizes through the
+            // gun, enough to track bunch growth but rare enough to avoid
+            // resize-noise accumulation. Adjustable via m_resize_hyst.
             const bool first_call = (m_n_recenters == 0);
-            const bool size_drift = pad_x > Real(2.0) * cur_half_x || pad_x < Real(0.5) * cur_half_x ||
-                                    pad_y > Real(2.0) * cur_half_y || pad_y < Real(0.5) * cur_half_y ||
-                                    pad_z > Real(2.0) * cur_half_z || pad_z < Real(0.5) * cur_half_z;
+            const Real f_lo = Real(1.0) / m_resize_hyst;
+            const Real f_hi = m_resize_hyst;
+            const bool size_drift = pad_x > f_hi * cur_half_x || pad_x < f_lo * cur_half_x ||
+                                    pad_y > f_hi * cur_half_y || pad_y < f_lo * cur_half_y ||
+                                    pad_z > f_hi * cur_half_z || pad_z < f_lo * cur_half_z;
             const bool cent_drift = std::abs(x_c - cur_x_c) > Real(0.5) * cur_half_x ||
                                     std::abs(y_c - cur_y_c) > Real(0.5) * cur_half_y ||
                                     std::abs(z_c - cur_z_c) > Real(0.5) * cur_half_z;

@@ -698,6 +698,8 @@ int main (int argc, char* argv[])
             pp_sc.query("pad_factor", sc_pad_factor);
             pp_sc.query("min_pad_xy", sc_min_pad_xy);
             pp_sc.query("min_pad_z",  sc_min_pad_z);
+            amrex::Real sc_resize_hyst = 2.0;
+            pp_sc.query("resize_hyst", sc_resize_hyst);
             pp_sc.query("image_plane_enabled", sc_image_enabled);
             pp_sc.query("image_plane_z",       sc_image_z_cath);
             pp_sc.query("image_cutoff",        sc_image_cutoff);
@@ -720,6 +722,7 @@ int main (int argc, char* argv[])
                 if (sc_adaptive != 0) {
                     sc->set_adaptive(true, sc_pad_factor, sc_min_pad_xy, sc_min_pad_z);
                 }
+                sc->set_resize_hyst(sc_resize_hyst);
                 if (sc_hybrid_z != 0) {
                     sc->set_hybrid_z_adaptive(true, sc_pad_factor, sc_min_pad_z);
                 }

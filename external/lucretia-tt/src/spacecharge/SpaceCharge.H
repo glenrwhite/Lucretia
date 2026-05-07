@@ -92,6 +92,17 @@ public:
     }
     bool adaptive    () const noexcept { return m_adaptive; }
 
+    /** Resize hysteresis factor for adaptive mode. Resize triggers when
+     *  the new pad is > hyst * current OR < (1/hyst) * current. Larger
+     *  values mean fewer resizes (less per-step field-discontinuity noise
+     *  in the gun region) but coarser tracking of bunch evolution.
+     *  Default 2.0; 3.0-4.0 are reasonable for emittance-sensitive runs. */
+    void set_resize_hyst (amrex::Real h) noexcept
+    {
+        m_resize_hyst = std::max(amrex::Real(1.1), h);
+    }
+    amrex::Real resize_hyst () const noexcept { return m_resize_hyst; }
+
     /** Hybrid mesh mode: STATIC transverse (xy frozen at the constructor's
      *  initial RealBox xy extent) + ADAPTIVE longitudinal (z resizes per
      *  step to track the bunch's CURRENT sigma_z).
@@ -389,6 +400,7 @@ private:
     amrex::Real                m_pad_factor     = 5.0;
     amrex::Real                m_min_pad_xy     = 1.0e-3;
     amrex::Real                m_min_pad_z      = 1.0e-3;
+    amrex::Real                m_resize_hyst    = 2.0;     // adaptive resize hysteresis factor
     bool                       m_image_plane_enabled = false;
     amrex::Real                m_image_plane_z       = 0.0;
     amrex::Real                m_image_cutoff        = 0.05;     // m
