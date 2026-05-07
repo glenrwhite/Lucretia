@@ -692,6 +692,76 @@ void SpaceCharge::compute_E_from_phi ()
 void SpaceCharge::solve (particles::TimeBunch& bunch)
 {
     using namespace amrex;
+    using namespace particles;
+
+    // ---- Resize-jump diagnostic: capture E_old at all alive particle
+    // positions BEFORE any resize/deposit/solve. Re-gather after the
+    // solve to quantify the per-particle field discontinuity caused by
+    // a mesh resize. Skipped on the very first call (E_old is zeroed
+    // by the constructor — no meaningful "discontinuity" to report).
+    std::vector<Real> diag_x, diag_y, diag_z;
+    std::vector<Real> diag_Ex_old, diag_Ey_old, diag_Ez_old;
+    const bool do_diag = m_diag_resize_jump && m_n_recenters > 0;
+    if (do_diag) {
+        // Same CIC gather we use in TrackingLoop, kept inline for clarity.
+        auto const* lo_p = m_geom.ProbLo();
+        auto const* dx   = m_geom.CellSize();
+        const Real lo0 = lo_p[0], lo1 = lo_p[1], lo2 = lo_p[2];
+        const Real dxi0 = Real(1.0)/dx[0], dxi1 = Real(1.0)/dx[1], dxi2 = Real(1.0)/dx[2];
+        const Box mesh_box_old = m_Ex[MFIter(m_Ex)].box();
+
+        Array4<const Real> Ex_old = m_Ex.const_array(MFIter(m_Ex));
+        Array4<const Real> Ey_old = m_Ey.const_array(MFIter(m_Ey));
+        Array4<const Real> Ez_old = m_Ez.const_array(MFIter(m_Ez));
+
+        using PIter = ParIterSoA<RealSoA::nattribs, IntSoA::nattribs>;
+        constexpr int lev = 0;
+        for (PIter pti(bunch, lev); pti.isValid(); ++pti) {
+            auto& soa = pti.GetStructOfArrays();
+            const int np = pti.numParticles();
+            const auto& xs = soa.GetRealData(RealSoA::x);
+            const auto& ys = soa.GetRealData(RealSoA::y);
+            const auto& zs = soa.GetRealData(RealSoA::z);
+            const auto& alives = soa.GetIntData(IntSoA::alive);
+            for (int i = 0; i < np; ++i) {
+                if (alives[i] == 0) { continue; }
+                if (m_z_filter_min_active && zs[i] < m_z_filter_min) { continue; }
+                const Real xp = xs[i], yp = ys[i], zp = zs[i];
+                const Real fx = (xp - lo0) * dxi0;
+                const Real fy = (yp - lo1) * dxi1;
+                const Real fz = (zp - lo2) * dxi2;
+                const int ix = int(std::floor(fx));
+                const int iy = int(std::floor(fy));
+                const int iz = int(std::floor(fz));
+                // Skip particles outside the OLD mesh footprint -- gather
+                // would read garbage / out of array. Only count particles
+                // that we can compare cleanly on both old and new meshes.
+                if (ix    < mesh_box_old.smallEnd(0) || ix+1 > mesh_box_old.bigEnd(0) ||
+                    iy    < mesh_box_old.smallEnd(1) || iy+1 > mesh_box_old.bigEnd(1) ||
+                    iz    < mesh_box_old.smallEnd(2) || iz+1 > mesh_box_old.bigEnd(2)) {
+                    continue;
+                }
+                const Real wx = fx - Real(ix), wy = fy - Real(iy), wz = fz - Real(iz);
+                const Real omx = Real(1.0) - wx, omy = Real(1.0) - wy, omz = Real(1.0) - wz;
+                auto cic = [&](Array4<const Real> const& F) {
+                    return omx*omy*omz*F(ix  ,iy  ,iz  ,0)
+                         + wx *omy*omz*F(ix+1,iy  ,iz  ,0)
+                         + omx*wy *omz*F(ix  ,iy+1,iz  ,0)
+                         + wx *wy *omz*F(ix+1,iy+1,iz  ,0)
+                         + omx*omy*wz *F(ix  ,iy  ,iz+1,0)
+                         + wx *omy*wz *F(ix+1,iy  ,iz+1,0)
+                         + omx*wy *wz *F(ix  ,iy+1,iz+1,0)
+                         + wx *wy *wz *F(ix+1,iy+1,iz+1,0);
+                };
+                diag_x.push_back(xp);
+                diag_y.push_back(yp);
+                diag_z.push_back(zp);
+                diag_Ex_old.push_back(cic(Ex_old));
+                diag_Ey_old.push_back(cic(Ey_old));
+                diag_Ez_old.push_back(cic(Ez_old));
+            }
+        }
+    }
 
     // Exact-bunch-range adaptive (ImpactT-style): mesh resized every step
     // to EXACTLY the alive-particle min/max in each axis, with NO padding
@@ -783,12 +853,44 @@ void SpaceCharge::solve (particles::TimeBunch& bunch)
             const bool size_drift = pad_x > f_hi * cur_half_x || pad_x < f_lo * cur_half_x ||
                                     pad_y > f_hi * cur_half_y || pad_y < f_lo * cur_half_y ||
                                     pad_z > f_hi * cur_half_z || pad_z < f_lo * cur_half_z;
-            const bool cent_drift = std::abs(x_c - cur_x_c) > Real(0.5) * cur_half_x ||
-                                    std::abs(y_c - cur_y_c) > Real(0.5) * cur_half_y ||
-                                    std::abs(z_c - cur_z_c) > Real(0.5) * cur_half_z;
+            const Real cdt = m_cent_drift_threshold;
+            const bool cent_drift = std::abs(x_c - cur_x_c) > cdt * cur_half_x ||
+                                    std::abs(y_c - cur_y_c) > cdt * cur_half_y ||
+                                    std::abs(z_c - cur_z_c) > cdt * cur_half_z;
 
             if (first_call || size_drift || cent_drift) {
-                resize(x_c, y_c, z_c, pad_x, pad_y, pad_z);
+                Real new_x_c = x_c, new_y_c = y_c, new_z_c = z_c;
+                Real new_half_x = pad_x, new_half_y = pad_y, new_half_z = pad_z;
+                bool took_integer_shift = false;
+                // Integer-cell snap: when only the centroid trigger fires
+                // (size unchanged), snap the new center to (cur_center + N*dx)
+                // and freeze the half-extent at its current value. The
+                // resulting mesh has the same cell sizes and cell positions
+                // (in absolute terms) as the old one, just relabelled. The
+                // particles' fractional positions in their cells are
+                // preserved -> same deposit -> same phi -> same gather E.
+                // Zero discretization noise from this kind of resize.
+                if (m_integer_cell_shift && cent_drift && !size_drift && !first_call) {
+                    auto const* dx_cur = m_geom.CellSize();
+                    const long n_shift_x = std::lround((x_c - cur_x_c) / dx_cur[0]);
+                    const long n_shift_y = std::lround((y_c - cur_y_c) / dx_cur[1]);
+                    const long n_shift_z = std::lround((z_c - cur_z_c) / dx_cur[2]);
+                    new_x_c = cur_x_c + Real(n_shift_x) * dx_cur[0];
+                    new_y_c = cur_y_c + Real(n_shift_y) * dx_cur[1];
+                    new_z_c = cur_z_c + Real(n_shift_z) * dx_cur[2];
+                    new_half_x = cur_half_x;
+                    new_half_y = cur_half_y;
+                    new_half_z = cur_half_z;
+                    took_integer_shift = true;
+                }
+                if (m_diag_resize_jump) {
+                    amrex::Print() << "[SC.adapt_trigger] first=" << (int)first_call
+                                   << " size=" << (int)size_drift
+                                   << " cent=" << (int)cent_drift
+                                   << " snap=" << (int)took_integer_shift
+                                   << "\n";
+                }
+                resize(new_x_c, new_y_c, new_z_c, new_half_x, new_half_y, new_half_z);
                 geom_changed = true;
             }
         }
@@ -881,6 +983,110 @@ void SpaceCharge::solve (particles::TimeBunch& bunch)
                        << "  sum(rho)*dV=" << total_q
                        << "  |phi|_max=" << phi_max
                        << "  |E|_max=(" << Ex_max << "," << Ey_max << "," << Ez_max << ")\n";
+    }
+
+    // ---- Resize-jump diagnostic: re-gather E_new at the saved positions
+    // and compare to E_old. Only report if a resize actually fired this
+    // call (otherwise the difference is just per-step evolution, which is
+    // the integrator's normal smooth path).
+    if (do_diag && geom_changed && !diag_x.empty()) {
+        auto const* lo_p_new = m_geom.ProbLo();
+        auto const* dx_new   = m_geom.CellSize();
+        const Real lo0 = lo_p_new[0], lo1 = lo_p_new[1], lo2 = lo_p_new[2];
+        const Real dxi0 = Real(1.0)/dx_new[0], dxi1 = Real(1.0)/dx_new[1], dxi2 = Real(1.0)/dx_new[2];
+        const Box mesh_box_new = m_Ex[MFIter(m_Ex)].box();
+        Array4<const Real> Ex_new = m_Ex.const_array(MFIter(m_Ex));
+        Array4<const Real> Ey_new = m_Ey.const_array(MFIter(m_Ey));
+        Array4<const Real> Ez_new = m_Ez.const_array(MFIter(m_Ez));
+
+        long n_in   = 0;
+        Real sum_dEx = 0, sum_dEy = 0, sum_dEz = 0;
+        Real sum_dEx2 = 0, sum_dEy2 = 0, sum_dEz2 = 0;
+        Real max_dEx = 0, max_dEy = 0, max_dEz = 0;
+        Real sum_Ex_new2 = 0, sum_Ey_new2 = 0, sum_Ez_new2 = 0;
+
+        const long N = (long)diag_x.size();
+        for (long k = 0; k < N; ++k) {
+            const Real xp = diag_x[k], yp = diag_y[k], zp = diag_z[k];
+            const Real fx = (xp - lo0) * dxi0;
+            const Real fy = (yp - lo1) * dxi1;
+            const Real fz = (zp - lo2) * dxi2;
+            const int ix = int(std::floor(fx));
+            const int iy = int(std::floor(fy));
+            const int iz = int(std::floor(fz));
+            if (ix    < mesh_box_new.smallEnd(0) || ix+1 > mesh_box_new.bigEnd(0) ||
+                iy    < mesh_box_new.smallEnd(1) || iy+1 > mesh_box_new.bigEnd(1) ||
+                iz    < mesh_box_new.smallEnd(2) || iz+1 > mesh_box_new.bigEnd(2)) {
+                continue;   // outside new mesh: no clean comparison
+            }
+            const Real wx = fx - Real(ix), wy = fy - Real(iy), wz = fz - Real(iz);
+            const Real omx = Real(1.0) - wx, omy = Real(1.0) - wy, omz = Real(1.0) - wz;
+            auto cic = [&](Array4<const Real> const& F) {
+                return omx*omy*omz*F(ix  ,iy  ,iz  ,0)
+                     + wx *omy*omz*F(ix+1,iy  ,iz  ,0)
+                     + omx*wy *omz*F(ix  ,iy+1,iz  ,0)
+                     + wx *wy *omz*F(ix+1,iy+1,iz  ,0)
+                     + omx*omy*wz *F(ix  ,iy  ,iz+1,0)
+                     + wx *omy*wz *F(ix+1,iy  ,iz+1,0)
+                     + omx*wy *wz *F(ix  ,iy+1,iz+1,0)
+                     + wx *wy *wz *F(ix+1,iy+1,iz+1,0);
+            };
+            const Real Ex_n = cic(Ex_new);
+            const Real Ey_n = cic(Ey_new);
+            const Real Ez_n = cic(Ez_new);
+            const Real dEx = Ex_n - diag_Ex_old[k];
+            const Real dEy = Ey_n - diag_Ey_old[k];
+            const Real dEz = Ez_n - diag_Ez_old[k];
+            sum_dEx  += dEx;     sum_dEy  += dEy;     sum_dEz  += dEz;
+            sum_dEx2 += dEx*dEx; sum_dEy2 += dEy*dEy; sum_dEz2 += dEz*dEz;
+            sum_Ex_new2 += Ex_n*Ex_n; sum_Ey_new2 += Ey_n*Ey_n; sum_Ez_new2 += Ez_n*Ez_n;
+            if (std::abs(dEx) > max_dEx) max_dEx = std::abs(dEx);
+            if (std::abs(dEy) > max_dEy) max_dEy = std::abs(dEy);
+            if (std::abs(dEz) > max_dEz) max_dEz = std::abs(dEz);
+            ++n_in;
+        }
+
+        if (n_in > 0) {
+            const Real inv_N = Real(1.0) / Real(n_in);
+            const Real mean_dEx = sum_dEx * inv_N;
+            const Real mean_dEy = sum_dEy * inv_N;
+            const Real mean_dEz = sum_dEz * inv_N;
+            const Real std_dEx  = std::sqrt(std::max(sum_dEx2*inv_N - mean_dEx*mean_dEx, Real(0.0)));
+            const Real std_dEy  = std::sqrt(std::max(sum_dEy2*inv_N - mean_dEy*mean_dEy, Real(0.0)));
+            const Real std_dEz  = std::sqrt(std::max(sum_dEz2*inv_N - mean_dEz*mean_dEz, Real(0.0)));
+            const Real rms_Ex_new = std::sqrt(sum_Ex_new2 * inv_N);
+            const Real rms_Ey_new = std::sqrt(sum_Ey_new2 * inv_N);
+            const Real rms_Ez_new = std::sqrt(sum_Ez_new2 * inv_N);
+            ++m_diag_jump_count;
+            // qE*dt -> dp / (m_e*c) (normalized momentum) for electrons
+            constexpr Real kQe = Real(1.602176634e-19);
+            constexpr Real kMec = Real(9.1093837015e-31) * Real(299792458.0);
+            const Real dt = m_diag_dt_hint;
+            const Real dpx_norm_std = (dt > 0) ? (kQe * std_dEx * dt / kMec) : Real(0.0);
+            const Real dpy_norm_std = (dt > 0) ? (kQe * std_dEy * dt / kMec) : Real(0.0);
+            const Real dpz_norm_std = (dt > 0) ? (kQe * std_dEz * dt / kMec) : Real(0.0);
+            amrex::Print()
+                << "[SC.diag.resize_jump #" << m_diag_jump_count
+                << "] N=" << n_in
+                << " resize#" << m_n_recenters
+                << " dx_new=(" << dx_new[0] << "," << dx_new[1] << "," << dx_new[2] << ")\n"
+                << "                       mean(dE)=(" << mean_dEx << "," << mean_dEy << "," << mean_dEz << ") V/m"
+                << "  std(dE)=(" << std_dEx << "," << std_dEy << "," << std_dEz << ")\n"
+                << "                       rms(E_new)=(" << rms_Ex_new << "," << rms_Ey_new << "," << rms_Ez_new << ") V/m"
+                << "  max(|dE|)=(" << max_dEx << "," << max_dEy << "," << max_dEz << ")\n"
+                << "                       rel std(dE)/rms(E)=(" << std_dEx/std::max(rms_Ex_new,Real(1e-30))
+                << "," << std_dEy/std::max(rms_Ey_new,Real(1e-30))
+                << "," << std_dEz/std::max(rms_Ez_new,Real(1e-30)) << ")"
+                << "  coherent_frac=(" << std::abs(mean_dEx)/std::max(std_dEx,Real(1e-30))
+                << "," << std::abs(mean_dEy)/std::max(std_dEy,Real(1e-30))
+                << "," << std::abs(mean_dEz)/std::max(std_dEz,Real(1e-30)) << ")\n";
+            if (dt > 0) {
+                amrex::Print()
+                << "                       implied std(d(p/mc))=(" << dpx_norm_std
+                << "," << dpy_norm_std
+                << "," << dpz_norm_std << ")  (dt=" << dt << "s)\n";
+            }
+        }
     }
 }
 

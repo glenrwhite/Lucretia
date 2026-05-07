@@ -282,6 +282,7 @@ void TrackingLoop::step (
     Box                sc_box;
     int                sc_shape_order = 1;     // 1 = CIC, 2 = TSC
     if (sc) {
+        sc->set_diag_dt_hint(dt);
         sc->solve(bunch);
         dxi_sc = sc->dxi();
         lo_sc  = sc->lo();
@@ -867,6 +868,7 @@ void TrackingLoop::step_dkd (
     Box                sc_box;
     int                sc_shape_order = 1;     // 1 = CIC, 2 = TSC
     if (sc) {
+        sc->set_diag_dt_hint(dt);
         sc->solve(bunch);
         dxi_sc    = sc->dxi();
         lo_sc     = sc->lo();

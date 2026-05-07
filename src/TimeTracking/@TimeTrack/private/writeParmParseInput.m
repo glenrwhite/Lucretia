@@ -154,6 +154,12 @@ if obj.enable_space_charge
         if isprop(obj, 'sc_resize_hyst') && ~isempty(obj.sc_resize_hyst) && obj.sc_resize_hyst ~= 2.0
             fprintf(f, 'space_charge.resize_hyst = %.6g\n', obj.sc_resize_hyst);
         end
+        if isprop(obj, 'sc_cent_drift_threshold') && ~isempty(obj.sc_cent_drift_threshold) && obj.sc_cent_drift_threshold ~= 0.5
+            fprintf(f, 'space_charge.cent_drift_threshold = %.6g\n', obj.sc_cent_drift_threshold);
+        end
+        if isprop(obj, 'sc_integer_cell_shift') && ~isempty(obj.sc_integer_cell_shift) && obj.sc_integer_cell_shift
+            fprintf(f, 'space_charge.integer_cell_shift = 1\n');
+        end
         if isprop(obj, 'sc_min_pad_xy') && ~isempty(obj.sc_min_pad_xy)
             fprintf(f, 'space_charge.min_pad_xy = %.6g\n', obj.sc_min_pad_xy);
         end
@@ -180,6 +186,9 @@ if obj.enable_space_charge
     end
     if isprop(obj, 'sc_verbose') && ~isempty(obj.sc_verbose) && obj.sc_verbose > 0
         fprintf(f, 'space_charge.verbose = %d\n', round(obj.sc_verbose));
+    end
+    if isprop(obj, 'sc_diag_resize_jump') && ~isempty(obj.sc_diag_resize_jump) && obj.sc_diag_resize_jump > 0
+        fprintf(f, 'space_charge.diag_resize_jump = %d\n', round(obj.sc_diag_resize_jump));
     end
 end
 if isprop(obj, 'enable_slice_sc') && obj.enable_slice_sc

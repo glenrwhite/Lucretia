@@ -103,6 +103,56 @@ public:
     }
     amrex::Real resize_hyst () const noexcept { return m_resize_hyst; }
 
+    /** Centroid drift threshold for adaptive resize: triggers a resize
+     *  when |new_centroid - old_centroid| > frac * current_half_extent
+     *  along ANY axis. Default 0.5. Larger values defer resize events,
+     *  letting the bunch drift further inside the existing mesh before
+     *  forcing a re-solve. With a relativistic bunch traveling c*dt
+     *  per step (~1.2 mm/step at dt=4 ps) this knob is the dominant
+     *  control on resize FREQUENCY — at the default 0.5 with a 7-mm
+     *  z half-extent, the threshold is hit every ~3 steps and produces
+     *  thousands of field-reset events per run. Raising to 0.9-0.95 lets
+     *  the bunch use most of the box before a resize fires.
+     *  Range [0.1, 0.99]; default 0.5. */
+    void set_cent_drift_threshold (amrex::Real frac) noexcept
+    {
+        m_cent_drift_threshold = std::min(std::max(frac, amrex::Real(0.1)), amrex::Real(0.99));
+    }
+    amrex::Real cent_drift_threshold () const noexcept { return m_cent_drift_threshold; }
+
+    /** Integer-cell snap for centroid-only resizes. When on AND only the
+     *  centroid drift trigger fires (not size_drift), the new box center
+     *  is snapped to (old_center + N * dx) with N an integer per axis,
+     *  so particles' fractional positions within their cells are
+     *  preserved across the resize. With identical sub-cell deposit
+     *  pattern, the IGF gives an identical per-cell phi field and the
+     *  CIC gather at any fixed physical particle position returns the
+     *  exact same E -- zero discretization noise from the resize. The
+     *  Geometry RealBox is updated and m_phi/m_E setVal(0) still happens
+     *  but is harmless because the IGF FFT overwrites phi from rho
+     *  on the next solve.
+     *  Default off (preserves prior behaviour). */
+    void set_integer_cell_shift (bool on) noexcept { m_integer_cell_shift = on; }
+    bool integer_cell_shift () const noexcept { return m_integer_cell_shift; }
+
+    /** Diagnostic mode: when on, every solve() that triggers a mesh resize
+     *  measures the per-particle field discontinuity. Before the resize,
+     *  E_old is gathered at all alive particle positions. After the new
+     *  deposit + solve, E_new is gathered at the SAME positions on the
+     *  new mesh. Mean / std / max of (E_new - E_old) per axis are printed,
+     *  along with the implied per-step momentum kick (q * dE * dt) using
+     *  the most recent dt seen by the bunch. The diagnostic is O(N_alive)
+     *  per resize event and is gated behind `space_charge.diag_resize_jump
+     *  = 1` because of the extra gather pass.
+     *  Default off. */
+    void set_diag_resize_jump (bool on) noexcept { m_diag_resize_jump = on; }
+    bool diag_resize_jump     () const noexcept { return m_diag_resize_jump; }
+
+    /** Tell SpaceCharge what dt the calling integrator is using; used only
+     *  by the resize-jump diagnostic to convert dE -> implied momentum
+     *  kick. No effect on the physics. */
+    void set_diag_dt_hint (amrex::Real dt) noexcept { m_diag_dt_hint = dt; }
+
     /** Hybrid mesh mode: STATIC transverse (xy frozen at the constructor's
      *  initial RealBox xy extent) + ADAPTIVE longitudinal (z resizes per
      *  step to track the bunch's CURRENT sigma_z).
@@ -401,6 +451,11 @@ private:
     amrex::Real                m_min_pad_xy     = 1.0e-3;
     amrex::Real                m_min_pad_z      = 1.0e-3;
     amrex::Real                m_resize_hyst    = 2.0;     // adaptive resize hysteresis factor
+    amrex::Real                m_cent_drift_threshold = 0.5; // adaptive: resize when centroid drifts > frac * half-extent
+    bool                       m_integer_cell_shift = false; // adaptive: snap centroid-only resizes to integer cells
+    bool                       m_diag_resize_jump = false; // diagnostic: per-particle dE at resize
+    amrex::Real                m_diag_dt_hint     = 0.0;   // dt for dp = qE*dt readout (set by caller)
+    int                        m_diag_jump_count  = 0;     // # resize-jump events reported so far
     bool                       m_image_plane_enabled = false;
     amrex::Real                m_image_plane_z       = 0.0;
     amrex::Real                m_image_cutoff        = 0.05;     // m

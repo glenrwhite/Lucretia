@@ -29,6 +29,8 @@ p.addParameter('sc_mode',     'full', @(x) ischar(x) || isstring(x));   % 'full'
 p.addParameter('sc_static_xrad', 0.015,@(x) isempty(x) || isnumeric(x));  % m: STATIC mesh ±xrad (default 15 mm = matches ImpactT; pass [] to use adaptive)
 p.addParameter('sc_pad_factor',  5.0,  @isnumeric);                       % adaptive: half-extent = pad_factor * sigma
 p.addParameter('sc_resize_hyst', 2.0,  @isnumeric);                       % adaptive: resize hysteresis factor (larger = fewer resizes, less noise)
+p.addParameter('sc_cent_drift_threshold', 0.5, @isnumeric);              % adaptive: centroid drift trigger (frac of half-extent). 0.5 default; 0.9-0.95 reduces resize freq for relativistic bunches
+p.addParameter('sc_integer_cell_shift', false, @islogical);              % adaptive: snap centroid-only resizes to integer cells (preserves deposit pattern -> zero per-particle field jump for that resize event)
 p.addParameter('slice_gamma_off', [],  @(x) isempty(x) || isnumeric(x));  % disable slice SC when bunch mean gamma >= this (lets 3D mesh handle longitudinal at high gamma)
 p.addParameter('disable_self_force', false, @islogical);                  % diagnostic: skip self-force LUT subtraction
 p.addParameter('sc_exact_range', false, @islogical);                      % ImpactT-style exact bunch range adaptive mesh (no padding, every step)
@@ -39,6 +41,7 @@ p.addParameter('sc_shape_order', 1, @isnumeric);                         % parti
 p.addParameter('sc_use_b_field', false, @islogical);                     % apply SC B field via Boris (matches ImpactT) -- captures non-synchronous v×B coupling
 p.addParameter('slice_profile',  0,   @isnumeric);                       % slice SC transverse profile: 0 = uniform disk (default), 1 = Gaussian disk
 p.addParameter('self_force_direct', false, @islogical);                  % compute SC self-force directly each step (no LUT; ~7x cost; avoids LUT-rebuild noise w/ adaptive mesh)
+p.addParameter('sc_diag_resize_jump', 0, @isnumeric);                    % if >0, lucretia-tt prints per-particle dE statistics on each mesh resize (diagnostic of field discontinuity)
 p.parse(varargin{:});
 opts = p.Results;
 impactt_dir = char(opts.impactt_dir);
@@ -139,6 +142,13 @@ tt.sc_pad_factor = opts.sc_pad_factor;
 if opts.sc_resize_hyst ~= 2.0
     tt.sc_resize_hyst = opts.sc_resize_hyst;
 end
+if opts.sc_cent_drift_threshold ~= 0.5
+    tt.sc_cent_drift_threshold = opts.sc_cent_drift_threshold;
+end
+if opts.sc_integer_cell_shift
+    tt.sc_integer_cell_shift = true;
+    fprintf('  integer-cell snap on centroid-only resizes (zero discretization noise)\n');
+end
 if ~isempty(opts.slice_gamma_off)
     tt.slice_sc_gamma_off = opts.slice_gamma_off;
 end
@@ -181,6 +191,11 @@ end
 if opts.self_force_direct
     tt.self_force_direct = true;
     fprintf('  self-force computed directly each step (no LUT)\n');
+end
+if opts.sc_diag_resize_jump > 0
+    tt.sc_diag_resize_jump = round(opts.sc_diag_resize_jump);
+    tt.verbose_run = true;   % diagnostic prints go to stdout; stream them
+    fprintf('  diagnostic: per-particle dE on each resize (will stream stdout)\n');
 end
 fprintf('  sc_mode = %s (mesh=%d, slice=%d, image=%d, adaptive=%d)\n', sc_mode, ...
     tt.enable_space_charge, tt.enable_slice_sc, tt.sc_image_plane, tt.sc_adaptive);

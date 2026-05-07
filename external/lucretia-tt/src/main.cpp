@@ -700,6 +700,12 @@ int main (int argc, char* argv[])
             pp_sc.query("min_pad_z",  sc_min_pad_z);
             amrex::Real sc_resize_hyst = 2.0;
             pp_sc.query("resize_hyst", sc_resize_hyst);
+            amrex::Real sc_cent_drift_thresh = 0.5;
+            pp_sc.query("cent_drift_threshold", sc_cent_drift_thresh);
+            int sc_integer_cell_shift = 0;
+            pp_sc.query("integer_cell_shift", sc_integer_cell_shift);
+            int sc_diag_resize_jump = 0;
+            pp_sc.query("diag_resize_jump", sc_diag_resize_jump);
             pp_sc.query("image_plane_enabled", sc_image_enabled);
             pp_sc.query("image_plane_z",       sc_image_z_cath);
             pp_sc.query("image_cutoff",        sc_image_cutoff);
@@ -723,6 +729,13 @@ int main (int argc, char* argv[])
                     sc->set_adaptive(true, sc_pad_factor, sc_min_pad_xy, sc_min_pad_z);
                 }
                 sc->set_resize_hyst(sc_resize_hyst);
+                sc->set_cent_drift_threshold(sc_cent_drift_thresh);
+                if (sc_integer_cell_shift != 0) {
+                    sc->set_integer_cell_shift(true);
+                }
+                if (sc_diag_resize_jump != 0) {
+                    sc->set_diag_resize_jump(true);
+                }
                 if (sc_hybrid_z != 0) {
                     sc->set_hybrid_z_adaptive(true, sc_pad_factor, sc_min_pad_z);
                 }

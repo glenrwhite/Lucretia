@@ -54,6 +54,8 @@ properties
     sc_hybrid_z_adaptive = false                                 % SC mesh: STATIC xy + ADAPTIVE z (resize z each step to track sigma_z, keep xy frozen at initial RealBox)
     sc_pad_factor       = 5.0                                    % adaptive: half-extent = max(pad_factor * sigma, min_pad)
     sc_resize_hyst      = 2.0                                    % adaptive: resize triggers when new pad > hyst*current OR < (1/hyst)*current. Larger = fewer resizes (less noise but coarser tracking).
+    sc_cent_drift_threshold = 0.5                                % adaptive: resize when |centroid_drift| > frac*half_extent on ANY axis. Default 0.5 fires every ~3 steps for relativistic bunch (z drift dominates). Raise to 0.9-0.95 to reduce field-reset noise.
+    sc_integer_cell_shift   = false                              % adaptive: when only the centroid trigger fires, snap the new box center to (cur_center + N*dx) so particles' fractional cell positions are preserved -> zero discretization noise from that resize.
     sc_min_pad_xy       = 1e-3                                   % adaptive: min transverse half-extent (m)
     sc_min_pad_z        = 1e-3                                   % adaptive: min longitudinal half-extent (m)
     sc_image_plane      = false                                  % cathode image-charge handling: deposit mirror charges on the SC mesh so the IGF Poisson satisfies phi=0 on the cathode plane
@@ -62,6 +64,7 @@ properties
     sc_rho_smooth_passes = 0                                     % # of binomial (1,2,1)/4 smoother passes applied to deposited rho before IGF solve (0 = off; 1-2 cuts CIC noise without losing physical signal)
     sc_shape_order      = 1                                      % particle deposit/gather shape: 1 = CIC (linear, 8-node), 2 = TSC (quadratic, 27-node, smoother field gradients at ~3x cost)
     sc_verbose          = 0                                      % space_charge.verbose: 0 = quiet, 1 = print recenter / per-step diagnostics
+    sc_diag_resize_jump = 0                                      % space_charge.diag_resize_jump: 1 = print per-particle dE statistics on each mesh resize (diagnostic of field-discontinuity noise); 0 = off
     enable_slice_sc     = false                                  % toggles ParmParse space_charge.slice_enabled (1D longitudinal slice SC, mesh-free in z)
     slice_sc_n          = 256                                    % # of z-slices for the slice SC bunch density estimator
     slice_sc_radius_factor = 2.0                                 % bunch_radius (for the disk-stack formula) = factor * sigma_xy
