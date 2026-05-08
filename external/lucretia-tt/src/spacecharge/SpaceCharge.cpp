@@ -47,15 +47,15 @@ SpaceCharge::SpaceCharge (
     const amrex::BoxArray&            cell_ba,
     const amrex::DistributionMapping& /*dm*/)
     : m_geom(geom)
-    // Force m_rho to live on a SINGLE BoxArray box (the full nodal domain),
-    // independent of the multi-box decomposition the caller may have built
-    // for the particle container. The reason: deposit_charge needs to write
-    // to nodes that may not belong to the current particle tile (since the
-    // bunch can drift across the SC mesh as the SC mesh recenters but the
-    // particle tile assignment is fixed-at-construction in TimeBunch).
-    // With a single FAB, deposit can index arbitrary positions without a
-    // tile lookup; the FFT runs single-rank (fine for Mac dev / single-rank
-    // photoinjector runs at 48^3).
+    // STILL single-FAB by default. Multi-rank refactor in progress -- the
+    // deposit_charge now uses MFIter + SumBoundary so it would WORK with
+    // multi-FAB, but the gather (TrackingLoop calls sc->Ex_array() returning
+    // ONE Array4) and the SC mesh dump still assume one FAB. Until those
+    // are refactored, keep the single-FAB constraint to preserve correctness.
+    //
+    // To enable multi-FAB / multi-rank, change cell_ba.minimalBox() below
+    // to cell_ba and use the passed-in dm. Then update TrackingLoop's
+    // gather to use MFIter or a per-particle FAB lookup.
     , m_ba_nodal(amrex::convert(amrex::BoxArray(cell_ba.minimalBox()),
                                 amrex::IntVect{1, 1, 1}))
     , m_dm(amrex::DistributionMapping(amrex::BoxArray(cell_ba.minimalBox())))
@@ -461,137 +461,149 @@ void SpaceCharge::deposit_charge (particles::TimeBunch& bunch)
     const Real inv_dy = Real(1.0) / dx[1];
     const Real inv_dz = Real(1.0) / dx[2];
 
-    // Position-based deposit: with the single-FAB m_rho (forced in the
-    // SC constructor regardless of the cell_ba subdivision the caller
-    // passed in), we iterate particles via TimeBunch's PIter (whatever
-    // tile structure that uses) and deposit directly into m_rho's only
-    // FAB. The check is purely "does the particle's deposit footprint
-    // fall inside m_rho's nodal box" -- there's no tile-correspondence
-    // requirement between the particle iterator and m_rho.
+    // Position-based deposit, multi-FAB compatible:
+    //   For each FAB on this rank (MFIter), iterate ALL particles and
+    //   deposit those whose footprint overlaps the FAB's grown box (interior
+    //   + 1 ghost cell). After the loop, SumBoundary merges ghost-cell
+    //   contributions across rank/box boundaries into the interior cells of
+    //   the owning FAB.
     //
-    // Single-rank assumption: m_rho has exactly one FAB. Get it via the
-    // first MFIter step. (For multi-rank we'd need either ParallelCopy
-    // from a per-rank scratch FAB, or per-particle box-ownership lookup.)
-    Box      gbox;
-    Array4<Real> rho_arr;
-    {
-        MFIter mfi(m_rho);
-        AMREX_ALWAYS_ASSERT_WITH_MESSAGE(mfi.isValid(),
-            "SpaceCharge::deposit_charge: m_rho has no local FAB on this rank "
-            "(single-FAB assumption violated -- only single-rank runs supported here)");
-        gbox    = m_rho[mfi].box();
-        rho_arr = m_rho.array(mfi);
-    }
-    auto const& glo = gbox.smallEnd();
-    auto const& ghi = gbox.bigEnd();
+    // Cost: O(N_particles * N_FABs_local). For typical 48^3 mesh + 27 boxes
+    // (max_grid_size=16), the per-particle bounds check is ~10 cycles ×
+    // 27 FABs = ~270 cycles. The actual deposit (8 corner adds) only fires
+    // for the 1 (interior) or 2-4 (near boundary) FABs that overlap.
+    //
+    // Particles fully outside the SC mesh footprint are skipped silently
+    // (they still get external-field gather + Boris in TrackingLoop, just
+    // no SC). Matches the previous single-FAB behavior.
 
+    // Gather ALL particle data into flat vectors first (avoids nested
+    // MFIter: PIter internally uses MFIter on the particle container, and
+    // AMReX disallows nested MFIters by default).
     using PIter = ParIterSoA<RealSoA::nattribs, IntSoA::nattribs>;
     constexpr int lev = 0;
-    long total_deposited = 0;
-    long total_outside   = 0;
-    for (PIter pti(bunch, lev); pti.isValid(); ++pti) {
-        auto& soa = pti.GetStructOfArrays();
-        const int np = pti.numParticles();
-        const auto& xs = soa.GetRealData(RealSoA::x);
-        const auto& ys = soa.GetRealData(RealSoA::y);
-        const auto& zs = soa.GetRealData(RealSoA::z);
-        const auto& qs = soa.GetRealData(RealSoA::q);
-        const auto& ws = soa.GetRealData(RealSoA::w);
-        const auto& alives = soa.GetIntData(IntSoA::alive);
-
-        if (m_shape_order == 1) {
-            // CIC deposit (8-node cube, base = floor(fx))
-            for (int p = 0; p < np; ++p) {
-                if (alives[p] == 0) { continue; }
-                // Optional z-filter: skip particles below cathode plane.
-                // Matches ImpactT's `flagpos=1` mode in Depositor.f90:273.
-                if (m_z_filter_min_active && zs[p] < m_z_filter_min) { continue; }
-
-                const Real fx = (xs[p] - lo[0]) * inv_dx;
-                const Real fy = (ys[p] - lo[1]) * inv_dy;
-                const Real fz = (zs[p] - lo[2]) * inv_dz;
-                const int  ix = int(std::floor(fx));
-                const int  iy = int(std::floor(fy));
-                const int  iz = int(std::floor(fz));
-                const Real wx1 = fx - Real(ix);   const Real wx0 = Real(1.0) - wx1;
-                const Real wy1 = fy - Real(iy);   const Real wy0 = Real(1.0) - wy1;
-                const Real wz1 = fz - Real(iz);   const Real wz0 = Real(1.0) - wz1;
-                const Real qw = qs[p] * ws[p] * inv_dV;
-
-                // Direct deposit (real charge at z_p). Image charges, when
-                // enabled, are NOT deposited here -- they're computed via a
-                // second IGF solve with a z-shifted Green function (see
-                // SpaceCharge::solve).
-                //
-                // Particles outside m_rho's footprint don't contribute to SC.
-                // (They still get tracked through the lattice, just without
-                // SC defocus from this solve. This matches IMPACT-T's
-                // behavior of dropping particles from SC outside the mesh.)
-                if (ix     >= glo[0] && ix + 1 <= ghi[0] &&
-                    iy     >= glo[1] && iy + 1 <= ghi[1] &&
-                    iz     >= glo[2] && iz + 1 <= ghi[2])
-                {
-                    rho_arr(ix  , iy  , iz  ) += qw * wx0 * wy0 * wz0;
-                    rho_arr(ix+1, iy  , iz  ) += qw * wx1 * wy0 * wz0;
-                    rho_arr(ix  , iy+1, iz  ) += qw * wx0 * wy1 * wz0;
-                    rho_arr(ix+1, iy+1, iz  ) += qw * wx1 * wy1 * wz0;
-                    rho_arr(ix  , iy  , iz+1) += qw * wx0 * wy0 * wz1;
-                    rho_arr(ix+1, iy  , iz+1) += qw * wx1 * wy0 * wz1;
-                    rho_arr(ix  , iy+1, iz+1) += qw * wx0 * wy1 * wz1;
-                    rho_arr(ix+1, iy+1, iz+1) += qw * wx1 * wy1 * wz1;
-                    ++total_deposited;
-                } else {
-                    ++total_outside;
-                }
+    Vector<Real> all_x, all_y, all_z, all_q, all_w;
+    Vector<int>  all_alive;
+    {
+        std::size_t total_np = 0;
+        for (PIter pti(bunch, lev); pti.isValid(); ++pti) {
+            total_np += pti.numParticles();
+        }
+        all_x.reserve(total_np); all_y.reserve(total_np); all_z.reserve(total_np);
+        all_q.reserve(total_np); all_w.reserve(total_np); all_alive.reserve(total_np);
+        for (PIter pti(bunch, lev); pti.isValid(); ++pti) {
+            auto& soa = pti.GetStructOfArrays();
+            const int np = pti.numParticles();
+            const auto& xs_p = soa.GetRealData(RealSoA::x);
+            const auto& ys_p = soa.GetRealData(RealSoA::y);
+            const auto& zs_p = soa.GetRealData(RealSoA::z);
+            const auto& qs_p = soa.GetRealData(RealSoA::q);
+            const auto& ws_p = soa.GetRealData(RealSoA::w);
+            const auto& al_p = soa.GetIntData(IntSoA::alive);
+            for (int i = 0; i < np; ++i) {
+                all_x.push_back(xs_p[i]); all_y.push_back(ys_p[i]); all_z.push_back(zs_p[i]);
+                all_q.push_back(qs_p[i]); all_w.push_back(ws_p[i]);
+                all_alive.push_back(al_p[i]);
             }
-        } else {
-            // TSC deposit (27-node cube, base = round(fx) - 1)
-            Real wx[3], wy[3], wz[3];
-            for (int p = 0; p < np; ++p) {
-                if (alives[p] == 0) { continue; }
-                if (m_z_filter_min_active && zs[p] < m_z_filter_min) { continue; }
+        }
+    }
+    const std::size_t np_total = all_x.size();
 
-                const Real fx = (xs[p] - lo[0]) * inv_dx;
-                const Real fy = (ys[p] - lo[1]) * inv_dy;
-                const Real fz = (zs[p] - lo[2]) * inv_dz;
-                const int  ix = int(std::round(fx));   // nearest NODE
-                const int  iy = int(std::round(fy));
-                const int  iz = int(std::round(fz));
-                const Real px = fx - Real(ix);          // [-0.5, 0.5)
-                const Real py = fy - Real(iy);
-                const Real pz = fz - Real(iz);
-                tsc_weights(px, wx[0], wx[1], wx[2]);
-                tsc_weights(py, wy[0], wy[1], wy[2]);
-                tsc_weights(pz, wz[0], wz[1], wz[2]);
-                const Real qw = qs[p] * ws[p] * inv_dV;
+    long total_deposited = 0;
 
-                // 27-node footprint fits in [ix-1, ix+1] etc.
-                if (ix - 1 >= glo[0] && ix + 1 <= ghi[0] &&
-                    iy - 1 >= glo[1] && iy + 1 <= ghi[1] &&
-                    iz - 1 >= glo[2] && iz + 1 <= ghi[2])
-                {
-                    for (int kk = 0; kk < 3; ++kk) {
-                        const Real wzz = wz[kk];
-                        const int  zk  = iz - 1 + kk;
-                        for (int jj = 0; jj < 3; ++jj) {
-                            const Real wyy = wy[jj];
-                            const int  yj  = iy - 1 + jj;
-                            const Real wyz = wzz * wyy;
-                            for (int ii = 0; ii < 3; ++ii) {
-                                rho_arr(ix - 1 + ii, yj, zk) += qw * wx[ii] * wyz;
+    for (MFIter mfi(m_rho); mfi.isValid(); ++mfi) {
+        Box const& gbox    = m_rho[mfi].box();   // valid + 1 ghost
+        Array4<Real> rho_arr = m_rho.array(mfi);
+        auto const& glo = gbox.smallEnd();
+        auto const& ghi = gbox.bigEnd();
+
+        // Use the gathered flat arrays so we don't nest a PIter (= MFIter).
+        const auto& xs = all_x;
+        const auto& ys = all_y;
+        const auto& zs = all_z;
+        const auto& qs = all_q;
+        const auto& ws = all_w;
+        const auto& alives = all_alive;
+        const int   np = int(np_total);
+        {
+            if (m_shape_order == 1) {
+                for (int p = 0; p < np; ++p) {
+                    if (alives[p] == 0) { continue; }
+                    if (m_z_filter_min_active && zs[p] < m_z_filter_min) { continue; }
+
+                    const Real fx = (xs[p] - lo[0]) * inv_dx;
+                    const Real fy = (ys[p] - lo[1]) * inv_dy;
+                    const Real fz = (zs[p] - lo[2]) * inv_dz;
+                    const int  ix = int(std::floor(fx));
+                    const int  iy = int(std::floor(fy));
+                    const int  iz = int(std::floor(fz));
+                    const Real wx1 = fx - Real(ix);   const Real wx0 = Real(1.0) - wx1;
+                    const Real wy1 = fy - Real(iy);   const Real wy0 = Real(1.0) - wy1;
+                    const Real wz1 = fz - Real(iz);   const Real wz0 = Real(1.0) - wz1;
+                    const Real qw = qs[p] * ws[p] * inv_dV;
+
+                    if (ix     >= glo[0] && ix + 1 <= ghi[0] &&
+                        iy     >= glo[1] && iy + 1 <= ghi[1] &&
+                        iz     >= glo[2] && iz + 1 <= ghi[2])
+                    {
+                        rho_arr(ix  , iy  , iz  ) += qw * wx0 * wy0 * wz0;
+                        rho_arr(ix+1, iy  , iz  ) += qw * wx1 * wy0 * wz0;
+                        rho_arr(ix  , iy+1, iz  ) += qw * wx0 * wy1 * wz0;
+                        rho_arr(ix+1, iy+1, iz  ) += qw * wx1 * wy1 * wz0;
+                        rho_arr(ix  , iy  , iz+1) += qw * wx0 * wy0 * wz1;
+                        rho_arr(ix+1, iy  , iz+1) += qw * wx1 * wy0 * wz1;
+                        rho_arr(ix  , iy+1, iz+1) += qw * wx0 * wy1 * wz1;
+                        rho_arr(ix+1, iy+1, iz+1) += qw * wx1 * wy1 * wz1;
+                        ++total_deposited;
+                    }
+                }
+            } else {
+                Real wx[3], wy[3], wz[3];
+                for (int p = 0; p < np; ++p) {
+                    if (alives[p] == 0) { continue; }
+                    if (m_z_filter_min_active && zs[p] < m_z_filter_min) { continue; }
+
+                    const Real fx = (xs[p] - lo[0]) * inv_dx;
+                    const Real fy = (ys[p] - lo[1]) * inv_dy;
+                    const Real fz = (zs[p] - lo[2]) * inv_dz;
+                    const int  ix = int(std::round(fx));
+                    const int  iy = int(std::round(fy));
+                    const int  iz = int(std::round(fz));
+                    const Real px = fx - Real(ix);
+                    const Real py = fy - Real(iy);
+                    const Real pz = fz - Real(iz);
+                    tsc_weights(px, wx[0], wx[1], wx[2]);
+                    tsc_weights(py, wy[0], wy[1], wy[2]);
+                    tsc_weights(pz, wz[0], wz[1], wz[2]);
+                    const Real qw = qs[p] * ws[p] * inv_dV;
+
+                    if (ix - 1 >= glo[0] && ix + 1 <= ghi[0] &&
+                        iy - 1 >= glo[1] && iy + 1 <= ghi[1] &&
+                        iz - 1 >= glo[2] && iz + 1 <= ghi[2])
+                    {
+                        for (int kk = 0; kk < 3; ++kk) {
+                            const Real wzz = wz[kk];
+                            const int  zk  = iz - 1 + kk;
+                            for (int jj = 0; jj < 3; ++jj) {
+                                const Real wyy = wy[jj];
+                                const int  yj  = iy - 1 + jj;
+                                const Real wyz = wzz * wyy;
+                                for (int ii = 0; ii < 3; ++ii) {
+                                    rho_arr(ix - 1 + ii, yj, zk) += qw * wx[ii] * wyz;
+                                }
                             }
                         }
+                        ++total_deposited;
                     }
-                    ++total_deposited;
-                } else {
-                    ++total_outside;
                 }
             }
         }
     }
-    // SumBoundary not needed -- single-FAB m_rho has no internal tile
-    // boundaries. Cross-rank reduction would be needed for multi-rank,
-    // but that's gated by the AMREX_ALWAYS_ASSERT above.
+
+    // Merge ghost-cell contributions into interior cells of owning FAB.
+    // Required for multi-FAB / multi-rank correctness; for single-FAB this
+    // is essentially a no-op (no internal box boundaries to merge across).
+    m_rho.SumBoundary(m_geom.periodicity());
 
     // DEBUG: simplified diagnostic for the position-based deposit.
     // Prints how many particles deposited successfully vs how many fell
@@ -603,11 +615,7 @@ void SpaceCharge::deposit_charge (particles::TimeBunch& bunch)
                        << "] yrange=[" << lo[1] << "," << lo[1]+dx[1]*(m_geom.Domain().bigEnd(1)+1)
                        << "] zrange=[" << lo[2] << "," << lo[2]+dx[2]*(m_geom.Domain().bigEnd(2)+1)
                        << "] dx=(" << dx[0] << "," << dx[1] << "," << dx[2] << ")"
-                       << " gbox=[" << glo[0] << ".." << ghi[0]
-                       << "]x[" << glo[1] << ".." << ghi[1]
-                       << "]x[" << glo[2] << ".." << ghi[2] << "]"
-                       << " deposited=" << total_deposited
-                       << " outside=" << total_outside << "\n";
+                       << " deposited=" << total_deposited << "\n";
     }
 }
 
