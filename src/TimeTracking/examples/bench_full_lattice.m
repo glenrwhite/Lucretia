@@ -65,6 +65,7 @@ p.addParameter('sc_use_b_field', true, @islogical);                      % apply
 p.addParameter('slice_profile',  0,   @isnumeric);                       % slice SC transverse profile: 0 = uniform disk (default), 1 = Gaussian disk
 p.addParameter('self_force_direct', true, @islogical);                   % compute SC self-force directly each step (no LUT; ~7x cost; avoids LUT-rebuild noise w/ adaptive mesh). Default ON because adaptive mesh is now default.
 p.addParameter('sc_diag_resize_jump', 0, @isnumeric);                    % if >0, lucretia-tt prints per-particle dE statistics on each mesh resize (diagnostic of field discontinuity)
+p.addParameter('mpi_nranks', 1, @isnumeric);                              % >1 -> run lt with MPI (uses lucretia-tt_mpi binary; npy*npx must = nranks via auto layout)
 p.addParameter('sc_dump_field_at_step', 0, @isnumeric);                   % >0 -> dump SC mesh field (rho/phi/Ex/Ey/Ez) at this solve count
 p.addParameter('sc_dump_field_path', '', @(x) ischar(x) || isstring(x));  % path for sc mesh dump; empty -> /tmp/sc_field_dump_step<N>.bin
 p.addParameter('dump_kicks_at_steps', [], @isnumeric);                   % vector of step indices: dump per-particle SC kicks for cross-code comparison
@@ -234,6 +235,10 @@ if ~isempty(opts.dump_kicks_at_times)
     tt.dump_kicks_at_times = double(opts.dump_kicks_at_times);
     fprintf('  dump_kicks_at_times = [%s] s\n', ...
         strtrim(sprintf('%.6g ', tt.dump_kicks_at_times)));
+end
+if opts.mpi_nranks > 1
+    tt.mpi_nranks = round(opts.mpi_nranks);
+    fprintf('  mpi_nranks = %d (uses lucretia-tt_mpi binary)\n', tt.mpi_nranks);
 end
 if opts.sc_dump_field_at_step > 0
     tt.sc_dump_field_at_step = round(opts.sc_dump_field_at_step);
