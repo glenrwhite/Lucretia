@@ -27,8 +27,12 @@ function bench_full_lattice(varargin)
 %   sc_rho_smooth_passes = 2     -- binomial filter on rho before IGF solve.
 %                                   Best of 5 noise-knob experiments at end-of-L0A
 %                                   eps_nx (-13% vs 0 passes; sc_exact_range,
-%                                   sc_shape_order=2/TSC, disable_self_force,
-%                                   pad_factor=2 all gave smaller or no improvement).
+%                                   sc_shape_order=2/TSC, pad_factor=2 all gave
+%                                   smaller or no improvement).
+%   disable_self_force = true    -- imp does NO self-force subtraction; lt's
+%                                   kSelfForceFactor=0.62 is empirically neutral
+%                                   at high gamma and IMPROVES per-particle noise
+%                                   (-28%) at low gamma. No measurable downside.
 
 p = inputParser;
 p.addParameter('impactt_dir', '/Users/glenwhite/Documents/GitHub/Lattices/common/ImpactT', @(x) ischar(x) || isstring(x));
@@ -47,7 +51,7 @@ p.addParameter('sc_resize_hyst', 2.0,  @isnumeric);                       % adap
 p.addParameter('sc_cent_drift_threshold', 0.9, @isnumeric);              % adaptive: centroid drift trigger (frac of half-extent). 0.9 reduces resize freq for relativistic bunches.
 p.addParameter('sc_integer_cell_shift', true, @islogical);               % adaptive: snap centroid-only resizes to integer cells (preserves deposit pattern -> zero per-particle field jump for that resize event)
 p.addParameter('slice_gamma_off', [],  @(x) isempty(x) || isnumeric(x));  % disable slice SC when bunch mean gamma >= this (lets 3D mesh handle longitudinal at high gamma)
-p.addParameter('disable_self_force', false, @islogical);                  % diagnostic: skip self-force LUT subtraction
+p.addParameter('disable_self_force', true, @islogical);                   % skip the empirical self-force subtraction. Default ON: imp does NO self-force subtraction; lt's kSelfForceFactor=0.62 is empirically neutral at high gamma and IMPROVES per-particle noise (-28%) at low gamma. No measurable downside in tracking results.
 p.addParameter('sc_exact_range', false, @islogical);                      % ImpactT-style exact bunch range adaptive mesh (no padding, every step)
 p.addParameter('sc_rho_smooth_passes', 2, @isnumeric);                   % # of binomial-smoother passes on rho before IGF solve. Default 2: best-found end-of-L0A eps_nx (~13% reduction vs 0 passes); cheap (one stencil pass per rho).
 p.addParameter('slice_radius_factor',  0, @isnumeric);                   % override slice SC bunch radius: a = factor * sigma_xy (default 2.0; pass 0 to use default)
