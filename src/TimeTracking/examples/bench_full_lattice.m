@@ -14,6 +14,16 @@ function bench_full_lattice(varargin)
 %
 % Uses TimeTrack defaults (DKD + wallclock cos), adaptive 3D SC + slice SC,
 % ImpactT partcl.data as initial distribution (apples-to-apples seed).
+%
+% Defaults (updated 2026-05-08 after bunch-size-divergence investigation):
+%   sc_static_xrad = []   -- adaptive mesh (was 0.015 mirroring imp's deck Xrad,
+%                            but imp's Xrad is a particle-loss aperture, NOT the
+%                            SC mesh extent; static cell_xy=625um massively
+%                            under-resolved the early-emission bunch sigma~100-300um).
+%   sc_use_b_field = true        -- explicit SC B via Boris (matches ImpactT v×B).
+%   self_force_direct = true     -- avoids LUT-rebuild noise w/ adaptive mesh.
+%   sc_integer_cell_shift = true -- snap centroid-only resizes to integer cells.
+%   sc_cent_drift_threshold = 0.9 -- defer centroid resizes (less per-step noise).
 
 p = inputParser;
 p.addParameter('impactt_dir', '/Users/glenwhite/Documents/GitHub/Lattices/common/ImpactT', @(x) ischar(x) || isstring(x));
@@ -26,11 +36,11 @@ p.addParameter('dt_change_t', [],     @(x) isempty(x) || isnumeric(x));   % s: w
 p.addParameter('n_slice',     30,    @isnumeric);
 p.addParameter('tag',         'bench_full', @(x) ischar(x) || isstring(x));
 p.addParameter('sc_mode',     'full', @(x) ischar(x) || isstring(x));   % 'full' (mesh+slice), 'mesh', 'slice', 'off'
-p.addParameter('sc_static_xrad', 0.015,@(x) isempty(x) || isnumeric(x));  % m: STATIC mesh ±xrad (default 15 mm = matches ImpactT; pass [] to use adaptive)
+p.addParameter('sc_static_xrad', [], @(x) isempty(x) || isnumeric(x));   % m: STATIC mesh ±xrad. [] (default) = ADAPTIVE (matches imp's per-step bunch-tracking; static at 15mm under-resolves the small early-emission bunch).
 p.addParameter('sc_pad_factor',  5.0,  @isnumeric);                       % adaptive: half-extent = pad_factor * sigma
 p.addParameter('sc_resize_hyst', 2.0,  @isnumeric);                       % adaptive: resize hysteresis factor (larger = fewer resizes, less noise)
-p.addParameter('sc_cent_drift_threshold', 0.5, @isnumeric);              % adaptive: centroid drift trigger (frac of half-extent). 0.5 default; 0.9-0.95 reduces resize freq for relativistic bunches
-p.addParameter('sc_integer_cell_shift', false, @islogical);              % adaptive: snap centroid-only resizes to integer cells (preserves deposit pattern -> zero per-particle field jump for that resize event)
+p.addParameter('sc_cent_drift_threshold', 0.9, @isnumeric);              % adaptive: centroid drift trigger (frac of half-extent). 0.9 reduces resize freq for relativistic bunches.
+p.addParameter('sc_integer_cell_shift', true, @islogical);               % adaptive: snap centroid-only resizes to integer cells (preserves deposit pattern -> zero per-particle field jump for that resize event)
 p.addParameter('slice_gamma_off', [],  @(x) isempty(x) || isnumeric(x));  % disable slice SC when bunch mean gamma >= this (lets 3D mesh handle longitudinal at high gamma)
 p.addParameter('disable_self_force', false, @islogical);                  % diagnostic: skip self-force LUT subtraction
 p.addParameter('sc_exact_range', false, @islogical);                      % ImpactT-style exact bunch range adaptive mesh (no padding, every step)
@@ -38,10 +48,13 @@ p.addParameter('sc_rho_smooth_passes', 0, @isnumeric);                   % # of 
 p.addParameter('slice_radius_factor',  0, @isnumeric);                   % override slice SC bunch radius: a = factor * sigma_xy (default 2.0; pass 0 to use default)
 p.addParameter('sc_hybrid_z_adaptive', false, @islogical);               % SC mesh hybrid mode: static xy + adaptive z (overrides sc_static_xrad behavior in z)
 p.addParameter('sc_shape_order', 1, @isnumeric);                         % particle shape: 1 = CIC (default), 2 = TSC (smoother per-particle field gradient at ~3x deposit/gather cost)
-p.addParameter('sc_use_b_field', false, @islogical);                     % apply SC B field via Boris (matches ImpactT) -- captures non-synchronous v×B coupling
+p.addParameter('sc_use_b_field', true, @islogical);                      % apply SC B field via Boris (matches ImpactT) -- captures non-synchronous v×B coupling. Default ON (matches ImpactT v×B convention).
 p.addParameter('slice_profile',  0,   @isnumeric);                       % slice SC transverse profile: 0 = uniform disk (default), 1 = Gaussian disk
-p.addParameter('self_force_direct', false, @islogical);                  % compute SC self-force directly each step (no LUT; ~7x cost; avoids LUT-rebuild noise w/ adaptive mesh)
+p.addParameter('self_force_direct', true, @islogical);                   % compute SC self-force directly each step (no LUT; ~7x cost; avoids LUT-rebuild noise w/ adaptive mesh). Default ON because adaptive mesh is now default.
 p.addParameter('sc_diag_resize_jump', 0, @isnumeric);                    % if >0, lucretia-tt prints per-particle dE statistics on each mesh resize (diagnostic of field discontinuity)
+p.addParameter('dump_kicks_at_steps', [], @isnumeric);                   % vector of step indices: dump per-particle SC kicks for cross-code comparison
+p.addParameter('dump_kicks_at_times', [], @isnumeric);                   % vector of physical times (s): dump per-particle SC kicks at first step crossing each time
+p.addParameter('dump_kicks_path_prefix', '', @(x) ischar(x) || isstring(x));
 p.parse(varargin{:});
 opts = p.Results;
 impactt_dir = char(opts.impactt_dir);
@@ -196,6 +209,22 @@ if opts.sc_diag_resize_jump > 0
     tt.sc_diag_resize_jump = round(opts.sc_diag_resize_jump);
     tt.verbose_run = true;   % diagnostic prints go to stdout; stream them
     fprintf('  diagnostic: per-particle dE on each resize (will stream stdout)\n');
+end
+if ~isempty(opts.dump_kicks_at_steps)
+    tt.dump_kicks_at_steps = round(opts.dump_kicks_at_steps);
+    fprintf('  dump_kicks_at_steps = [%s]\n', ...
+        strtrim(sprintf('%d ', tt.dump_kicks_at_steps)));
+end
+if ~isempty(opts.dump_kicks_at_times)
+    tt.dump_kicks_at_times = double(opts.dump_kicks_at_times);
+    fprintf('  dump_kicks_at_times = [%s] s\n', ...
+        strtrim(sprintf('%.6g ', tt.dump_kicks_at_times)));
+end
+if ~isempty(opts.dump_kicks_at_steps) || ~isempty(opts.dump_kicks_at_times)
+    if ~isempty(opts.dump_kicks_path_prefix)
+        tt.dump_kicks_path_prefix = char(opts.dump_kicks_path_prefix);
+    end
+    fprintf('    -> %s<step>.bin\n', char(string(tt.dump_kicks_path_prefix)));
 end
 fprintf('  sc_mode = %s (mesh=%d, slice=%d, image=%d, adaptive=%d)\n', sc_mode, ...
     tt.enable_space_charge, tt.enable_slice_sc, tt.sc_image_plane, tt.sc_adaptive);
