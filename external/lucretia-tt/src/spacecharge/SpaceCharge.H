@@ -347,13 +347,44 @@ public:
 
     // ---- Access for the particle-loop kernel ----
     //
-    // Single-FAB layout: SC's m_rho/m_phi/m_Ex/m_Ey/m_Ez each live on one
-    // BoxArray box covering the full nodal domain (forced in the constructor
-    // independent of the cell_ba subdivision the caller may have built for
-    // the particle container). The returned Array4 is the only FAB's data.
-    // No tile lookup -- particle iteration in TrackingLoop is independent
-    // of SC mesh tiling.
+    // Multi-FAB layout: SC's m_rho/m_phi/m_Ex/m_Ey/m_Ez can have any number
+    // of local FABs (when the caller's BoxArray has multiple boxes). The
+    // gather-side accessor (gather_fabs()) returns a struct with parallel
+    // vectors of (Ex, Ey, Ez) Array4s and their full grown boxes (valid + 1
+    // ghost). The TrackingLoop iterates particles, finds the FAB whose grown
+    // box contains the particle's cell, and gathers from that FAB's Array4.
+    //
+    // Backwards-compatibility helpers: Ex_array() etc. return the FIRST FAB
+    // (only valid when m_ba_nodal has one box, the historical single-FAB
+    // case). New code should use gather_fabs() and per-particle FAB lookup.
 
+    struct GatherFABs {
+        std::vector<amrex::Array4<const amrex::Real>> Ex;
+        std::vector<amrex::Array4<const amrex::Real>> Ey;
+        std::vector<amrex::Array4<const amrex::Real>> Ez;
+        std::vector<amrex::Box> boxes;        // valid + 1 ghost (gather bounds)
+        std::vector<amrex::Box> valid_boxes;  // interior only (FAB ownership)
+    };
+
+    /** Return all local FABs' Array4 + bounds for E_x, E_y, E_z. Used by
+     *  the per-particle gather in TrackingLoop. With multiple FABs (and/or
+     *  multiple ranks) the caller iterates particles and looks up the right
+     *  FAB by checking which one's grown box contains the particle's cell. */
+    GatherFABs gather_fabs () const
+    {
+        GatherFABs g;
+        for (amrex::MFIter mfi(m_Ex); mfi.isValid(); ++mfi) {
+            g.Ex.push_back(m_Ex.const_array(mfi));
+            g.Ey.push_back(m_Ey.const_array(mfi));
+            g.Ez.push_back(m_Ez.const_array(mfi));
+            g.boxes.push_back(m_Ex[mfi].box());        // valid + ghost
+            g.valid_boxes.push_back(mfi.validbox());   // interior only
+        }
+        return g;
+    }
+
+    // Backwards-compat: single-FAB accessors (return the first local FAB).
+    // Only valid when m_ba_nodal has exactly one box on this rank.
     amrex::Array4<const amrex::Real> Ex_array () const
     {
         amrex::MFIter mfi(m_Ex);
@@ -371,7 +402,8 @@ public:
     }
 
     /** Valid index range of the SC field arrays. Includes ghost cells so
-     *  CIC gather handles particles right at the box edge. */
+     *  CIC gather handles particles right at the box edge. Single-FAB only;
+     *  use gather_fabs() for multi-FAB cases. */
     amrex::Box mesh_box () const
     {
         amrex::MFIter mfi(m_Ex);

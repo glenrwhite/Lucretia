@@ -284,8 +284,7 @@ void TrackingLoop::step (
     // single-FAB SpaceCharge MultiFabs the same arrays serve all
     // particles, so caching outside the pti loop avoids repeated
     // MFIter constructions that AMReX rejects when nested with PIter.
-    Array4<const Real> Ex_sc_arr, Ey_sc_arr, Ez_sc_arr;
-    Box                sc_box;
+    spacecharge::SpaceCharge::GatherFABs sc_fabs;
     int                sc_shape_order = 1;     // 1 = CIC, 2 = TSC
     if (sc) {
         sc->set_diag_dt_hint(dt);
@@ -296,10 +295,7 @@ void TrackingLoop::step (
         sf_lut[0] = sc->lut_ptr(0);
         sf_lut[1] = sc->lut_ptr(1);
         sf_lut[2] = sc->lut_ptr(2);
-        Ex_sc_arr = sc->Ex_array();
-        Ey_sc_arr = sc->Ey_array();
-        Ez_sc_arr = sc->Ez_array();
-        sc_box    = sc->mesh_box();
+        sc_fabs   = sc->gather_fabs();
         sc_shape_order = sc->shape_order();
     }
 
@@ -529,23 +525,32 @@ void TrackingLoop::step (
                     iy_lo = iy_n - 1;  iy_hi = iy_n + 1;
                     iz_lo = iz_n - 1;  iz_hi = iz_n + 1;
                 }
-                if (ix_lo < sc_box.smallEnd(0) || ix_hi > sc_box.bigEnd(0) ||
-                    iy_lo < sc_box.smallEnd(1) || iy_hi > sc_box.bigEnd(1) ||
-                    iz_lo < sc_box.smallEnd(2) || iz_hi > sc_box.bigEnd(2))
-                {
-                    goto sc_done;   // exit the SC block; keep external E,B
+                // Multi-FAB: find which FAB contains this particle's stencil.
+                int fab_idx = -1;
+                for (int f = 0, nf = int(sc_fabs.boxes.size()); f < nf; ++f) {
+                    auto const& bx = sc_fabs.boxes[f];
+                    if (ix_lo >= bx.smallEnd(0) && ix_hi <= bx.bigEnd(0) &&
+                        iy_lo >= bx.smallEnd(1) && iy_hi <= bx.bigEnd(1) &&
+                        iz_lo >= bx.smallEnd(2) && iz_hi <= bx.bigEnd(2))
+                    { fab_idx = f; break; }
+                }
+                if (fab_idx < 0) {
+                    goto sc_done;   // outside any FAB; keep external E,B
                 }
                 amrex::GpuArray<Real, 3> E_sc{};
+                auto const& Ex_arr_f = sc_fabs.Ex[fab_idx];
+                auto const& Ey_arr_f = sc_fabs.Ey[fab_idx];
+                auto const& Ez_arr_f = sc_fabs.Ez[fab_idx];
                 if (sc_shape_order == 1) {
                     auto E_cic = ablastr::particles::doGatherVectorFieldNodal(
                         ParticleReal(x), ParticleReal(y), ParticleReal(z),
-                        Ex_sc_arr, Ey_sc_arr, Ez_sc_arr,
+                        Ex_arr_f, Ey_arr_f, Ez_arr_f,
                         dxi_sc, lo_sc);
                     E_sc[0] = E_cic[0]; E_sc[1] = E_cic[1]; E_sc[2] = E_cic[2];
                 } else {
-                    E_sc[0] = tsc_gather(Ex_sc_arr, x, y, z, dxi_sc, lo_sc);
-                    E_sc[1] = tsc_gather(Ey_sc_arr, x, y, z, dxi_sc, lo_sc);
-                    E_sc[2] = tsc_gather(Ez_sc_arr, x, y, z, dxi_sc, lo_sc);
+                    E_sc[0] = tsc_gather(Ex_arr_f, x, y, z, dxi_sc, lo_sc);
+                    E_sc[1] = tsc_gather(Ey_arr_f, x, y, z, dxi_sc, lo_sc);
+                    E_sc[2] = tsc_gather(Ez_arr_f, x, y, z, dxi_sc, lo_sc);
                 }
 
                 // Subtract Coulomb field of this particle's own deposited
@@ -898,8 +903,7 @@ void TrackingLoop::step_dkd (
     GpuArray<Real, 3>  dxi_sc{}, lo_sc{};
     Real const*        sf_lut[3] = {nullptr, nullptr, nullptr};
     int                sf_n      = 0;
-    Array4<const Real> Ex_sc_arr, Ey_sc_arr, Ez_sc_arr;
-    Box                sc_box;
+    spacecharge::SpaceCharge::GatherFABs sc_fabs;
     int                sc_shape_order = 1;     // 1 = CIC, 2 = TSC
     if (sc) {
         sc->set_diag_dt_hint(dt);
@@ -910,10 +914,7 @@ void TrackingLoop::step_dkd (
         sf_lut[0] = sc->lut_ptr(0);
         sf_lut[1] = sc->lut_ptr(1);
         sf_lut[2] = sc->lut_ptr(2);
-        Ex_sc_arr = sc->Ex_array();
-        Ey_sc_arr = sc->Ey_array();
-        Ez_sc_arr = sc->Ez_array();
-        sc_box    = sc->mesh_box();
+        sc_fabs   = sc->gather_fabs();
         sc_shape_order = sc->shape_order();
     }
     if (slice_sc) {
@@ -1001,24 +1002,36 @@ void TrackingLoop::step_dkd (
                     iy_lo = iy_n - 1;  iy_hi = iy_n + 1;
                     iz_lo = iz_n - 1;  iz_hi = iz_n + 1;
                 }
-                if (!(ix_lo < sc_box.smallEnd(0)
-                   || ix_hi > sc_box.bigEnd(0)
-                   || iy_lo < sc_box.smallEnd(1)
-                   || iy_hi > sc_box.bigEnd(1)
-                   || iz_lo < sc_box.smallEnd(2)
-                   || iz_hi > sc_box.bigEnd(2)))
+                // Multi-FAB gather: find which FAB's grown box contains the
+                // particle's stencil footprint. Single-FAB case: one iteration,
+                // straight match. Multi-FAB: walk the FABs (typically <30).
+                int fab_idx = -1;
+                for (int f = 0, nf = int(sc_fabs.boxes.size()); f < nf; ++f) {
+                    auto const& bx = sc_fabs.boxes[f];
+                    if (ix_lo >= bx.smallEnd(0) && ix_hi <= bx.bigEnd(0) &&
+                        iy_lo >= bx.smallEnd(1) && iy_hi <= bx.bigEnd(1) &&
+                        iz_lo >= bx.smallEnd(2) && iz_hi <= bx.bigEnd(2))
+                    {
+                        fab_idx = f;
+                        break;
+                    }
+                }
+                if (fab_idx >= 0)
                 {
                     amrex::GpuArray<Real, 3> E_sc{};
+                    auto const& Ex_arr_f = sc_fabs.Ex[fab_idx];
+                    auto const& Ey_arr_f = sc_fabs.Ey[fab_idx];
+                    auto const& Ez_arr_f = sc_fabs.Ez[fab_idx];
                     if (sc_shape_order == 1) {
                         auto E_cic = ablastr::particles::doGatherVectorFieldNodal(
                             ParticleReal(x), ParticleReal(y), ParticleReal(z),
-                            Ex_sc_arr, Ey_sc_arr, Ez_sc_arr,
+                            Ex_arr_f, Ey_arr_f, Ez_arr_f,
                             dxi_sc, lo_sc);
                         E_sc[0] = E_cic[0]; E_sc[1] = E_cic[1]; E_sc[2] = E_cic[2];
                     } else {
-                        E_sc[0] = tsc_gather(Ex_sc_arr, x, y, z, dxi_sc, lo_sc);
-                        E_sc[1] = tsc_gather(Ey_sc_arr, x, y, z, dxi_sc, lo_sc);
-                        E_sc[2] = tsc_gather(Ez_sc_arr, x, y, z, dxi_sc, lo_sc);
+                        E_sc[0] = tsc_gather(Ex_arr_f, x, y, z, dxi_sc, lo_sc);
+                        E_sc[1] = tsc_gather(Ey_arr_f, x, y, z, dxi_sc, lo_sc);
+                        E_sc[2] = tsc_gather(Ez_arr_f, x, y, z, dxi_sc, lo_sc);
                     }
 
                     const Real w  = ptd.rdata(RealSoA::w)[ip];

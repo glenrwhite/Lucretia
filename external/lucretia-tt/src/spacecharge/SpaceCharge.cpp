@@ -45,20 +45,25 @@ void tsc_weights (amrex::Real p, amrex::Real& w_lo, amrex::Real& w_mid, amrex::R
 SpaceCharge::SpaceCharge (
     const amrex::Geometry&            geom,
     const amrex::BoxArray&            cell_ba,
-    const amrex::DistributionMapping& /*dm*/)
+    const amrex::DistributionMapping& dm)
     : m_geom(geom)
-    // STILL single-FAB by default. Multi-rank refactor in progress -- the
-    // deposit_charge now uses MFIter + SumBoundary so it would WORK with
-    // multi-FAB, but the gather (TrackingLoop calls sc->Ex_array() returning
-    // ONE Array4) and the SC mesh dump still assume one FAB. Until those
-    // are refactored, keep the single-FAB constraint to preserve correctness.
+    // Multi-FAB: use the caller's BoxArray + DistributionMapping. The
+    // cell_ba is converted to nodal index type so the IGF solver gets
+    // node-centered fields.
     //
-    // To enable multi-FAB / multi-rank, change cell_ba.minimalBox() below
-    // to cell_ba and use the passed-in dm. Then update TrackingLoop's
-    // gather to use MFIter or a per-particle FAB lookup.
-    , m_ba_nodal(amrex::convert(amrex::BoxArray(cell_ba.minimalBox()),
-                                amrex::IntVect{1, 1, 1}))
-    , m_dm(amrex::DistributionMapping(amrex::BoxArray(cell_ba.minimalBox())))
+    // Single-rank with multi-FAB: each FAB is owned by this rank; deposit
+    // iterates MFIter over all FABs, SumBoundary merges ghost contributions
+    // back into owning FABs. Gather walks the FAB list per particle (see
+    // GatherFABs in SpaceCharge.H).
+    //
+    // Multi-rank: each rank owns a slab of FABs. Particles whose stencil
+    // crosses a rank boundary need their deposit ghost-cell-summed via
+    // SumBoundary, AND particles whose owning FAB is on another rank need
+    // their data communicated. Currently TrackingLoop iterates particles
+    // locally so the latter is not yet handled -- multi-rank will need
+    // particle redistribution after each SC mesh recenter (TODO).
+    , m_ba_nodal(amrex::convert(cell_ba, amrex::IntVect{1, 1, 1}))
+    , m_dm(dm)
 {
     constexpr int kNComp = 1;
     const amrex::IntVect ng_rho(1);  // CIC deposit crosses tile edges
@@ -512,8 +517,11 @@ void SpaceCharge::deposit_charge (particles::TimeBunch& bunch)
     long total_deposited = 0;
 
     for (MFIter mfi(m_rho); mfi.isValid(); ++mfi) {
-        Box const& gbox    = m_rho[mfi].box();   // valid + 1 ghost
+        Box const& vbox    = mfi.validbox();        // interior only -- ownership
+        Box const& gbox    = m_rho[mfi].box();      // valid + 1 ghost (deposit footprint)
         Array4<Real> rho_arr = m_rho.array(mfi);
+        auto const& vlo = vbox.smallEnd();
+        auto const& vhi = vbox.bigEnd();
         auto const& glo = gbox.smallEnd();
         auto const& ghi = gbox.bigEnd();
 
@@ -537,14 +545,24 @@ void SpaceCharge::deposit_charge (particles::TimeBunch& bunch)
                     const int  ix = int(std::floor(fx));
                     const int  iy = int(std::floor(fy));
                     const int  iz = int(std::floor(fz));
+                    // Ownership: this FAB owns the particle iff its base node
+                    // (ix, iy, iz) is inside the FAB's VALID box. Avoids
+                    // double-counting at FAB boundaries (where multiple
+                    // adjacent FABs' gboxes can fully contain the stencil).
+                    if (!(ix >= vlo[0] && ix <= vhi[0] &&
+                          iy >= vlo[1] && iy <= vhi[1] &&
+                          iz >= vlo[2] && iz <= vhi[2]))
+                    { continue; }
                     const Real wx1 = fx - Real(ix);   const Real wx0 = Real(1.0) - wx1;
                     const Real wy1 = fy - Real(iy);   const Real wy0 = Real(1.0) - wy1;
                     const Real wz1 = fz - Real(iz);   const Real wz0 = Real(1.0) - wz1;
                     const Real qw = qs[p] * ws[p] * inv_dV;
 
-                    if (ix     >= glo[0] && ix + 1 <= ghi[0] &&
-                        iy     >= glo[1] && iy + 1 <= ghi[1] &&
-                        iz     >= glo[2] && iz + 1 <= ghi[2])
+                    // Stencil neighbors (ix+1, iy+1, iz+1) may fall in this FAB's
+                    // ghost layer -- write there too; SumBoundary merges to the
+                    // owning FAB (which will then have their interior contribution
+                    // SUMMED with our ghost-layer contribution).
+                    if (ix + 1 <= ghi[0] && iy + 1 <= ghi[1] && iz + 1 <= ghi[2])
                     {
                         rho_arr(ix  , iy  , iz  ) += qw * wx0 * wy0 * wz0;
                         rho_arr(ix+1, iy  , iz  ) += qw * wx1 * wy0 * wz0;
@@ -569,6 +587,12 @@ void SpaceCharge::deposit_charge (particles::TimeBunch& bunch)
                     const int  ix = int(std::round(fx));
                     const int  iy = int(std::round(fy));
                     const int  iz = int(std::round(fz));
+                    // TSC ownership: the central node (ix, iy, iz) is the
+                    // base. Use it for FAB ownership, same pattern as CIC.
+                    if (!(ix >= vlo[0] && ix <= vhi[0] &&
+                          iy >= vlo[1] && iy <= vhi[1] &&
+                          iz >= vlo[2] && iz <= vhi[2]))
+                    { continue; }
                     const Real px = fx - Real(ix);
                     const Real py = fy - Real(iy);
                     const Real pz = fz - Real(iz);
