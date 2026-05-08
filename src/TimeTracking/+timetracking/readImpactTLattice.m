@@ -372,6 +372,20 @@ cathode = timetracking.CathodeSource('name', 'cat', ...
 % the actual run.
 lattice = [{cathode}, lattice];
 
+% --- Append a global ±xrad/±yrad transverse aperture (mirrors IMPACT-T's
+%     lostREC_BeamBunch which is called every step from AccSimulator.f90
+%     line 1696 and kills any particle outside [-xrad, xrad] in x or
+%     [-yrad, yrad] in y). Without this, lt keeps wide-angle halo particles
+%     that imp continuously prunes -- causing per-step bunch divergence
+%     in the gun + L0A regions even when SC physics matches. ---
+if xrad > 0 && yrad > 0
+    lattice{end+1} = timetracking.Collimator('name', 'global_xrad_aperture', ...
+        'z_start',  -1, ...
+        'z_end',    elem_z_max + 100, ...
+        'xmin',    -xrad, 'xmax', xrad, ...
+        'ymin',    -yrad, 'ymax', yrad);
+end
+
 % --- Beam (no seed; emission from cathode) ---
 beam = timetracking.SeedBeam('n_particles', 0);
 
