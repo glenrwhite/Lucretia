@@ -485,17 +485,29 @@ void SpaceCharge::deposit_charge (particles::TimeBunch& bunch)
     // Gather ALL particle data into flat vectors first (avoids nested
     // MFIter: PIter internally uses MFIter on the particle container, and
     // AMReX disallows nested MFIters by default).
+    //
+    // Multi-rank: TimeBunch's PIter only sees LOCAL particles, but the SC
+    // mesh is distributed differently from the particles. Particles whose
+    // owning FAB is on a DIFFERENT rank wouldn't deposit anywhere if we
+    // only used local particles. Workaround: AllGather all particles to
+    // every rank, then each rank's deposit only touches its own FABs (per
+    // valid-box ownership rule). Brute-force but correct; for true
+    // production scaling, the right fix is to redistribute particles to
+    // match the SC mesh's BoxArray after each recenter.
     using PIter = ParIterSoA<RealSoA::nattribs, IntSoA::nattribs>;
     constexpr int lev = 0;
     Vector<Real> all_x, all_y, all_z, all_q, all_w;
     Vector<int>  all_alive;
     {
-        std::size_t total_np = 0;
+        // Local particle count (this rank only).
+        std::size_t local_np = 0;
         for (PIter pti(bunch, lev); pti.isValid(); ++pti) {
-            total_np += pti.numParticles();
+            local_np += pti.numParticles();
         }
-        all_x.reserve(total_np); all_y.reserve(total_np); all_z.reserve(total_np);
-        all_q.reserve(total_np); all_w.reserve(total_np); all_alive.reserve(total_np);
+        Vector<Real> loc_x, loc_y, loc_z, loc_q, loc_w;
+        Vector<int>  loc_alive;
+        loc_x.reserve(local_np); loc_y.reserve(local_np); loc_z.reserve(local_np);
+        loc_q.reserve(local_np); loc_w.reserve(local_np); loc_alive.reserve(local_np);
         for (PIter pti(bunch, lev); pti.isValid(); ++pti) {
             auto& soa = pti.GetStructOfArrays();
             const int np = pti.numParticles();
@@ -506,10 +518,58 @@ void SpaceCharge::deposit_charge (particles::TimeBunch& bunch)
             const auto& ws_p = soa.GetRealData(RealSoA::w);
             const auto& al_p = soa.GetIntData(IntSoA::alive);
             for (int i = 0; i < np; ++i) {
-                all_x.push_back(xs_p[i]); all_y.push_back(ys_p[i]); all_z.push_back(zs_p[i]);
-                all_q.push_back(qs_p[i]); all_w.push_back(ws_p[i]);
-                all_alive.push_back(al_p[i]);
+                loc_x.push_back(xs_p[i]); loc_y.push_back(ys_p[i]); loc_z.push_back(zs_p[i]);
+                loc_q.push_back(qs_p[i]); loc_w.push_back(ws_p[i]);
+                loc_alive.push_back(al_p[i]);
             }
+        }
+        // AllGather across ranks. With single rank the local arrays become
+        // the global arrays (no-op).
+        const int nprocs = ParallelDescriptor::NProcs();
+        if (nprocs == 1) {
+            all_x = std::move(loc_x); all_y = std::move(loc_y); all_z = std::move(loc_z);
+            all_q = std::move(loc_q); all_w = std::move(loc_w);
+            all_alive = std::move(loc_alive);
+        } else {
+#ifdef AMREX_USE_MPI
+            // Counts and displacements for MPI_Allgatherv.
+            const int my_count = int(loc_x.size());
+            Vector<int> counts(nprocs);
+            MPI_Allgather(&my_count, 1, MPI_INT,
+                          counts.data(), 1, MPI_INT,
+                          ParallelDescriptor::Communicator());
+            Vector<int> disps(nprocs, 0);
+            for (int r = 1; r < nprocs; ++r) disps[r] = disps[r-1] + counts[r-1];
+            const std::size_t total = std::size_t(disps.back()) + std::size_t(counts.back());
+            all_x.resize(total);    all_y.resize(total);    all_z.resize(total);
+            all_q.resize(total);    all_w.resize(total);    all_alive.resize(total);
+
+            // Pick the right MPI types for Real (float or double) and int.
+            MPI_Datatype real_t = (sizeof(Real) == sizeof(double)) ? MPI_DOUBLE : MPI_FLOAT;
+            MPI_Allgatherv(loc_x.data(), my_count, real_t,
+                           all_x.data(), counts.data(), disps.data(),
+                           real_t, ParallelDescriptor::Communicator());
+            MPI_Allgatherv(loc_y.data(), my_count, real_t,
+                           all_y.data(), counts.data(), disps.data(),
+                           real_t, ParallelDescriptor::Communicator());
+            MPI_Allgatherv(loc_z.data(), my_count, real_t,
+                           all_z.data(), counts.data(), disps.data(),
+                           real_t, ParallelDescriptor::Communicator());
+            MPI_Allgatherv(loc_q.data(), my_count, real_t,
+                           all_q.data(), counts.data(), disps.data(),
+                           real_t, ParallelDescriptor::Communicator());
+            MPI_Allgatherv(loc_w.data(), my_count, real_t,
+                           all_w.data(), counts.data(), disps.data(),
+                           real_t, ParallelDescriptor::Communicator());
+            MPI_Allgatherv(loc_alive.data(), my_count, MPI_INT,
+                           all_alive.data(), counts.data(), disps.data(),
+                           MPI_INT, ParallelDescriptor::Communicator());
+#else
+            // No MPI build: shouldn't happen since nprocs > 1 implies MPI.
+            all_x = std::move(loc_x); all_y = std::move(loc_y); all_z = std::move(loc_z);
+            all_q = std::move(loc_q); all_w = std::move(loc_w);
+            all_alive = std::move(loc_alive);
+#endif
         }
     }
     const std::size_t np_total = all_x.size();
