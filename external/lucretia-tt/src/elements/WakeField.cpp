@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <vector>
 
 
@@ -52,8 +53,46 @@ void WakeField::apply_wake (particles::TimeBunch& bunch, amrex::Real dt) const
     if (m_iris_a <= Real(0.0) || m_gap_g <= Real(0.0) || m_period_L <= Real(0.0)) return;
     if (m_z_end <= m_z_start) return;
 
-    const Real z_lo = m_z_start;
-    const Real z_hi = m_z_end;
+    using PIter = ParIterSoA<RealSoA::nattribs, IntSoA::nattribs>;
+    constexpr int lev = 0;
+
+    // ---- Pass 0: find bunch z-range INSIDE the structure ----
+    // Bin over the BUNCH range, not the full structure z range. Otherwise
+    // the slice width (= structure_length / n_slices) is much larger than
+    // the bunch sigma_z, so the wake convolution kernel is sampled at
+    // points where W(s) has already decayed and the head-to-tail
+    // longitudinal modulation is missed (verified empirically: with
+    // structure_length=3m, n_slices=200 -> 1.5 cm/slice >> 1 mm bunch sz).
+    Real z_bunch_min =  std::numeric_limits<Real>::infinity();
+    Real z_bunch_max = -std::numeric_limits<Real>::infinity();
+    long n_in_range_local = 0;
+    for (PIter pti(bunch, lev); pti.isValid(); ++pti) {
+        auto& soa = pti.GetStructOfArrays();
+        const int np = pti.numParticles();
+        const auto& zs     = soa.GetRealData(RealSoA::z);
+        const auto& alives = soa.GetIntData(IntSoA::alive);
+        for (int p = 0; p < np; ++p) {
+            if (alives[p] == 0) continue;
+            const Real z = zs[p];
+            if (z < m_z_start || z >= m_z_end) continue;
+            if (z < z_bunch_min) z_bunch_min = z;
+            if (z > z_bunch_max) z_bunch_max = z;
+            ++n_in_range_local;
+        }
+    }
+    long n_in_range_global = n_in_range_local;
+    ParallelDescriptor::ReduceLongSum(n_in_range_global);
+    if (n_in_range_global == 0) return;
+    if (ParallelDescriptor::NProcs() > 1) {
+        ParallelDescriptor::ReduceRealMin(z_bunch_min);
+        ParallelDescriptor::ReduceRealMax(z_bunch_max);
+    }
+    // Tiny epsilon padding so the highest particle lands inside the last
+    // slice (i = n_slices-1) rather than getting clipped.
+    const Real bunch_span = z_bunch_max - z_bunch_min;
+    if (bunch_span <= Real(0.0)) return;
+    const Real z_lo = z_bunch_min - Real(0.005) * bunch_span;
+    const Real z_hi = z_bunch_max + Real(0.005) * bunch_span;
     const Real ds   = (z_hi - z_lo) / Real(m_n_slices);
 
     std::vector<Real> qslice (m_n_slices, Real(0.0));
@@ -61,9 +100,6 @@ void WakeField::apply_wake (particles::TimeBunch& bunch, amrex::Real dt) const
     std::vector<Real> qyslice(m_n_slices, Real(0.0));
 
     // ---- Pass 1: bin local particles into slices ----
-    using PIter = ParIterSoA<RealSoA::nattribs, IntSoA::nattribs>;
-    constexpr int lev = 0;
-    long n_in_range_local = 0;
     for (PIter pti(bunch, lev); pti.isValid(); ++pti) {
         auto& soa = pti.GetStructOfArrays();
         const int np = pti.numParticles();
@@ -72,7 +108,9 @@ void WakeField::apply_wake (particles::TimeBunch& bunch, amrex::Real dt) const
         const auto& zs = soa.GetRealData(RealSoA::z);
         const auto& qs = soa.GetRealData(RealSoA::q);
         const auto& ws = soa.GetRealData(RealSoA::w);
+        const auto& alives = soa.GetIntData(IntSoA::alive);
         for (int p = 0; p < np; ++p) {
+            if (alives[p] == 0) continue;
             const Real z = zs[p];
             if (z < z_lo || z >= z_hi) continue;
             const int i = std::min(int((z - z_lo) / ds), m_n_slices - 1);
@@ -80,15 +118,8 @@ void WakeField::apply_wake (particles::TimeBunch& bunch, amrex::Real dt) const
             qslice [i] += qw;
             qxslice[i] += qw * xs[p];
             qyslice[i] += qw * ys[p];
-            ++n_in_range_local;
         }
     }
-
-    // Skip everything if no particles are in the wake's z range on
-    // ANY rank (saves the ALLREDUCE cost when the bunch is upstream).
-    long n_in_range_global = n_in_range_local;
-    ParallelDescriptor::ReduceLongSum(n_in_range_global);
-    if (n_in_range_global == 0) return;
 
     // ---- ALLREDUCE slice profiles across MPI ranks ----
     if (ParallelDescriptor::NProcs() > 1) {
