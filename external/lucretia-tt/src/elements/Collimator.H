@@ -16,26 +16,33 @@ namespace particles {
 
 namespace elements {
 
-/** Rectangular aperture collimator (mirror of ImpactT type-(-11)).
+/** Aperture collimator (mirror of ImpactT type-(-11)).
  *
- *  Active over the lab z range [z_start, z_end]. Particles inside this z
- *  range with x outside [xmin, xmax] OR y outside [ymin, ymax] are
- *  KILLED (alive=0, parked at z=-1e9 to keep them out of bunch stats).
+ *  Two modes:
  *
- *  Optional pz<0 filter: with kill_backward = true, particles with
- *  uz<0 anywhere in [z_start, z_end] are also killed. This mirrors
- *  ImpactT's `stop_bkw` flag (negative dz in the type-(-11) line).
+ *  1. **fire_once mode** (default for ImpactT compat): the collimator
+ *     fires ONCE at the integration step when the bunch CENTROID first
+ *     crosses z=m_z_target. At that step, ALL alive particles whose
+ *     (x, y) lies outside the aperture are killed regardless of each
+ *     particle's individual z. This mirrors IMPACT-T's lostXY_BeamBunch:
+ *     the trigger is `if(distance.le.tcol .and. (distance+dzz).ge.tcol)`
+ *     in AccSimulator.f90:1669, and the kill check itself ignores the
+ *     particle's z (BeamBunch.f90:1304-1314). Kept across calls via the
+ *     mutable m_fired latch.
  *
- *  Applied at the end of every integration step in TrackingLoop, after
- *  the second half-drift / first-order emission update. Cheap: a single
- *  per-particle bounds check. Particles already dead skip the test.
+ *  2. **z-range mode** (legacy / stop_bkw): the collimator is active
+ *     across [m_z_start, m_z_end] and checks each alive particle whose
+ *     z falls in that range. Used for backward-particle filters
+ *     (kill_backward=true) where the kill semantics are "anywhere
+ *     past z_start".
  *
  *  Inherits TimeWindow + provides a no-op gather_E_B so it satisfies
- *  the variant's lambda contract for the field-gather sweep (it adds
- *  nothing to the field). */
+ *  the variant's lambda contract for the field-gather sweep. */
 struct Collimator : public Named, public TimeWindow
 {
     Collimator () = default;
+
+    /** Legacy z-range constructor (used by stop_bkw and the old API). */
     Collimator (std::string name,
                 amrex::Real z_start, amrex::Real z_end,
                 amrex::Real xmin, amrex::Real xmax,
@@ -50,6 +57,7 @@ struct Collimator : public Named, public TimeWindow
         , m_ymin(ymin)
         , m_ymax(ymax)
         , m_kill_backward(kill_backward)
+        , m_fire_once(false)
     {}
 
     /** No external field contribution. */
@@ -63,7 +71,10 @@ struct Collimator : public Named, public TimeWindow
         Bx = 0.0; By = 0.0; Bz = 0.0;
     }
 
-    /** Apply the aperture to every alive particle in the bunch. */
+    /** Apply the aperture: in fire_once mode, kill all alive particles
+     *  outside the aperture at the step when the bunch centroid first
+     *  crosses m_z_target; in z-range mode, kill alive particles whose
+     *  individual z is in [m_z_start, m_z_end] and outside the aperture. */
     void apply (particles::TimeBunch& bunch) const;
 
     amrex::Real m_z_start       = 0.0;
@@ -73,6 +84,14 @@ struct Collimator : public Named, public TimeWindow
     amrex::Real m_ymin          = 0.0;
     amrex::Real m_ymax          = 0.0;
     bool        m_kill_backward = false;
+
+    // fire_once mode: when set, ignore [m_z_start, m_z_end] and instead
+    // fire when the bunch CENTROID crosses m_z_target. Mirrors IMPACT-T's
+    // lostXY trigger semantics. m_fired is mutable so that const apply()
+    // can latch the "already fired" state.
+    bool         m_fire_once = false;
+    amrex::Real  m_z_target  = 0.0;
+    mutable bool m_fired     = false;
 };
 
 } // namespace elements

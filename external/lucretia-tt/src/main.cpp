@@ -275,6 +275,8 @@ lucretiatt::elements::Lattice build_lattice ()
             amrex::Real xmin    = -1e30, xmax = 1e30;
             amrex::Real ymin    = -1e30, ymax = 1e30;
             int         kill_bk = 0;
+            int         fire_once = 0;
+            amrex::Real z_target = 0.0;
             pp_el.query("z_start",       z_start);
             pp_el.query("z_end",         z_end);
             pp_el.query("xmin",          xmin);
@@ -282,9 +284,16 @@ lucretiatt::elements::Lattice build_lattice ()
             pp_el.query("ymin",          ymin);
             pp_el.query("ymax",          ymax);
             pp_el.query("kill_backward", kill_bk);
-            lattice.emplace_back(Collimator(name, z_start, z_end,
-                                            xmin, xmax, ymin, ymax,
-                                            kill_bk != 0));
+            pp_el.query("fire_once",     fire_once);
+            pp_el.query("z_target",      z_target);
+            Collimator coll(name, z_start, z_end,
+                            xmin, xmax, ymin, ymax,
+                            kill_bk != 0);
+            if (fire_once != 0) {
+                coll.m_fire_once = true;
+                coll.m_z_target  = z_target;
+            }
+            lattice.emplace_back(std::move(coll));
         }
         else if (type == "wakefield") {
             amrex::Real z_start  = 0.0;

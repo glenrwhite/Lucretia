@@ -220,29 +220,41 @@ for k = 1:numel(lat_lines)
         end
     case -11
         % Collimator / backward-particle filter. ImpactT format:
-        %   "0 0 0 -11 z dz xmin xmax ymin ymax /!name:..."
-        % i.e. v(5)=z_start, v(6)=dz (negative dz = stop_bkw mode -- kill
-        % particles with pz<0 in the stop region), v(7..8)=xmin/xmax,
-        % v(9..10)=ymin/ymax. For dz>0, the collimator is active from
-        % z_start to z_start+dz; for dz<0, it kills backward particles
-        % with no aperture restriction (xmin..ymax all 0).
+        %   "0 0 0 -11 v0 z_trigger xmin xmax ymin ymax /!name:..."
+        % per IMPACT-T's AccSimulator.f90 parsing (line 1053-1058):
+        %   v(6)=z_trigger -> tcol  (the z position at which the
+        %                            collimator fires ONCE, like a thin
+        %                            physical aperture at that z)
+        %   v(7..10)       = xmin, xmax, ymin, ymax aperture
+        % Imp's trigger: when bunch centroid crosses tcol, lostXY checks
+        % ALL particles' (x,y) and kills those outside the aperture. NOT
+        % a continuous z-range cut. v(5) appears unused for the active
+        % collimator; for stop_bkw type elements v(6) is set negative as
+        % a flag (per LCLS deck convention) and stop_bkw kills backward-
+        % traveling particles. Older lt parser treated v(5)=z_start +
+        % v(6)=dz as a continuous z-range aperture, which mass-killed
+        % particles through the entire 1.5-m drift -- bug fixed here.
         if numel(v) >= 10
-            z_start = v(5);
-            dz      = v(6);
-            xmin    = v(7);
-            xmax    = v(8);
-            ymin    = v(9);
-            ymax    = v(10);
-            if dz < 0
-                % stop_bkw: kill backward particles in ALL z (use full
-                % lattice extent). No aperture cut.
+            z_trigger = v(6);
+            xmin      = v(7);
+            xmax      = v(8);
+            ymin      = v(9);
+            ymax      = v(10);
+            if z_trigger < 0
+                % stop_bkw: kill backward particles in ALL z. No aperture.
                 lattice{end+1} = timetracking.Collimator('name', nm, ...
                     'z_start',       -1, ...
                     'z_end',         elem_z_max + 100, ...
                     'kill_backward', true); %#ok<AGROW>
             else
+                % Thin aperture at z=z_trigger. Fire ONCE when the bunch
+                % centroid first crosses z_trigger; kill ALL alive
+                % particles outside the aperture regardless of their own
+                % z. Matches IMPACT-T's lostXY trigger semantics
+                % exactly (AccSimulator.f90:1669 + BeamBunch.f90:1304-1314).
                 lattice{end+1} = timetracking.Collimator('name', nm, ...
-                    'z_start', z_start, 'z_end', z_start + dz, ...
+                    'fire_once', true, ...
+                    'z_target',  z_trigger, ...
                     'xmin',    xmin,    'xmax',  xmax, ...
                     'ymin',    ymin,    'ymax',  ymax); %#ok<AGROW>
             end
