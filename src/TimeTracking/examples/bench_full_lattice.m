@@ -24,6 +24,11 @@ function bench_full_lattice(varargin)
 %   self_force_direct = true     -- avoids LUT-rebuild noise w/ adaptive mesh.
 %   sc_integer_cell_shift = true -- snap centroid-only resizes to integer cells.
 %   sc_cent_drift_threshold = 0.9 -- defer centroid resizes (less per-step noise).
+%   sc_rho_smooth_passes = 2     -- binomial filter on rho before IGF solve.
+%                                   Best of 5 noise-knob experiments at end-of-L0A
+%                                   eps_nx (-13% vs 0 passes; sc_exact_range,
+%                                   sc_shape_order=2/TSC, disable_self_force,
+%                                   pad_factor=2 all gave smaller or no improvement).
 
 p = inputParser;
 p.addParameter('impactt_dir', '/Users/glenwhite/Documents/GitHub/Lattices/common/ImpactT', @(x) ischar(x) || isstring(x));
@@ -44,7 +49,7 @@ p.addParameter('sc_integer_cell_shift', true, @islogical);               % adapt
 p.addParameter('slice_gamma_off', [],  @(x) isempty(x) || isnumeric(x));  % disable slice SC when bunch mean gamma >= this (lets 3D mesh handle longitudinal at high gamma)
 p.addParameter('disable_self_force', false, @islogical);                  % diagnostic: skip self-force LUT subtraction
 p.addParameter('sc_exact_range', false, @islogical);                      % ImpactT-style exact bunch range adaptive mesh (no padding, every step)
-p.addParameter('sc_rho_smooth_passes', 0, @isnumeric);                   % # of binomial-smoother passes on rho before IGF solve (0 = off; 1-2 cuts CIC noise)
+p.addParameter('sc_rho_smooth_passes', 2, @isnumeric);                   % # of binomial-smoother passes on rho before IGF solve. Default 2: best-found end-of-L0A eps_nx (~13% reduction vs 0 passes); cheap (one stencil pass per rho).
 p.addParameter('slice_radius_factor',  0, @isnumeric);                   % override slice SC bunch radius: a = factor * sigma_xy (default 2.0; pass 0 to use default)
 p.addParameter('sc_hybrid_z_adaptive', false, @islogical);               % SC mesh hybrid mode: static xy + adaptive z (overrides sc_static_xrad behavior in z)
 p.addParameter('sc_shape_order', 1, @isnumeric);                         % particle shape: 1 = CIC (default), 2 = TSC (smoother per-particle field gradient at ~3x deposit/gather cost)
