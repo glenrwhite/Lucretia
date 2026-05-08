@@ -61,6 +61,8 @@ p.addParameter('sc_use_b_field', true, @islogical);                      % apply
 p.addParameter('slice_profile',  0,   @isnumeric);                       % slice SC transverse profile: 0 = uniform disk (default), 1 = Gaussian disk
 p.addParameter('self_force_direct', true, @islogical);                   % compute SC self-force directly each step (no LUT; ~7x cost; avoids LUT-rebuild noise w/ adaptive mesh). Default ON because adaptive mesh is now default.
 p.addParameter('sc_diag_resize_jump', 0, @isnumeric);                    % if >0, lucretia-tt prints per-particle dE statistics on each mesh resize (diagnostic of field discontinuity)
+p.addParameter('sc_dump_field_at_step', 0, @isnumeric);                   % >0 -> dump SC mesh field (rho/phi/Ex/Ey/Ez) at this solve count
+p.addParameter('sc_dump_field_path', '', @(x) ischar(x) || isstring(x));  % path for sc mesh dump; empty -> /tmp/sc_field_dump_step<N>.bin
 p.addParameter('dump_kicks_at_steps', [], @isnumeric);                   % vector of step indices: dump per-particle SC kicks for cross-code comparison
 p.addParameter('dump_kicks_at_times', [], @isnumeric);                   % vector of physical times (s): dump per-particle SC kicks at first step crossing each time
 p.addParameter('dump_kicks_path_prefix', '', @(x) ischar(x) || isstring(x));
@@ -228,6 +230,14 @@ if ~isempty(opts.dump_kicks_at_times)
     tt.dump_kicks_at_times = double(opts.dump_kicks_at_times);
     fprintf('  dump_kicks_at_times = [%s] s\n', ...
         strtrim(sprintf('%.6g ', tt.dump_kicks_at_times)));
+end
+if opts.sc_dump_field_at_step > 0
+    tt.sc_dump_field_at_step = round(opts.sc_dump_field_at_step);
+    if ~isempty(opts.sc_dump_field_path)
+        tt.sc_dump_field_path = char(opts.sc_dump_field_path);
+    end
+    fprintf('  sc_dump_field_at_step = %d -> %s\n', tt.sc_dump_field_at_step, ...
+        char(string(tt.sc_dump_field_path)));
 end
 if ~isempty(opts.dump_kicks_at_steps) || ~isempty(opts.dump_kicks_at_times)
     if ~isempty(opts.dump_kicks_path_prefix)
