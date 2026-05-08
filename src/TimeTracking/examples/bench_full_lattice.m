@@ -24,11 +24,15 @@ function bench_full_lattice(varargin)
 %   self_force_direct = true     -- avoids LUT-rebuild noise w/ adaptive mesh.
 %   sc_integer_cell_shift = true -- snap centroid-only resizes to integer cells.
 %   sc_cent_drift_threshold = 0.9 -- defer centroid resizes (less per-step noise).
-%   sc_rho_smooth_passes = 2     -- binomial filter on rho before IGF solve.
-%                                   Best of 5 noise-knob experiments at end-of-L0A
-%                                   eps_nx (-13% vs 0 passes; sc_exact_range,
-%                                   sc_shape_order=2/TSC, pad_factor=2 all gave
-%                                   smaller or no improvement).
+%   sc_exact_range = true        -- mirror imp's no-padding adaptive mesh.
+%                                   Drops per-particle SC noise from 89% to 61%
+%                                   (best of all knobs tested). Slight increase
+%                                   in end-of-L0A eps_nx (5.04x vs 4.14x with
+%                                   smooth=2 alone; tradeoff favors fidelity to
+%                                   imp's mesh convention).
+%   sc_rho_smooth_passes = 0     -- anti-additive with sc_exact_range. Use 2
+%                                   only when sc_exact_range=false (then -13%
+%                                   end-of-L0A eps_nx vs unsmoothed adaptive+pad).
 %   disable_self_force = true    -- imp does NO self-force subtraction; lt's
 %                                   kSelfForceFactor=0.62 is empirically neutral
 %                                   at high gamma and IMPROVES per-particle noise
@@ -52,8 +56,8 @@ p.addParameter('sc_cent_drift_threshold', 0.9, @isnumeric);              % adapt
 p.addParameter('sc_integer_cell_shift', true, @islogical);               % adaptive: snap centroid-only resizes to integer cells (preserves deposit pattern -> zero per-particle field jump for that resize event)
 p.addParameter('slice_gamma_off', [],  @(x) isempty(x) || isnumeric(x));  % disable slice SC when bunch mean gamma >= this (lets 3D mesh handle longitudinal at high gamma)
 p.addParameter('disable_self_force', true, @islogical);                   % skip the empirical self-force subtraction. Default ON: imp does NO self-force subtraction; lt's kSelfForceFactor=0.62 is empirically neutral at high gamma and IMPROVES per-particle noise (-28%) at low gamma. No measurable downside in tracking results.
-p.addParameter('sc_exact_range', false, @islogical);                      % ImpactT-style exact bunch range adaptive mesh (no padding, every step)
-p.addParameter('sc_rho_smooth_passes', 2, @isnumeric);                   % # of binomial-smoother passes on rho before IGF solve. Default 2: best-found end-of-L0A eps_nx (~13% reduction vs 0 passes); cheap (one stencil pass per rho).
+p.addParameter('sc_exact_range', true, @islogical);                       % ImpactT-style exact bunch range adaptive mesh (no padding, every step). Default ON: best per-particle noise reduction (89%->61%); mirrors imp's mesh setup. Trade-off: slightly worse end-of-L0A eps_nx vs adaptive+pad.
+p.addParameter('sc_rho_smooth_passes', 0, @isnumeric);                    % # of binomial-smoother passes on rho before IGF solve. Default 0: anti-additive with sc_exact_range (combo gives no per-particle improvement). Use 2 only when sc_exact_range=false.
 p.addParameter('slice_radius_factor',  0, @isnumeric);                   % override slice SC bunch radius: a = factor * sigma_xy (default 2.0; pass 0 to use default)
 p.addParameter('sc_hybrid_z_adaptive', false, @islogical);               % SC mesh hybrid mode: static xy + adaptive z (overrides sc_static_xrad behavior in z)
 p.addParameter('sc_shape_order', 1, @isnumeric);                         % particle shape: 1 = CIC (default), 2 = TSC (smoother per-particle field gradient at ~3x deposit/gather cost)
