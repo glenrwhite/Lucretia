@@ -133,6 +133,24 @@ end
 if isprop(obj, 'self_force_direct') && ~isempty(obj.self_force_direct) && obj.self_force_direct
     fprintf(f, 'tracking.self_force_direct = 1\n');
 end
+if isprop(obj, 'dump_kicks_at_steps') && ~isempty(obj.dump_kicks_at_steps)
+    steps = round(obj.dump_kicks_at_steps(:)');
+    fprintf(f, 'tracking.dump_kicks_at_steps =');
+    fprintf(f, ' %d', steps);
+    fprintf(f, '\n');
+end
+if isprop(obj, 'dump_kicks_at_times') && ~isempty(obj.dump_kicks_at_times)
+    times = obj.dump_kicks_at_times(:)';
+    fprintf(f, 'tracking.dump_kicks_at_times =');
+    fprintf(f, ' %.10g', times);
+    fprintf(f, '\n');
+end
+if (isprop(obj, 'dump_kicks_at_steps') && ~isempty(obj.dump_kicks_at_steps)) ...
+   || (isprop(obj, 'dump_kicks_at_times') && ~isempty(obj.dump_kicks_at_times))
+    if isprop(obj, 'dump_kicks_path_prefix') && ~isempty(obj.dump_kicks_path_prefix)
+        fprintf(f, 'tracking.dump_kicks_path_prefix = %s\n', char(obj.dump_kicks_path_prefix));
+    end
+end
 if isprop(obj, 'trace_file') && ~isempty(obj.trace_file)
     fprintf(f, 'tracking.trace_file         = %s\n', char(obj.trace_file));
     if isprop(obj, 'trace_every') && ~isempty(obj.trace_every)

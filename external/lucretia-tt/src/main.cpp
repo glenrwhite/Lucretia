@@ -829,6 +829,9 @@ int main (int argc, char* argv[])
         int         disable_self_force      = 0;
         int         self_force_direct       = 0;
         int         sc_use_b_field          = 0;
+        amrex::Vector<int>         dump_kicks_at_steps;
+        amrex::Vector<amrex::Real> dump_kicks_at_times;
+        std::string dump_kicks_path_prefix  = "/tmp/lt_part_kicks_step";
         std::string trace_file;
         int         trace_every             = 1;
         {
@@ -849,6 +852,9 @@ int main (int argc, char* argv[])
             pp_track.query("disable_self_force",      disable_self_force);
             pp_track.query("self_force_direct",       self_force_direct);
             pp_track.query("sc_use_b_field",          sc_use_b_field);
+            pp_track.queryarr("dump_kicks_at_steps",  dump_kicks_at_steps);
+            pp_track.queryarr("dump_kicks_at_times",  dump_kicks_at_times);
+            pp_track.query("dump_kicks_path_prefix",  dump_kicks_path_prefix);
             pp_track.query("trace_file",              trace_file);
             pp_track.query("trace_every",             trace_every);
         }
@@ -906,6 +912,28 @@ int main (int argc, char* argv[])
             tracker.set_self_force_direct(true);
             amrex::Print() << "[tracking] SC self-force computed DIRECTLY each step "
                            << "(no LUT; ~7x cost; eliminates LUT-rebuild noise)\n";
+        }
+        if (!dump_kicks_at_steps.empty()) {
+            std::vector<int> dks(dump_kicks_at_steps.begin(),
+                                 dump_kicks_at_steps.end());
+            tracker.set_dump_kicks_at_steps(dks, dump_kicks_path_prefix);
+            amrex::Print() << "[tracking] per-particle SC-kick dump scheduled for steps {";
+            for (size_t k = 0; k < dump_kicks_at_steps.size(); ++k) {
+                if (k) amrex::Print() << ",";
+                amrex::Print() << dump_kicks_at_steps[k];
+            }
+            amrex::Print() << "} -> " << dump_kicks_path_prefix << "<step>.bin\n";
+        }
+        if (!dump_kicks_at_times.empty()) {
+            std::vector<double> dkt(dump_kicks_at_times.begin(),
+                                    dump_kicks_at_times.end());
+            tracker.set_dump_kicks_at_times(dkt, dump_kicks_path_prefix);
+            amrex::Print() << "[tracking] per-particle SC-kick dump scheduled for times {";
+            for (size_t k = 0; k < dump_kicks_at_times.size(); ++k) {
+                if (k) amrex::Print() << ",";
+                amrex::Print() << dump_kicks_at_times[k];
+            }
+            amrex::Print() << "} s -> " << dump_kicks_path_prefix << "<step>.bin\n";
         }
         amrex::Real t = t_start;
         bool        switched = false;

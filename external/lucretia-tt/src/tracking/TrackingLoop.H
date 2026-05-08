@@ -5,6 +5,9 @@
 
 #include <AMReX_REAL.H>
 
+#include <string>
+#include <vector>
+
 
 namespace lucretiatt {
 
@@ -178,6 +181,47 @@ public:
     void set_sc_use_b_field (bool on) noexcept { m_sc_use_b_field = on; }
     bool sc_use_b_field_enabled () const noexcept { return m_sc_use_b_field; }
 
+    /** Per-particle SC-kick dump. When the integrator's internal step
+     *  counter equals one of `steps`, write all alive particles' state +
+     *  SC field/momentum-kick contributions to
+     *    {path_prefix}{N}.bin
+     *  for cross-code comparison with imp's lt_cmp_dump_particles
+     *  (mesh fields are dumped separately by SpaceCharge::set_dump_field_at_step).
+     *
+     *  Per-particle record (96 bytes = 12 doubles): x, y, z, ux, uy, uz,
+     *  dE_sc_x, dE_sc_y, dE_sc_z, dB_sc_x, dB_sc_y, dB_sc_z. The dE/dB are
+     *  the increments that SC actually contributed to the total fields fed
+     *  into the Boris kick (i.e., the IGF gather - self-force, with
+     *  whatever boost / B-field convention is active, plus any slice SC).
+     *
+     *  Header (48 bytes): int32 step, int32 n_alive, int32 n_per_part=12,
+     *  int32 reserved=0; double t, double dt, double sc_gamma, double sc_beta_z.
+     *
+     *  Default off (empty steps list). Use only on the DKD integrator path
+     *  (the legacy step() is not instrumented). */
+    void set_dump_kicks_at_steps (std::vector<int> const& steps,
+                                  std::string const& path_prefix
+                                      = std::string("/tmp/lt_part_kicks_step")) noexcept
+    {
+        m_dump_kicks_at_steps    = steps;
+        m_dump_kicks_path_prefix = path_prefix;
+    }
+    /** Time-based variant of set_dump_kicks_at_steps. Triggers a dump on
+     *  the FIRST step where wallclock simulation time t reaches >= one of
+     *  the listed times (each time fires at most once). Useful for cross-
+     *  code comparison when the two integrators use different dt schedules
+     *  -- step indices won't align, but physical times will. The dump file
+     *  uses the actual triggered step index in its filename. */
+    void set_dump_kicks_at_times (std::vector<double> const& times,
+                                  std::string const& path_prefix
+                                      = std::string("/tmp/lt_part_kicks_step")) noexcept
+    {
+        m_dump_kicks_at_times    = times;
+        m_dump_kicks_path_prefix = path_prefix;
+        m_dump_kicks_times_fired.assign(times.size(), false);
+    }
+    int n_steps_taken () const noexcept { return m_step_count; }
+
     /** Use ImpactT-style drift-kick-drift integrator with first-order
      *  emission model. Replaces the default kick-drift scheme. The DKD
      *  step is:
@@ -224,6 +268,11 @@ private:
     bool        m_self_force_disabled     = false;  // diagnostic: skip the self-force LUT subtraction
     bool        m_self_force_direct       = false;  // off: LUT lookup; on: direct Coulomb sum each step (no rebuild noise w/ adaptive mesh)
     bool        m_sc_use_b_field          = false;  // off: 1/gamma^2 boost shortcut; on: explicit B + Boris (matches ImpactT)
+    int         m_step_count              = 0;      // incremented by step() / step_dkd() before any work
+    std::vector<int>    m_dump_kicks_at_steps;      // step indices at which to dump per-particle SC kicks
+    std::vector<double> m_dump_kicks_at_times;      // physical times (s) at which to dump (fires on first step with t>=target)
+    std::vector<bool>   m_dump_kicks_times_fired;   // mirror of m_dump_kicks_at_times: true once fired
+    std::string m_dump_kicks_path_prefix  = "/tmp/lt_part_kicks_step";
 public:
     void set_self_force_disabled (bool on) noexcept { m_self_force_disabled = on; }
     bool self_force_disabled () const noexcept { return m_self_force_disabled; }

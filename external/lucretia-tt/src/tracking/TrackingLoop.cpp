@@ -12,7 +12,10 @@
 #include <AMReX_OpenMP.H>
 #include <AMReX_ParIter.H>
 
+#include <algorithm>
 #include <cmath>
+#include <cstdint>
+#include <cstdio>
 #include <variant>
 #include <vector>
 
@@ -159,10 +162,13 @@ void TrackingLoop::step (
     using namespace particles;
 
     // Dispatch to ImpactT-style drift-kick-drift integrator if enabled.
+    // step_dkd increments m_step_count itself; we only need to bump it
+    // when running the legacy path so n_steps_taken() stays consistent.
     if (m_use_dkd_integrator) {
         step_dkd(bunch, lattice, t, dt, sc, slice_sc);
         return;
     }
+    ++m_step_count;
 
     // ---- 1. Emission ----
     for (auto const& el : lattice) {
@@ -782,6 +788,34 @@ void TrackingLoop::step_dkd (
                                 ? (m_behind_cathode_betazini * c) : Real(0.0);
     const     Real half_dt   = Real(0.5) * dt;
 
+    // Per-particle SC-kick dump (cross-code comparison harness).
+    ++m_step_count;
+    bool dump_kicks_now = !m_dump_kicks_at_steps.empty()
+        && std::find(m_dump_kicks_at_steps.begin(),
+                     m_dump_kicks_at_steps.end(),
+                     m_step_count) != m_dump_kicks_at_steps.end();
+    // Time-triggered dump: fires at the FIRST step whose t >= each target.
+    // Mark the trigger as fired so it can't re-fire on later steps.
+    if (!m_dump_kicks_at_times.empty()) {
+        for (std::size_t k = 0; k < m_dump_kicks_at_times.size(); ++k) {
+            if (m_dump_kicks_times_fired[k]) continue;
+            if (Real(t) >= Real(m_dump_kicks_at_times[k])) {
+                m_dump_kicks_times_fired[k] = true;
+                dump_kicks_now              = true;
+            }
+        }
+    }
+    int dump_total_np = 0;
+    std::vector<double> kick_buf;        // 12 doubles per particle
+    std::vector<std::int32_t> kick_keep; // 1 = include in dump, 0 = skip
+    if (dump_kicks_now) {
+        for (PIter pti(bunch, lev); pti.isValid(); ++pti) {
+            dump_total_np += pti.numParticles();
+        }
+        kick_buf.assign(std::size_t(dump_total_np) * 12, 0.0);
+        kick_keep.assign(std::size_t(dump_total_np), 0);
+    }
+
     // ---- 1. Emission ----
     for (auto const& el : lattice) {
         std::visit([&] (auto const& e) {
@@ -892,9 +926,12 @@ void TrackingLoop::step_dkd (
     // Below-cathode particles get NO field, NO kick this step.
     const Real t_field_default = m_use_centroid_phase ? t_centroid
                                : (t + half_dt);
+    int dump_pti_offset = 0;
     for (PIter pti(bunch, lev); pti.isValid(); ++pti) {
         auto ptd = pti.GetParticleTile().getParticleTileData();
         const int np = pti.numParticles();
+        const int dump_my_offset = dump_pti_offset;
+        dump_pti_offset += np;
 #ifdef AMREX_USE_OMP
 #pragma omp parallel for
 #endif
@@ -938,6 +975,11 @@ void TrackingLoop::step_dkd (
                         / (Real(4.0) * z_above * z_above);
                 }
             }
+
+            // Snapshot E,B before SC contribution -- the dump records
+            // the per-particle delta (SC-only) for cross-code comparison.
+            const Real Ex_pre_sc = Ex, Ey_pre_sc = Ey, Ez_pre_sc = Ez;
+            const Real Bx_pre_sc = Bx, By_pre_sc = By, Bz_pre_sc = Bz;
 
             // Space-charge gather + per-particle self-force subtraction
             // + per-particle 1/gamma^2 boost (same pattern as kick-drift).
@@ -1093,6 +1135,24 @@ void TrackingLoop::step_dkd (
                 Ez += slice_sc->E_z_at(z);
             }
 
+            // Capture per-particle SC contribution + state for the dump.
+            if (dump_kicks_now) {
+                const std::size_t base = std::size_t(dump_my_offset + ip) * 12;
+                kick_buf[base+0]  = double(x);
+                kick_buf[base+1]  = double(y);
+                kick_buf[base+2]  = double(z);
+                kick_buf[base+3]  = double(ux);
+                kick_buf[base+4]  = double(uy);
+                kick_buf[base+5]  = double(uz);
+                kick_buf[base+6]  = double(Ex - Ex_pre_sc);
+                kick_buf[base+7]  = double(Ey - Ey_pre_sc);
+                kick_buf[base+8]  = double(Ez - Ez_pre_sc);
+                kick_buf[base+9]  = double(Bx - Bx_pre_sc);
+                kick_buf[base+10] = double(By - By_pre_sc);
+                kick_buf[base+11] = double(Bz - Bz_pre_sc);
+                kick_keep[std::size_t(dump_my_offset + ip)] = 1;
+            }
+
             // Velocity-only Boris kick (full dt). Position drift is handled
             // by separate half-drift passes around this kick.
             boris_kick_only(qm, Ex, Ey, Ez, Bx, By, Bz, dt,
@@ -1101,6 +1161,40 @@ void TrackingLoop::step_dkd (
             ptd.rdata(RealSoA::px)[ip] = ux;
             ptd.rdata(RealSoA::py)[ip] = uy;
             ptd.rdata(RealSoA::pz)[ip] = uz;
+        }
+    }
+
+    // ---- 6b. Write per-particle SC-kick dump if scheduled at this step ----
+    if (dump_kicks_now) {
+        std::size_t n_alive = 0;
+        for (auto k : kick_keep) if (k) ++n_alive;
+
+        std::string path = m_dump_kicks_path_prefix
+            + std::to_string(m_step_count) + ".bin";
+        FILE* f = std::fopen(path.c_str(), "wb");
+        if (f) {
+            const std::int32_t hdr[4] = {
+                std::int32_t(m_step_count),
+                std::int32_t(n_alive),
+                std::int32_t(12),       // n_doubles_per_particle
+                std::int32_t(0)         // reserved
+            };
+            std::fwrite(hdr, sizeof(std::int32_t), 4, f);
+            const double sc_gamma  = sc ? double(sc->last_gamma())  : 1.0;
+            const double sc_beta_z = sc ? double(sc->last_beta_z()) : 0.0;
+            const double meta[4] = { double(t), double(dt), sc_gamma, sc_beta_z };
+            std::fwrite(meta, sizeof(double), 4, f);
+            for (std::size_t i = 0; i < kick_keep.size(); ++i) {
+                if (!kick_keep[i]) continue;
+                std::fwrite(kick_buf.data() + i * 12, sizeof(double), 12, f);
+            }
+            std::fclose(f);
+            amrex::Print() << "[tracking.dump_kicks] wrote " << path
+                           << " (step=" << m_step_count
+                           << ", n_alive=" << n_alive << ")\n";
+        } else {
+            amrex::Print() << "[tracking.dump_kicks] WARNING: failed to open "
+                           << path << " for writing\n";
         }
     }
 

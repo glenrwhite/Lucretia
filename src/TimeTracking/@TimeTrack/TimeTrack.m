@@ -39,6 +39,9 @@ properties
     disable_self_force      = []                                 % logical (diagnostic): skip the SC self-force LUT subtraction
     sc_use_b_field          = []                                 % logical: apply SC B field explicitly via Boris (matches ImpactT). Captures non-synchronous v×B coupling. Default off (1/gamma^2 boost shortcut).
     self_force_direct       = []                                 % logical: compute self-force directly each step (no LUT). Costs ~7x per particle but eliminates LUT-rebuild noise with adaptive mesh.
+    dump_kicks_at_steps     = []                                 % vector of int step indices at which to dump per-particle SC kicks (DKD path only). Files at /tmp/lt_part_kicks_step<N>.bin.
+    dump_kicks_at_times     = []                                 % vector of double simulation times (s) at which to dump per-particle SC kicks (each fires at first step with t>=target). Useful for cross-code comparison when dt schedules differ.
+    dump_kicks_path_prefix  = ''                                 % prefix for the dump files; empty -> /tmp/lt_part_kicks_step
     trace_file              = ''                                 % path: per-step bunch-mean diagnostics (CSV) for cross-code comparison
     trace_every             = 1                                  % step interval for trace rows (1 = every step)
     geom_lo    = [-0.05, -0.05,  0.0]                            % m
