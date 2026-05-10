@@ -1099,26 +1099,34 @@ void SpaceCharge::solve (particles::TimeBunch& bunch)
         std::fwrite(&gb_d, sizeof(double), 1, f);
 
         auto write_fab = [&](MultiFab const& mf) {
-            // Single-FAB layout assumed (forced in the constructor).
-            MFIter mfi(mf);
-            Array4<const Real> arr = mf.const_array(mfi);
-            // Iterate lab order (i fastest), include ghost-extended Box for
-            // E components if needed. Use the valid+ghost box.
-            auto const& gbox = mf[mfi].box();
-            const int gx = gbox.length(0);
-            const int gy = gbox.length(1);
-            const int gz = gbox.length(2);
-            // Take only the (nx, ny, nz) interior nodes starting at smallEnd.
-            const auto se = gbox.smallEnd();
-            std::vector<double> buf((std::size_t)nx * ny * nz);
-            for (int k = 0; k < nz; ++k)
-                for (int j = 0; j < ny; ++j)
-                    for (int i = 0; i < nx; ++i) {
-                        buf[(std::size_t)((k * ny + j) * nx + i)] =
-                            (double)arr(se[0] + i, se[1] + j, se[2] + k, 0);
-                    }
+            // Multi-FAB compatible. Iterate all FABs on this rank and copy
+            // only their VALID-box cells into the global buffer at the
+            // correct domain index. Domain-low (lo_dom = m_geom.Domain().smallEnd())
+            // gives the offset to subtract from each FAB index.
+            std::vector<double> buf((std::size_t)nx * ny * nz, 0.0);
+            const auto lo_dom = m_geom.Domain().smallEnd();
+            // Nodal index offset: nodal small end = cell small end (== 0 for
+            // a 0-based domain).
+            for (MFIter mfi(mf); mfi.isValid(); ++mfi) {
+                Array4<const Real> arr = mf.const_array(mfi);
+                Box const& vbox = mfi.validbox();   // interior cells of this FAB
+                auto const lo_v = vbox.smallEnd();
+                auto const hi_v = vbox.bigEnd();
+                for (int k = lo_v[2]; k <= hi_v[2]; ++k)
+                    for (int j = lo_v[1]; j <= hi_v[1]; ++j)
+                        for (int i = lo_v[0]; i <= hi_v[0]; ++i) {
+                            const int gi = i - lo_dom[0];
+                            const int gj = j - lo_dom[1];
+                            const int gk = k - lo_dom[2];
+                            if (gi < 0 || gi >= nx || gj < 0 || gj >= ny ||
+                                gk < 0 || gk >= nz) {
+                                continue;
+                            }
+                            buf[(std::size_t)((gk * ny + gj) * nx + gi)] =
+                                (double)arr(i, j, k, 0);
+                        }
+            }
             std::fwrite(buf.data(), sizeof(double), buf.size(), f);
-            (void)gx; (void)gy; (void)gz;
         };
         write_fab(m_rho);
         write_fab(m_phi);
