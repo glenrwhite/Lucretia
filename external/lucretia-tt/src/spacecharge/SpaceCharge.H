@@ -364,6 +364,11 @@ public:
         std::vector<amrex::Array4<const amrex::Real>> Ez;
         std::vector<amrex::Box> boxes;        // valid + 1 ghost (gather bounds)
         std::vector<amrex::Box> valid_boxes;  // interior only (FAB ownership)
+        // Image E (only populated if image_active is true, task #61/#63).
+        std::vector<amrex::Array4<const amrex::Real>> Ex_image;
+        std::vector<amrex::Array4<const amrex::Real>> Ey_image;
+        std::vector<amrex::Array4<const amrex::Real>> Ez_image;
+        bool image_active = false;
     };
 
     /** Return all local FABs' Array4 + bounds for E_x, E_y, E_z. Used by
@@ -379,6 +384,14 @@ public:
             g.Ez.push_back(m_Ez.const_array(mfi));
             g.boxes.push_back(m_Ex[mfi].box());        // valid + ghost
             g.valid_boxes.push_back(mfi.validbox());   // interior only
+        }
+        g.image_active = m_image_active_this_solve;
+        if (g.image_active && m_Ex_image.ok()) {
+            for (amrex::MFIter mfi(m_Ex_image); mfi.isValid(); ++mfi) {
+                g.Ex_image.push_back(m_Ex_image.const_array(mfi));
+                g.Ey_image.push_back(m_Ey_image.const_array(mfi));
+                g.Ez_image.push_back(m_Ez_image.const_array(mfi));
+            }
         }
         return g;
     }
@@ -491,11 +504,18 @@ private:
     amrex::DistributionMapping m_dm;
 
     amrex::MultiFab            m_rho;        // C/m^3,  node-centered
-    amrex::MultiFab            m_phi;        // V,      node-centered, 1 ghost
-    amrex::MultiFab            m_phi_image;  // V (image-charge contribution; allocated on demand)
-    amrex::MultiFab            m_Ex;         // V/m,    node-centered, 1 ghost
+    amrex::MultiFab            m_phi;        // V,      node-centered, 1 ghost (DIRECT phi)
+    amrex::MultiFab            m_phi_image;  // V (image-charge phi; allocated on demand, kept SEPARATE from m_phi for task #61/#63)
+    amrex::MultiFab            m_Ex;         // V/m,    node-centered, 1 ghost (DIRECT E)
     amrex::MultiFab            m_Ey;         // V/m,    node-centered, 1 ghost
     amrex::MultiFab            m_Ez;         // V/m,    node-centered, 1 ghost
+    // Image E kept separate. Applied with opposite B-field sign in
+    // TrackingLoop (mirrors imp's gradEB_FieldQuant called twice with
+    // opposite betC sign — Field.f90:445-449). Task #61/#63.
+    amrex::MultiFab            m_Ex_image;
+    amrex::MultiFab            m_Ey_image;
+    amrex::MultiFab            m_Ez_image;
+    bool                       m_image_active_this_solve = false;
 
     amrex::Real                m_last_beta_z    = 0.0;
     bool                       m_exact_range    = false;

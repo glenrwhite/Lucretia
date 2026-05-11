@@ -782,6 +782,39 @@ void SpaceCharge::compute_E_from_phi ()
     m_Ex.FillBoundary(m_geom.periodicity());
     m_Ey.FillBoundary(m_geom.periodicity());
     m_Ez.FillBoundary(m_geom.periodicity());
+
+    // Task #61/#63: also compute IMAGE E from m_phi_image (kept separate
+    // from m_phi so its kick can be applied with negated B-field sign,
+    // mirroring imp's gradEB_FieldQuant betC sign flip).
+    if (m_image_active_this_solve && m_phi_image.ok()) {
+        if (!m_Ex_image.ok() ||
+            m_Ex_image.boxArray() != m_Ex.boxArray() ||
+            m_Ex_image.DistributionMap() != m_Ex.DistributionMap())
+        {
+            m_Ex_image.define(m_Ex.boxArray(), m_Ex.DistributionMap(),
+                              m_Ex.nComp(), m_Ex.nGrowVect());
+            m_Ey_image.define(m_Ey.boxArray(), m_Ey.DistributionMap(),
+                              m_Ey.nComp(), m_Ey.nGrowVect());
+            m_Ez_image.define(m_Ez.boxArray(), m_Ez.DistributionMap(),
+                              m_Ez.nComp(), m_Ez.nGrowVect());
+        }
+        m_phi_image.FillBoundary(m_geom.periodicity());
+        for (MFIter mfi(m_phi_image, TilingIfNotGPU()); mfi.isValid(); ++mfi) {
+            Box const& vbox = mfi.validbox();
+            auto const& phi_img = m_phi_image.const_array(mfi);
+            auto Ex_img = m_Ex_image.array(mfi);
+            auto Ey_img = m_Ey_image.array(mfi);
+            auto Ez_img = m_Ez_image.array(mfi);
+            ParallelFor(vbox, [=] AMREX_GPU_DEVICE (int i, int j, int k) {
+                Ex_img(i, j, k) = -(phi_img(i+1, j, k) - phi_img(i-1, j, k)) * inv_2dx;
+                Ey_img(i, j, k) = -(phi_img(i, j+1, k) - phi_img(i, j-1, k)) * inv_2dy;
+                Ez_img(i, j, k) = -(phi_img(i, j, k+1) - phi_img(i, j, k-1)) * inv_2dz;
+            });
+        }
+        m_Ex_image.FillBoundary(m_geom.periodicity());
+        m_Ey_image.FillBoundary(m_geom.periodicity());
+        m_Ez_image.FillBoundary(m_geom.periodicity());
+    }
 }
 
 
@@ -1060,10 +1093,58 @@ void SpaceCharge::solve (particles::TimeBunch& bunch)
             const Real z_shift = -Real(2.0) * gamma * z_above_lab;
             compute_phi_IGF_shifted(m_rho, m_phi_image, cell_size, z_shift);
 
-            // phi_total = phi_direct - phi_image (image source has
-            // opposite sign to the real bunch — the negation is folded
-            // into the subtraction here rather than into rho).
-            MultiFab::Subtract(m_phi, m_phi_image, 0, 0, m_phi.nComp(), m_phi.nGrowVect());
+            // Task #63: apply z-reversal to m_phi_image. Mirrors imp's
+            // invfft3d1Img_FFT (FFT.f90:303) which reverses z-order during
+            // image inverse FFT. This converts the centroid-shifted-Green
+            // result into the proper "extended-source image" form (each
+            // particle has its own image at -z, not all sharing -z_centroid).
+            {
+                const auto lo_dom = m_geom.Domain().smallEnd();
+                const int nx_dom = m_geom.Domain().length(0) + 1;
+                const int ny_dom = m_geom.Domain().length(1) + 1;
+                const int nz_dom = m_geom.Domain().length(2) + 1;
+                std::vector<double> img_flat((std::size_t)nx_dom * ny_dom * nz_dom, 0.0);
+                for (MFIter mfi(m_phi_image); mfi.isValid(); ++mfi) {
+                    Array4<const Real> arr = m_phi_image.const_array(mfi);
+                    Box const& vbox = mfi.validbox();
+                    auto const lo_v = vbox.smallEnd();
+                    auto const hi_v = vbox.bigEnd();
+                    for (int k = lo_v[2]; k <= hi_v[2]; ++k)
+                    for (int j = lo_v[1]; j <= hi_v[1]; ++j)
+                    for (int i = lo_v[0]; i <= hi_v[0]; ++i) {
+                        const int gi = i - lo_dom[0];
+                        const int gj = j - lo_dom[1];
+                        const int gk = k - lo_dom[2];
+                        if (gi < 0 || gi >= nx_dom || gj < 0 || gj >= ny_dom ||
+                            gk < 0 || gk >= nz_dom) continue;
+                        img_flat[(std::size_t)((gk * ny_dom + gj) * nx_dom + gi)] =
+                            (double)arr(i, j, k, 0);
+                    }
+                }
+                for (MFIter mfi(m_phi_image); mfi.isValid(); ++mfi) {
+                    Array4<Real> arr = m_phi_image.array(mfi);
+                    Box const& vbox = mfi.validbox();
+                    auto const lo_v = vbox.smallEnd();
+                    auto const hi_v = vbox.bigEnd();
+                    for (int k = lo_v[2]; k <= hi_v[2]; ++k)
+                    for (int j = lo_v[1]; j <= hi_v[1]; ++j)
+                    for (int i = lo_v[0]; i <= hi_v[0]; ++i) {
+                        const int gi = i - lo_dom[0];
+                        const int gj = j - lo_dom[1];
+                        const int gk_orig = k - lo_dom[2];
+                        const int gk_flip = nz_dom - 1 - gk_orig;
+                        if (gi < 0 || gi >= nx_dom || gj < 0 || gj >= ny_dom ||
+                            gk_flip < 0 || gk_flip >= nz_dom) continue;
+                        arr(i, j, k, 0) = (Real)img_flat[(std::size_t)((gk_flip * ny_dom + gj) * nx_dom + gi)];
+                    }
+                }
+                m_phi_image.FillBoundary(m_geom.periodicity());
+            }
+
+            m_image_active_this_solve = true;
+        } else {
+            m_image_active_this_solve = false;
+            if (m_phi_image.ok()) m_phi_image.setVal(0.0);
         }
     }
 

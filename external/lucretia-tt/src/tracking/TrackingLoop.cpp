@@ -1127,6 +1127,47 @@ void TrackingLoop::step_dkd (
                         }
                         Bx += -beta_inv_c * Ey_corr;
                         By += +beta_inv_c * Ex_corr;
+
+                        // Task #61/#63: image charge contribution. Image is
+                        // kept separate (m_phi_image solved with z-shifted
+                        // Green, then z-reversed to mirror imp's
+                        // invfft3d1Img_FFT) so that:
+                        // 1. Image source has opposite sign (lt's compute_phi
+                        //    _IGF_shifted uses positive rho convention, so
+                        //    its E gradient = -true_image_E). SUBTRACT to
+                        //    get correct sign.
+                        // 2. Image moves opposite to bunch → image's B-field
+                        //    has opposite sign of direct's. With double
+                        //    negation (subtract image E + flipped beta sign),
+                        //    transverse Lorentz force becomes E_image*(1+β²)
+                        //    instead of E_image*(1-β²)=E_image/γ² (suppressed).
+                        //    Mirrors imp's gradEB_FieldQuant betC sign flip
+                        //    at Field.f90:445-449.
+                        if (sc_fabs.image_active && fab_idx >= 0 &&
+                            fab_idx < int(sc_fabs.Ex_image.size()))
+                        {
+                            amrex::GpuArray<Real, 3> E_sc_img{};
+                            auto const& Exi = sc_fabs.Ex_image[fab_idx];
+                            auto const& Eyi = sc_fabs.Ey_image[fab_idx];
+                            auto const& Ezi = sc_fabs.Ez_image[fab_idx];
+                            if (sc_shape_order == 1) {
+                                auto E_cic_img = ablastr::particles::doGatherVectorFieldNodal(
+                                    ParticleReal(x), ParticleReal(y), ParticleReal(z),
+                                    Exi, Eyi, Ezi, dxi_sc, lo_sc);
+                                E_sc_img[0] = E_cic_img[0]; E_sc_img[1] = E_cic_img[1]; E_sc_img[2] = E_cic_img[2];
+                            } else {
+                                E_sc_img[0] = tsc_gather(Exi, x, y, z, dxi_sc, lo_sc);
+                                E_sc_img[1] = tsc_gather(Eyi, x, y, z, dxi_sc, lo_sc);
+                                E_sc_img[2] = tsc_gather(Ezi, x, y, z, dxi_sc, lo_sc);
+                            }
+                            Ex -= E_sc_img[0];
+                            Ey -= E_sc_img[1];
+                            if (!slice_sc) {
+                                Ez -= E_sc_img[2] * inv_g2;
+                            }
+                            Bx += -beta_inv_c * E_sc_img[1];   // -β·(-Ey_image_true) = -β·E_sc_img
+                            By += +beta_inv_c * E_sc_img[0];   // -β·(-Ex_image_true) = +β·E_sc_img
+                        }
                     } else {
                         Real sc_boost;
                         if (m_sc_boost_bunch_mean) {
