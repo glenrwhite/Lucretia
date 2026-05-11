@@ -57,6 +57,8 @@ p.addParameter('sc_integer_cell_shift', true, @islogical);               % adapt
 p.addParameter('slice_gamma_off', [],  @(x) isempty(x) || isnumeric(x));  % disable slice SC when bunch mean gamma >= this (lets 3D mesh handle longitudinal at high gamma)
 p.addParameter('disable_self_force', true, @islogical);                   % skip the empirical self-force subtraction. Default ON: imp does NO self-force subtraction; lt's kSelfForceFactor=0.62 is empirically neutral at high gamma and IMPROVES per-particle noise (-28%) at low gamma. No measurable downside in tracking results.
 p.addParameter('sc_exact_range', true, @islogical);                       % ImpactT-style exact bunch range adaptive mesh (no padding, every step). Default ON: best per-particle noise reduction (89%->61%); mirrors imp's mesh setup. Trade-off: slightly worse end-of-L0A eps_nx vs adaptive+pad.
+p.addParameter('sc_image_cutoff', 0.05, @isnumeric);                       % m: cathode image-charge applies only when z_above_cathode < this. Default 0.05m. IMPACT-T's deck uses 0.01m (Zimage); larger lt cutoff may over-focus particles toward axis (task #60 candidate).
+p.addParameter('sc_image_enabled', true, @islogical);                      % master switch for cathode image charge. Default ON (matches imp Flagimg=1).
 p.addParameter('sc_rho_smooth_passes', 8, @isnumeric);                    % # of binomial-smoother passes on rho before IGF solve. Default 8 (workaround for the per-particle SC noise gap vs imp -- task #59). 8 passes give noise 46% (vs 81% at smooth=0) and end-of-L0A eps_nx ratio 3.58 (vs 4.73 at smooth=0). Smoothing scale ~sqrt(N/2)*dx ~ 0.3mm is well below bunch sigma 1.4mm so bulk physics preserved. Pass 0 to disable smoothing for diagnostics.
 p.addParameter('slice_radius_factor',  0, @isnumeric);                   % override slice SC bunch radius: a = factor * sigma_xy (default 2.0; pass 0 to use default)
 p.addParameter('sc_hybrid_z_adaptive', false, @islogical);               % SC mesh hybrid mode: static xy + adaptive z (overrides sc_static_xrad behavior in z)
@@ -151,9 +153,10 @@ sc_mode = lower(char(opts.sc_mode));
 tt.enable_space_charge = ismember(sc_mode, {'full', 'mesh'});
 tt.sc_adaptive         = ismember(sc_mode, {'full', 'mesh'});
 tt.enable_slice_sc     = ismember(sc_mode, {'full', 'slice'});
-tt.sc_image_plane      = ismember(sc_mode, {'full', 'mesh'});
+tt.sc_image_plane      = ismember(sc_mode, {'full', 'mesh'}) && opts.sc_image_enabled;
+% (sc_image_enabled is exposed for task #60 root-cause diagnostics; default true matches prior behavior)
 tt.sc_image_plane_z    = 0.0;
-tt.sc_image_cutoff     = 0.05;
+tt.sc_image_cutoff     = opts.sc_image_cutoff;
 % Optional: STATIC SC mesh ±xrad transverse (ImpactT convention) instead
 % of per-step adaptive sizing. Reduces LUT-noise by giving more particles
 % per cell at the cost of mesh resolution.
