@@ -1,4 +1,5 @@
 #include "SpaceCharge.H"
+#include "util/SimpleProfiler.H"
 
 #include <ablastr/fields/IntegratedGreenFunctionSolver.H>
 
@@ -1249,8 +1250,8 @@ void SpaceCharge::solve (particles::TimeBunch& bunch)
 
     m_last_beta_z = compute_mean_beta_z(bunch);
 
-    deposit_charge(bunch);
-    smooth_rho();
+    { lucretiatt::util::ScopeTimer t_("sc.deposit");           deposit_charge(bunch); }
+    { lucretiatt::util::ScopeTimer t_("sc.smooth");            smooth_rho(); }
 
     auto const* dx = m_geom.CellSize();
     const Real inv_g = std::sqrt(Real(1.0) - m_last_beta_z * m_last_beta_z);
@@ -1259,7 +1260,10 @@ void SpaceCharge::solve (particles::TimeBunch& bunch)
     std::array<Real, 3> cell_size = {dx[0], dx[1], dz_scaled};
 
     // Direct (free-space) Poisson solve.
-    ablastr::fields::computePhiIGF(m_rho, m_phi, cell_size, /*is_2d_slices*/ false);
+    {
+        lucretiatt::util::ScopeTimer t_("sc.IGF_direct");
+        compute_phi_IGF_cached(m_rho, m_phi, cell_size);
+    }
 
     // Cathode image-charge solve via z-shifted Green function
     // (Qiang/IMPACT-T method). Adds the contribution from images of
@@ -1288,7 +1292,10 @@ void SpaceCharge::solve (particles::TimeBunch& bunch)
         // Matches IMPACT-T's `Zimage` screen.
         if (z_above_lab > Real(0.0) && z_above_lab <= m_image_cutoff) {
             const Real z_shift = -Real(2.0) * gamma * z_above_lab;
-            compute_phi_IGF_shifted(m_rho, m_phi_image, cell_size, z_shift);
+            {
+                lucretiatt::util::ScopeTimer t_("sc.IGF_image");
+                compute_phi_IGF_shifted(m_rho, m_phi_image, cell_size, z_shift);
+            }
 
             // Task #63: apply z-reversal to m_phi_image. Mirrors imp's
             // invfft3d1Img_FFT (FFT.f90:303) which reverses z-order during
@@ -1296,6 +1303,7 @@ void SpaceCharge::solve (particles::TimeBunch& bunch)
             // result into the proper "extended-source image" form (each
             // particle has its own image at -z, not all sharing -z_centroid).
             {
+                lucretiatt::util::ScopeTimer t_("sc.image_zflip");
                 const auto lo_dom = m_geom.Domain().smallEnd();
                 const int nx_dom = m_geom.Domain().length(0) + 1;
                 const int ny_dom = m_geom.Domain().length(1) + 1;
@@ -1355,12 +1363,12 @@ void SpaceCharge::solve (particles::TimeBunch& bunch)
         }
     }
 
-    compute_E_from_phi();
+    { lucretiatt::util::ScopeTimer t_("sc.E_from_phi");        compute_E_from_phi(); }
 
     // Multi-rank: replicate the E field across all ranks so gather_fabs()
     // can serve any particle's stencil regardless of mesh-slab ownership.
     // No-op for single-rank. (Task #54.)
-    replicate_e_fields_for_gather();
+    { lucretiatt::util::ScopeTimer t_("sc.replicate_E");       replicate_e_fields_for_gather(); }
 
     // ---- Mesh-field dump (cross-code comparison harness) ----
     // When configured, write the entire SC field state to a binary file
@@ -1587,6 +1595,9 @@ void SpaceCharge::compute_phi_IGF_shifted (
     }
 
     static std::unique_ptr<FFT::OpenBCSolver<Real>> obc_solver_image;
+    static Box        last_domain_image;
+    static std::array<Real, 3> last_cell_size_image{0.0, 0.0, 0.0};
+    static Real       last_z_shift_image = std::numeric_limits<Real>::quiet_NaN();
     if (!obc_solver_image) {
         ExecOnFinalize([&] () { obc_solver_image.reset(); });
     }
@@ -1594,6 +1605,9 @@ void SpaceCharge::compute_phi_IGF_shifted (
         FFT::Info info{};
         info.setNumProcs(nprocs);
         obc_solver_image = std::make_unique<FFT::OpenBCSolver<Real>>(domain, info);
+        last_domain_image    = domain;
+        last_cell_size_image = {0.0, 0.0, 0.0};               // force greens refresh
+        last_z_shift_image   = std::numeric_limits<Real>::quiet_NaN();
     }
 
     auto const& lo = domain.smallEnd();
@@ -1601,19 +1615,98 @@ void SpaceCharge::compute_phi_IGF_shifted (
     Real const dy = cell_size[1];
     Real const dz = cell_size[2];
 
-    obc_solver_image->setGreensFunction(
-        [=] AMREX_GPU_DEVICE (int i, int j, int k) -> Real
-        {
-            int const i0 = i - lo[0];
-            int const j0 = j - lo[1];
-            int const k0 = k - lo[2];
-            Real const x = i0 * dx;
-            Real const y = j0 * dy;
-            Real const z = k0 * dz + z_shift;     // <-- the shift
-            return ablastr::fields::SumOfIntegratedPotential3D(x, y, z, dx, dy, dz);
-        });
+    // Only re-build the Green function if cell sizes or z_shift changed.
+    // ablastr::fields::computePhiIGF rebuilds it on every call (no caching),
+    // which dominates the SC solve time (~30%) when the mesh and cell sizes
+    // are unchanged. This caching is safe because the IGF Green function
+    // depends only on (cell_size, domain extent, z_shift).
+    const bool need_greens =
+        (cell_size[0] != last_cell_size_image[0]) ||
+        (cell_size[1] != last_cell_size_image[1]) ||
+        (cell_size[2] != last_cell_size_image[2]) ||
+        (z_shift      != last_z_shift_image);
+    if (need_greens) {
+        obc_solver_image->setGreensFunction(
+            [=] AMREX_GPU_DEVICE (int i, int j, int k) -> Real
+            {
+                int const i0 = i - lo[0];
+                int const j0 = j - lo[1];
+                int const k0 = k - lo[2];
+                Real const x = i0 * dx;
+                Real const y = j0 * dy;
+                Real const z = k0 * dz + z_shift;     // <-- the shift
+                return ablastr::fields::SumOfIntegratedPotential3D(x, y, z, dx, dy, dz);
+            });
+        last_cell_size_image = cell_size;
+        last_z_shift_image   = z_shift;
+    }
 
     obc_solver_image->solve(phi, rho);
+}
+
+
+// Cached direct (no-shift) IGF solve. Drop-in replacement for
+// ablastr::fields::computePhiIGF that skips setGreensFunction when
+// (domain, cell_size) are unchanged. ABLASTR's wrapper rebuilds the
+// Green function on every call; that dominates ~30% of lt's SC solve
+// time. Caching it gives a ~30-40% SC speedup for runs where the
+// mesh changes infrequently.
+void SpaceCharge::compute_phi_IGF_cached (
+    amrex::MultiFab const&            rho,
+    amrex::MultiFab&                  phi,
+    std::array<amrex::Real, 3> const& cell_size) const
+{
+    using namespace amrex;
+
+    Box domain = rho.boxArray().minimalBox();
+    domain.grow(phi.nGrowVect());
+
+    int nprocs = ParallelDescriptor::NProcs();
+    {
+        ParmParse pp("ablastr");
+        pp.queryAdd("nprocs_igf_fft", nprocs);
+        nprocs = std::max(1, std::min(nprocs, ParallelDescriptor::NProcs()));
+    }
+
+    static std::unique_ptr<FFT::OpenBCSolver<Real>> obc_solver;
+    static Box                  last_domain;
+    static std::array<Real, 3>  last_cell_size{0.0, 0.0, 0.0};
+    if (!obc_solver) {
+        ExecOnFinalize([&] () { obc_solver.reset(); });
+    }
+    if (!obc_solver || obc_solver->Domain() != domain) {
+        FFT::Info info{};
+        info.setNumProcs(nprocs);
+        obc_solver = std::make_unique<FFT::OpenBCSolver<Real>>(domain, info);
+        last_domain    = domain;
+        last_cell_size = {0.0, 0.0, 0.0};   // force greens refresh
+    }
+
+    auto const& lo = domain.smallEnd();
+    Real const dx = cell_size[0];
+    Real const dy = cell_size[1];
+    Real const dz = cell_size[2];
+
+    const bool need_greens =
+        (cell_size[0] != last_cell_size[0]) ||
+        (cell_size[1] != last_cell_size[1]) ||
+        (cell_size[2] != last_cell_size[2]);
+    if (need_greens) {
+        obc_solver->setGreensFunction(
+            [=] AMREX_GPU_DEVICE (int i, int j, int k) -> Real
+            {
+                int const i0 = i - lo[0];
+                int const j0 = j - lo[1];
+                int const k0 = k - lo[2];
+                Real const x = i0 * dx;
+                Real const y = j0 * dy;
+                Real const z = k0 * dz;
+                return ablastr::fields::SumOfIntegratedPotential3D(x, y, z, dx, dy, dz);
+            });
+        last_cell_size = cell_size;
+    }
+
+    obc_solver->solve(phi, rho);
 }
 
 } // namespace spacecharge

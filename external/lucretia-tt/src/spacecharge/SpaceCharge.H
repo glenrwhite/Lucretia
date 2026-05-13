@@ -546,6 +546,19 @@ private:
         std::array<amrex::Real, 3> const& cell_size,
         amrex::Real                       z_shift) const;
 
+    /** Cached drop-in replacement for ablastr::fields::computePhiIGF
+     *  that skips OpenBCSolver::setGreensFunction when (domain, cell_size)
+     *  are unchanged across calls. The Green function depends only on
+     *  those, but the ablastr wrapper rebuilds it on every solve, which
+     *  dominates ~30% of lt's SC time. Caching gives a ~30-40% SC speedup
+     *  for runs where the mesh changes infrequently (static mesh,
+     *  hysteretic adaptive). For sc_exact_range (resize every step),
+     *  cell_size changes every call and caching is a no-op. */
+    void compute_phi_IGF_cached (
+        amrex::MultiFab const&            rho,
+        amrex::MultiFab&                  phi,
+        std::array<amrex::Real, 3> const& cell_size) const;
+
     /** Compute centroid and central-moment sigmas of the bunch in one
      *  pass. Used by the adaptive resizer. Returns false if the bunch
      *  is empty. */

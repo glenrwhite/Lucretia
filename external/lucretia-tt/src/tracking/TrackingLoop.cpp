@@ -6,6 +6,7 @@
 #include "particles/TimeBunch.H"
 #include "spacecharge/SpaceCharge.H"
 #include "spacecharge/SpaceChargeSlice.H"
+#include "util/SimpleProfiler.H"
 
 #include <ablastr/particles/NodalFieldGather.H>
 
@@ -891,6 +892,8 @@ void TrackingLoop::step_dkd (
 
     // ---- 2. First half-drift: above-cathode particles only, OLD velocity ----
     // Mirrors drifthalf_BeamBunch (BeamBunch.f90 line 103).
+    {
+    lucretiatt::util::ScopeTimer t_("step.first_drift");
     for (PIter pti(bunch, lev); pti.isValid(); ++pti) {
         auto ptd = pti.GetParticleTile().getParticleTileData();
         const int np = pti.numParticles();
@@ -911,6 +914,7 @@ void TrackingLoop::step_dkd (
             ptd.rdata(RealSoA::z)[ip] += half_dt * uz * recpgam;
         }
     }
+    } // end step.first_drift scope timer
 
     // ---- 3. Phase reference time (centroid mode only -- otherwise unused) ----
     Real t_centroid = t;
@@ -965,7 +969,7 @@ void TrackingLoop::step_dkd (
     int                sc_shape_order = 1;     // 1 = CIC, 2 = TSC
     if (sc) {
         sc->set_diag_dt_hint(dt);
-        sc->solve(bunch);
+        { lucretiatt::util::ScopeTimer t_("step.sc_solve");    sc->solve(bunch); }
         dxi_sc    = sc->dxi();
         lo_sc     = sc->lo();
         sf_n      = sc->lut_n();
@@ -976,6 +980,7 @@ void TrackingLoop::step_dkd (
         sc_shape_order = sc->shape_order();
     }
     if (slice_sc) {
+        lucretiatt::util::ScopeTimer t_("step.slice_solve");
         slice_sc->compute(bunch);
     }
 
@@ -986,6 +991,8 @@ void TrackingLoop::step_dkd (
     const Real t_field_default = m_use_centroid_phase ? t_centroid
                                : (t + half_dt);
     int dump_pti_offset = 0;
+    {
+    lucretiatt::util::ScopeTimer t_("step.gather_kick");
     for (PIter pti(bunch, lev); pti.isValid(); ++pti) {
         auto ptd = pti.GetParticleTile().getParticleTileData();
         const int np = pti.numParticles();
@@ -1275,6 +1282,7 @@ void TrackingLoop::step_dkd (
             ptd.rdata(RealSoA::pz)[ip] = uz;
         }
     }
+    } // end step.gather_kick scope timer
 
     // ---- 6b. Write per-particle SC-kick dump if scheduled at this step ----
     if (dump_kicks_now) {
@@ -1312,6 +1320,8 @@ void TrackingLoop::step_dkd (
 
     // ---- 7. Second half-drift + driftemission + first-order emission ----
     // Mirrors AccSimulator.f90 lines 2141-2167.
+    {
+    lucretiatt::util::ScopeTimer t_("step.second_drift");
     for (PIter pti(bunch, lev); pti.isValid(); ++pti) {
         auto ptd = pti.GetParticleTile().getParticleTileData();
         const int np = pti.numParticles();
@@ -1352,6 +1362,7 @@ void TrackingLoop::step_dkd (
             // else: z_pre <= cathode AND uz < 0 -- frozen (no motion).
         }
     }
+    } // end step.second_drift scope timer
 
     // ---- 8. Wake-field impulse (post-push, Strang splitting) ----
     for (auto const& el : lattice) {

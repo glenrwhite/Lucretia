@@ -4,6 +4,7 @@
 #include "spacecharge/SpaceCharge.H"
 #include "spacecharge/SpaceChargeSlice.H"
 #include "tracking/TrackingLoop.H"
+#include "util/SimpleProfiler.H"
 
 #include <AMReX.H>
 #include <AMReX_Array.H>
@@ -1182,6 +1183,11 @@ int main (int argc, char* argv[])
 
         amrex::Print() << "Done after " << n_steps
                        << " steps; t_final = " << t << " s\n";
+
+        // Print SimpleProfiler summary (rank 0 only)
+        if (amrex::ParallelDescriptor::IOProcessor()) {
+            lucretiatt::util::SimpleProfiler::instance().print();
+        }
 
         BL_PROFILE_VAR_STOP(pmain);
     }
