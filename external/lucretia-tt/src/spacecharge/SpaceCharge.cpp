@@ -576,6 +576,15 @@ void SpaceCharge::deposit_charge (particles::TimeBunch& bunch)
 
     long total_deposited = 0;
 
+    // Domain hi (nodal): m_geom.Domain() is cell-centered (size = ncell), so
+    // the nodal domain hi is bigEnd + 1 in each direction. Used to detect FABs
+    // whose vhi sits on the global boundary — they own their high-side nodes
+    // (since no neighbor exists to claim them).
+    Box const& dom_cc = m_geom.Domain();
+    const int dhi_x = dom_cc.bigEnd(0) + 1;
+    const int dhi_y = dom_cc.bigEnd(1) + 1;
+    const int dhi_z = dom_cc.bigEnd(2) + 1;
+
     for (MFIter mfi(m_rho); mfi.isValid(); ++mfi) {
         Box const& vbox    = mfi.validbox();        // interior only -- ownership
         Box const& gbox    = m_rho[mfi].box();      // valid + 1 ghost (deposit footprint)
@@ -584,6 +593,20 @@ void SpaceCharge::deposit_charge (particles::TimeBunch& bunch)
         auto const& vhi = vbox.bigEnd();
         auto const& glo = gbox.smallEnd();
         auto const& ghi = gbox.bigEnd();
+        // For nodal MultiFabs, the validboxes of adjacent FABs OVERLAP at
+        // their shared boundary nodes (e.g., max_grid_size=16: FAB1 vhi=16,
+        // FAB2 vlo=16; node 16 is in BOTH validboxes). Without explicit
+        // exclusion, particles whose base node lands on a shared boundary
+        // get deposited TWICE -- once by each adjacent FAB. The exclusion
+        // rule: a FAB owns base node ix iff (ix < vhi) OR (vhi == domain_hi).
+        // The "domain_hi" exception ensures the rightmost FAB still owns
+        // its outermost node, since no FAB exists to its right. (Task #53.)
+        const bool right_x = (vhi[0] == dhi_x);
+        const bool right_y = (vhi[1] == dhi_y);
+        const bool right_z = (vhi[2] == dhi_z);
+        const int  vhi_eff_x = right_x ? vhi[0] : (vhi[0] - 1);
+        const int  vhi_eff_y = right_y ? vhi[1] : (vhi[1] - 1);
+        const int  vhi_eff_z = right_z ? vhi[2] : (vhi[2] - 1);
 
         // Use the gathered flat arrays so we don't nest a PIter (= MFIter).
         const auto& xs = all_x;
@@ -606,12 +629,12 @@ void SpaceCharge::deposit_charge (particles::TimeBunch& bunch)
                     const int  iy = int(std::floor(fy));
                     const int  iz = int(std::floor(fz));
                     // Ownership: this FAB owns the particle iff its base node
-                    // (ix, iy, iz) is inside the FAB's VALID box. Avoids
-                    // double-counting at FAB boundaries (where multiple
-                    // adjacent FABs' gboxes can fully contain the stencil).
-                    if (!(ix >= vlo[0] && ix <= vhi[0] &&
-                          iy >= vlo[1] && iy <= vhi[1] &&
-                          iz >= vlo[2] && iz <= vhi[2]))
+                    // (ix, iy, iz) is inside the FAB's VALID box, with the
+                    // high-side shared-node exclusion (see comments above
+                    // the MFIter loop for the nodal-overlap fix).
+                    if (!(ix >= vlo[0] && ix <= vhi_eff_x &&
+                          iy >= vlo[1] && iy <= vhi_eff_y &&
+                          iz >= vlo[2] && iz <= vhi_eff_z))
                     { continue; }
                     const Real wx1 = fx - Real(ix);   const Real wx0 = Real(1.0) - wx1;
                     const Real wy1 = fy - Real(iy);   const Real wy0 = Real(1.0) - wy1;
@@ -648,10 +671,10 @@ void SpaceCharge::deposit_charge (particles::TimeBunch& bunch)
                     const int  iy = int(std::round(fy));
                     const int  iz = int(std::round(fz));
                     // TSC ownership: the central node (ix, iy, iz) is the
-                    // base. Use it for FAB ownership, same pattern as CIC.
-                    if (!(ix >= vlo[0] && ix <= vhi[0] &&
-                          iy >= vlo[1] && iy <= vhi[1] &&
-                          iz >= vlo[2] && iz <= vhi[2]))
+                    // base. Use the same vhi_eff exclusion as CIC.
+                    if (!(ix >= vlo[0] && ix <= vhi_eff_x &&
+                          iy >= vlo[1] && iy <= vhi_eff_y &&
+                          iz >= vlo[2] && iz <= vhi_eff_z))
                     { continue; }
                     const Real px = fx - Real(ix);
                     const Real py = fy - Real(iy);
@@ -752,6 +775,123 @@ void SpaceCharge::smooth_rho ()
             });
         }
     }
+}
+
+
+void SpaceCharge::replicate_e_fields_for_gather ()
+{
+    using namespace amrex;
+
+    // Single-rank: clear replicas (gather_fabs falls back to local MFIter).
+    if (ParallelDescriptor::NProcs() <= 1) {
+        m_Ex_replica.clear();
+        m_Ey_replica.clear();
+        m_Ez_replica.clear();
+        m_replica_boxes.clear();
+        m_replica_valid_boxes.clear();
+        m_Ex_image_replica.clear();
+        m_Ey_image_replica.clear();
+        m_Ez_image_replica.clear();
+        return;
+    }
+
+#ifdef AMREX_USE_MPI
+    // Helper: pack one MultiFab's local FABs into flat buffers, AllGather
+    // across ranks, and unpack into per-rank FArrayBox vectors.
+    auto replicate_one = [&](MultiFab const& src,
+                              std::vector<FArrayBox>& dst_fabs,
+                              std::vector<Box>* dst_boxes_ghost = nullptr,
+                              std::vector<Box>* dst_boxes_valid = nullptr) {
+        const int nprocs = ParallelDescriptor::NProcs();
+
+        // Step 1: collect local FAB metadata + data sizes.
+        // Each FAB record: 6 ints (ghost lo/hi) + 6 ints (valid lo/hi) +
+        //                  1 int (data length), then `data length` doubles.
+        constexpr int kIntsPerFab = 13;
+        std::vector<int>  local_meta;
+        std::vector<Real> local_data;
+        for (MFIter mfi(src); mfi.isValid(); ++mfi) {
+            const Box gb = src[mfi].box();         // valid + ghost
+            const Box vb = mfi.validbox();          // interior
+            const int len = int(gb.numPts());
+            local_meta.push_back(gb.smallEnd(0)); local_meta.push_back(gb.smallEnd(1));
+            local_meta.push_back(gb.smallEnd(2)); local_meta.push_back(gb.bigEnd(0));
+            local_meta.push_back(gb.bigEnd(1));   local_meta.push_back(gb.bigEnd(2));
+            local_meta.push_back(vb.smallEnd(0)); local_meta.push_back(vb.smallEnd(1));
+            local_meta.push_back(vb.smallEnd(2)); local_meta.push_back(vb.bigEnd(0));
+            local_meta.push_back(vb.bigEnd(1));   local_meta.push_back(vb.bigEnd(2));
+            local_meta.push_back(len);
+            Real const* p = src[mfi].dataPtr();
+            local_data.insert(local_data.end(), p, p + len);
+        }
+        const int my_meta_count = int(local_meta.size());
+        const int my_data_count = int(local_data.size());
+
+        // Step 2: AllGather counts to compute displacements.
+        std::vector<int> meta_counts(nprocs), meta_disps(nprocs, 0);
+        std::vector<int> data_counts(nprocs), data_disps(nprocs, 0);
+        MPI_Allgather(&my_meta_count, 1, MPI_INT, meta_counts.data(), 1,
+                      MPI_INT, ParallelDescriptor::Communicator());
+        MPI_Allgather(&my_data_count, 1, MPI_INT, data_counts.data(), 1,
+                      MPI_INT, ParallelDescriptor::Communicator());
+        for (int r = 1; r < nprocs; ++r) {
+            meta_disps[r] = meta_disps[r-1] + meta_counts[r-1];
+            data_disps[r] = data_disps[r-1] + data_counts[r-1];
+        }
+        const std::size_t total_meta = std::size_t(meta_disps.back())
+                                     + std::size_t(meta_counts.back());
+        const std::size_t total_data = std::size_t(data_disps.back())
+                                     + std::size_t(data_counts.back());
+
+        // Step 3: AllGatherv metadata and data.
+        std::vector<int>  all_meta(total_meta);
+        std::vector<Real> all_data(total_data);
+        MPI_Allgatherv(local_meta.data(), my_meta_count, MPI_INT,
+                       all_meta.data(), meta_counts.data(), meta_disps.data(),
+                       MPI_INT, ParallelDescriptor::Communicator());
+        const MPI_Datatype real_t =
+            (sizeof(Real) == sizeof(double)) ? MPI_DOUBLE : MPI_FLOAT;
+        MPI_Allgatherv(local_data.data(), my_data_count, real_t,
+                       all_data.data(), data_counts.data(), data_disps.data(),
+                       real_t, ParallelDescriptor::Communicator());
+
+        // Step 4: unpack into FArrayBox vector.
+        const int total_fabs = int(total_meta / kIntsPerFab);
+        dst_fabs.clear();
+        dst_fabs.reserve(total_fabs);
+        if (dst_boxes_ghost) { dst_boxes_ghost->clear(); dst_boxes_ghost->reserve(total_fabs); }
+        if (dst_boxes_valid) { dst_boxes_valid->clear(); dst_boxes_valid->reserve(total_fabs); }
+        std::size_t data_off = 0;
+        for (int f = 0; f < total_fabs; ++f) {
+            const int* m = all_meta.data() + f * kIntsPerFab;
+            Box gb({m[0], m[1], m[2]}, {m[3], m[4], m[5]}, IndexType::TheNodeType());
+            Box vb({m[6], m[7], m[8]}, {m[9], m[10], m[11]}, IndexType::TheNodeType());
+            const int len = m[12];
+            dst_fabs.emplace_back(gb, 1);
+            std::memcpy(dst_fabs.back().dataPtr(), all_data.data() + data_off,
+                        std::size_t(len) * sizeof(Real));
+            data_off += std::size_t(len);
+            if (dst_boxes_ghost) dst_boxes_ghost->push_back(gb);
+            if (dst_boxes_valid) dst_boxes_valid->push_back(vb);
+        }
+    };
+
+    // Direct E (always replicated).
+    replicate_one(m_Ex, m_Ex_replica, &m_replica_boxes, &m_replica_valid_boxes);
+    replicate_one(m_Ey, m_Ey_replica);
+    replicate_one(m_Ez, m_Ez_replica);
+
+    // Image E (only when active this solve).
+    if (m_image_active_this_solve && m_Ex_image.ok()) {
+        replicate_one(m_Ex_image, m_Ex_image_replica);
+        replicate_one(m_Ey_image, m_Ey_image_replica);
+        replicate_one(m_Ez_image, m_Ez_image_replica);
+    } else {
+        m_Ex_image_replica.clear();
+        m_Ey_image_replica.clear();
+        m_Ez_image_replica.clear();
+    }
+#endif // AMREX_USE_MPI
 }
 
 
@@ -901,6 +1041,61 @@ void SpaceCharge::solve (particles::TimeBunch& bunch)
     // matches ImpactT, fixing the 4× sigma_gamma growth in L0A acceleration
     // that the padded adaptive mode exhibited.
     bool geom_changed = false;
+    // Optional outlier kill: in exact_range mode, a few outlier particles
+    // can pull the bunch min/max well past the bulk (e.g., 4-5 particles at
+    // 4-5*sigma drag the mesh wider, packing the bulk into fewer cells and
+    // inflating per-cell density). Killing them BEFORE the range computation
+    // keeps the mesh tight without leaving particles half-gathered outside
+    // the mesh footprint. Marks alive=0 so subsequent forces (RF, SOL, slice
+    // SC) also skip them — analogous to a soft particle aperture.
+    if (m_outlier_kill_sigma > Real(0.0) && m_exact_range) {
+        Real x_c, y_c, z_c, sx, sy, sz;
+        if (compute_bunch_stats(bunch, x_c, y_c, z_c, sx, sy, sz)) {
+            // Use max(N*sigma, abs_floor) so we never clip the bunch when
+            // sigma is tiny (e.g., very early emission with near-zero sigma_z).
+            // Default floor 5mm transverse, 10mm longitudinal — large enough
+            // that legitimate gun-region bunches always sit inside the cap.
+            const Real cap_x = std::max(m_outlier_kill_sigma * sx,
+                                        m_outlier_kill_floor_xy);
+            const Real cap_y = std::max(m_outlier_kill_sigma * sy,
+                                        m_outlier_kill_floor_xy);
+            const Real cap_z = std::max(m_outlier_kill_sigma * sz,
+                                        m_outlier_kill_floor_z);
+            using PIter = ParIterSoA<RealSoA::nattribs, IntSoA::nattribs>;
+            constexpr int lev_kill = 0;
+            long n_killed_local = 0;
+            for (PIter pti(bunch, lev_kill); pti.isValid(); ++pti) {
+                auto ptd = pti.GetParticleTile().getParticleTileData();
+                const int np = pti.numParticles();
+                for (int p = 0; p < np; ++p) {
+                    if (ptd.idata(IntSoA::alive)[p] == 0) continue;
+                    const Real xp = ptd.rdata(RealSoA::x)[p] - x_c;
+                    const Real yp = ptd.rdata(RealSoA::y)[p] - y_c;
+                    const Real zp = ptd.rdata(RealSoA::z)[p] - z_c;
+                    if (std::abs(xp) > cap_x || std::abs(yp) > cap_y
+                            || std::abs(zp) > cap_z) {
+                        ptd.idata(IntSoA::alive)[p] = 0;
+                        ptd.rdata(RealSoA::x )[p] = Real(0.0);
+                        ptd.rdata(RealSoA::y )[p] = Real(0.0);
+                        ptd.rdata(RealSoA::z )[p] = Real(-1.0e9);
+                        ptd.rdata(RealSoA::px)[p] = Real(0.0);
+                        ptd.rdata(RealSoA::py)[p] = Real(0.0);
+                        ptd.rdata(RealSoA::pz)[p] = Real(0.0);
+                        ++n_killed_local;
+                    }
+                }
+            }
+            ParallelDescriptor::ReduceLongSum(n_killed_local);
+            m_n_outliers_killed += n_killed_local;
+            if (m_outlier_kill_verbose && n_killed_local > 0) {
+                amrex::Print() << "[SC] outlier_kill solve#" << m_solve_count
+                               << ": killed " << n_killed_local
+                               << " (cap=" << m_outlier_kill_sigma << "*sigma; "
+                               << "cum=" << m_n_outliers_killed << ")\n";
+            }
+        }
+    }
+
     if (m_exact_range) {
         Real xmin, xmax, ymin, ymax, zmin, zmax;
         if (compute_bunch_range(bunch, xmin, xmax, ymin, ymax, zmin, zmax)) {
@@ -1043,11 +1238,13 @@ void SpaceCharge::solve (particles::TimeBunch& bunch)
         }
     }
 
-    // No SetParticleGeometry / Redistribute is needed here: deposit_charge
-    // is position-based and writes to the single-FAB m_rho directly,
-    // independent of the particle tile assignment in TimeBunch. (The
-    // geom_changed flag is preserved above in case a future MPI extension
-    // wants to react to mesh resize events; suppress the unused warning.)
+    // Note: a Redistribute()-based approach (sync bunch geometry to SC's
+    // shrunk mesh) was attempted but discards behind-cathode and dead
+    // particles silently — would need a wider bunch geometry separated
+    // from SC's adaptive mesh. Instead we replicate the SC field across
+    // ranks after solve (see solve() bottom: replicate_e_fields_for_gather
+    // is called when nprocs>1). Multi-rank deposit is still position-based
+    // via AllGather of particle data (no change here).
     (void)geom_changed;
 
     m_last_beta_z = compute_mean_beta_z(bunch);
@@ -1121,6 +1318,16 @@ void SpaceCharge::solve (particles::TimeBunch& bunch)
                             (double)arr(i, j, k, 0);
                     }
                 }
+                // Multi-rank: each rank only filled img_flat with its own
+                // local FABs above. The z-flip read at gk_flip below may
+                // correspond to a DIFFERENT rank's z-slab, so we need a
+                // global view. Sum-reduce: validbox values don't overlap
+                // (each cell owned by exactly one rank), so summation == union.
+                // (Task #54.)
+                if (ParallelDescriptor::NProcs() > 1) {
+                    ParallelDescriptor::ReduceRealSum(
+                        img_flat.data(), int(img_flat.size()));
+                }
                 for (MFIter mfi(m_phi_image); mfi.isValid(); ++mfi) {
                     Array4<Real> arr = m_phi_image.array(mfi);
                     Box const& vbox = mfi.validbox();
@@ -1149,6 +1356,11 @@ void SpaceCharge::solve (particles::TimeBunch& bunch)
     }
 
     compute_E_from_phi();
+
+    // Multi-rank: replicate the E field across all ranks so gather_fabs()
+    // can serve any particle's stencil regardless of mesh-slab ownership.
+    // No-op for single-rank. (Task #54.)
+    replicate_e_fields_for_gather();
 
     // ---- Mesh-field dump (cross-code comparison harness) ----
     // When configured, write the entire SC field state to a binary file

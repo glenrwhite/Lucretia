@@ -36,8 +36,23 @@ else
     if isprop(obj, 'mpirun_extra_args') && ~isempty(obj.mpirun_extra_args)
         extra = [obj.mpirun_extra_args ' '];
     end
-    cmd = sprintf('cd "%s" && %s"%s" %s-np %d "%s" "%s" 2>&1', ...
-                  obj.work_dir, envP, mpirun, extra, nranks, obj.binary, in_file);
+    % Pin OMP threads per rank to total_physical_cores / nranks so that
+    % nranks * OMP_NUM_THREADS does not oversubscribe physical cores.
+    % Otherwise default OMP=10 + nranks=4 = 40 threads on a 10-core box ->
+    % scheduler thrashing kills MPI scaling. Override via mpirun_extra_args
+    % for fine-tuning (e.g. '-x OMP_NUM_THREADS=4 ...' to set explicitly).
+    omp_per_rank = '';
+    [s, c] = system('sysctl -n hw.physicalcpu 2>/dev/null');
+    if s == 0
+        ncores = str2double(strtrim(c));
+        if isfinite(ncores) && ncores > 0
+            per = max(1, floor(ncores / nranks));
+            omp_per_rank = sprintf('-x OMP_NUM_THREADS=%d ', per);
+        end
+    end
+    cmd = sprintf('cd "%s" && %s"%s" %s%s-np %d "%s" "%s" 2>&1', ...
+                  obj.work_dir, envP, mpirun, omp_per_rank, extra, ...
+                  nranks, obj.binary, in_file);
 end
 
 % '-echo' streams stdout to the MATLAB Command Window AS THE BINARY

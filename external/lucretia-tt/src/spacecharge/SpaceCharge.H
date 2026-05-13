@@ -222,6 +222,32 @@ public:
     void set_exact_range (bool on) noexcept { m_exact_range = on; }
     bool exact_range () const noexcept { return m_exact_range; }
 
+    /** Optional outlier kill in `exact_range` mode. When > 0, particles
+     *  whose offset from the bunch centroid exceeds N*sigma in ANY axis
+     *  are marked alive=0 (subsequent forces all skip them). This keeps
+     *  the SC mesh tight around the bulk without leaving outlier particles
+     *  half-gathered at the mesh boundary. Functionally a soft particle
+     *  aperture computed each solve from the live bunch sigma. Once a
+     *  particle is killed it stays killed (alive=0 is persistent).
+     *  Recommended values in the 4-6 range; lower values clip more bulk
+     *  and may impact downstream physics. Default 0 = no kill. */
+    void set_outlier_kill_sigma (amrex::Real cap) noexcept
+    {
+        m_outlier_kill_sigma = std::max(amrex::Real(0.0), cap);
+    }
+    amrex::Real outlier_kill_sigma () const noexcept { return m_outlier_kill_sigma; }
+    /** Absolute minimum on the per-axis kill cap. Effective cap is
+     *  max(N*sigma, floor) — protects early-emission bunches with near-
+     *  zero sigma in some axis from cascade kill. Defaults: 5 mm xy,
+     *  10 mm z. */
+    void set_outlier_kill_floor (amrex::Real floor_xy, amrex::Real floor_z) noexcept
+    {
+        m_outlier_kill_floor_xy = std::max(amrex::Real(0.0), floor_xy);
+        m_outlier_kill_floor_z  = std::max(amrex::Real(0.0), floor_z);
+    }
+    void set_outlier_kill_verbose (bool on) noexcept { m_outlier_kill_verbose = on; }
+    long n_outliers_killed () const noexcept { return m_n_outliers_killed; }
+
     bool compute_bunch_range (
         particles::TimeBunch& bunch,
         amrex::Real& xmin, amrex::Real& xmax,
@@ -378,23 +404,51 @@ public:
     GatherFABs gather_fabs () const
     {
         GatherFABs g;
-        for (amrex::MFIter mfi(m_Ex); mfi.isValid(); ++mfi) {
-            g.Ex.push_back(m_Ex.const_array(mfi));
-            g.Ey.push_back(m_Ey.const_array(mfi));
-            g.Ez.push_back(m_Ez.const_array(mfi));
-            g.boxes.push_back(m_Ex[mfi].box());        // valid + ghost
-            g.valid_boxes.push_back(mfi.validbox());   // interior only
+        // Multi-rank: use the replica vectors populated by
+        // replicate_e_fields_for_gather() so each rank sees ALL FABs from
+        // every rank. Single-rank: fall back to local MFIter (no replicas).
+        if (!m_Ex_replica.empty()) {
+            for (std::size_t i = 0; i < m_Ex_replica.size(); ++i) {
+                g.Ex.push_back(m_Ex_replica[i].const_array());
+                g.Ey.push_back(m_Ey_replica[i].const_array());
+                g.Ez.push_back(m_Ez_replica[i].const_array());
+                g.boxes.push_back(m_replica_boxes[i]);
+                g.valid_boxes.push_back(m_replica_valid_boxes[i]);
+            }
+        } else {
+            for (amrex::MFIter mfi(m_Ex); mfi.isValid(); ++mfi) {
+                g.Ex.push_back(m_Ex.const_array(mfi));
+                g.Ey.push_back(m_Ey.const_array(mfi));
+                g.Ez.push_back(m_Ez.const_array(mfi));
+                g.boxes.push_back(m_Ex[mfi].box());        // valid + ghost
+                g.valid_boxes.push_back(mfi.validbox());   // interior only
+            }
         }
         g.image_active = m_image_active_this_solve;
-        if (g.image_active && m_Ex_image.ok()) {
-            for (amrex::MFIter mfi(m_Ex_image); mfi.isValid(); ++mfi) {
-                g.Ex_image.push_back(m_Ex_image.const_array(mfi));
-                g.Ey_image.push_back(m_Ey_image.const_array(mfi));
-                g.Ez_image.push_back(m_Ez_image.const_array(mfi));
+        if (g.image_active) {
+            if (!m_Ex_image_replica.empty()) {
+                for (std::size_t i = 0; i < m_Ex_image_replica.size(); ++i) {
+                    g.Ex_image.push_back(m_Ex_image_replica[i].const_array());
+                    g.Ey_image.push_back(m_Ey_image_replica[i].const_array());
+                    g.Ez_image.push_back(m_Ez_image_replica[i].const_array());
+                }
+            } else if (m_Ex_image.ok()) {
+                for (amrex::MFIter mfi(m_Ex_image); mfi.isValid(); ++mfi) {
+                    g.Ex_image.push_back(m_Ex_image.const_array(mfi));
+                    g.Ey_image.push_back(m_Ey_image.const_array(mfi));
+                    g.Ez_image.push_back(m_Ez_image.const_array(mfi));
+                }
             }
         }
         return g;
     }
+
+    /** Multi-rank field replication: after a solve, AllGather all FABs of
+     *  m_Ex/m_Ey/m_Ez (and image versions) from every rank into per-rank
+     *  m_Ex_replica vectors so gather_fabs() can serve any particle's
+     *  stencil regardless of mesh-slab ownership. No-op for nprocs==1.
+     *  Called from solve(). (Task #54 field-replication path.) */
+    void replicate_e_fields_for_gather ();
 
     // Backwards-compat: single-FAB accessors (return the first local FAB).
     // Only valid when m_ba_nodal has exactly one box on this rank.
@@ -517,8 +571,29 @@ private:
     amrex::MultiFab            m_Ez_image;
     bool                       m_image_active_this_solve = false;
 
+    // Multi-rank field replicas: after each SC solve, all ranks AllGather
+    // the E-field FABs into these per-rank vectors so that gather_fabs()
+    // can serve any particle's stencil regardless of which rank originally
+    // owned the FAB. Cost: ~1.6 MB total at 32^3, negligible. Doesn't
+    // scale to huge meshes but adequate for the LCLS injector regime.
+    // Empty when nprocs == 1 (gather_fabs falls back to local MFIter).
+    // (Task #54 — field replication path.)
+    std::vector<amrex::FArrayBox> m_Ex_replica;
+    std::vector<amrex::FArrayBox> m_Ey_replica;
+    std::vector<amrex::FArrayBox> m_Ez_replica;
+    std::vector<amrex::Box>       m_replica_boxes;        // includes ghosts
+    std::vector<amrex::Box>       m_replica_valid_boxes;  // interior only
+    std::vector<amrex::FArrayBox> m_Ex_image_replica;
+    std::vector<amrex::FArrayBox> m_Ey_image_replica;
+    std::vector<amrex::FArrayBox> m_Ez_image_replica;
+
     amrex::Real                m_last_beta_z    = 0.0;
     bool                       m_exact_range    = false;
+    amrex::Real                m_outlier_kill_sigma = 0.0;  // 0 = no kill; >0 = mark alive=0 if |x-x_c| > N*sigma in any axis
+    amrex::Real                m_outlier_kill_floor_xy = 5.0e-3;  // m: min absolute cap (avoids cascade kill at near-zero sigma)
+    amrex::Real                m_outlier_kill_floor_z  = 1.0e-2;  // m
+    bool                       m_outlier_kill_verbose = false;
+    long                       m_n_outliers_killed = 0;
     bool                       m_hybrid_z       = false;
     bool                       m_comoving       = false;
     bool                       m_adaptive       = false;
