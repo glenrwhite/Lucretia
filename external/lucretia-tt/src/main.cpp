@@ -704,6 +704,14 @@ int main (int argc, char* argv[])
             pp_sc.query("adaptive", sc_adaptive);
             int sc_exact_range = 0;
             pp_sc.query("exact_range", sc_exact_range);
+            amrex::Real sc_outlier_kill_sigma = 0.0;
+            pp_sc.query("outlier_kill_sigma", sc_outlier_kill_sigma);
+            amrex::Real sc_outlier_kill_floor_xy = 5.0e-3;
+            amrex::Real sc_outlier_kill_floor_z  = 1.0e-2;
+            pp_sc.query("outlier_kill_floor_xy", sc_outlier_kill_floor_xy);
+            pp_sc.query("outlier_kill_floor_z",  sc_outlier_kill_floor_z);
+            int sc_outlier_kill_verbose = 0;
+            pp_sc.query("outlier_kill_verbose", sc_outlier_kill_verbose);
             pp_sc.query("pad_factor", sc_pad_factor);
             pp_sc.query("min_pad_xy", sc_min_pad_xy);
             pp_sc.query("min_pad_z",  sc_min_pad_z);
@@ -757,6 +765,14 @@ int main (int argc, char* argv[])
                 }
                 if (sc_exact_range != 0) {
                     sc->set_exact_range(true);
+                }
+                if (sc_outlier_kill_sigma > amrex::Real(0.0)) {
+                    sc->set_outlier_kill_sigma(sc_outlier_kill_sigma);
+                    sc->set_outlier_kill_floor(sc_outlier_kill_floor_xy,
+                                               sc_outlier_kill_floor_z);
+                    if (sc_outlier_kill_verbose != 0) {
+                        sc->set_outlier_kill_verbose(true);
+                    }
                 }
                 if (sc_image_enabled != 0) {
                     sc->set_image_plane(sc_image_z_cath, sc_image_cutoff);
@@ -818,6 +834,14 @@ int main (int argc, char* argv[])
         amrex::Real dt_change_t  = std::numeric_limits<amrex::Real>::infinity();
         amrex::Real dt_change_z  = std::numeric_limits<amrex::Real>::infinity();
         amrex::Real dt_after     = -1.0;
+        // ImpactT-style 3-phase emission model (task #69):
+        //   Phase 1: dt_emission for the first n_emission_steps (fine steps during cathode crossing)
+        //   Phase 2: dt_normal (= original dt, 0.3ps) after emission until dt_change_z
+        //   Phase 3: dt_after (4ps) after dt_change_z
+        // If n_emission_steps == 0 (default), the 2-phase schedule is used unchanged.
+        int         n_emission_steps = 0;
+        amrex::Real t_emission       = 0.0;   // Temission in ImpactT (s)
+        amrex::Real dt_normal        = -1.0;  // dt for phase 2 (set from dt before overriding)
         amrex::Real t_start      = 0.0;
         amrex::Real behind_cathode_z        = std::numeric_limits<amrex::Real>::lowest();
         amrex::Real behind_cathode_betazini = 0.0;
@@ -834,6 +858,10 @@ int main (int argc, char* argv[])
         std::string dump_kicks_path_prefix  = "/tmp/lt_part_kicks_step";
         std::string trace_file;
         int         trace_every             = 1;
+        // Per-particle trajectory trace (task #67).
+        amrex::Vector<int> particle_trace_ids;
+        int                particle_trace_interval = 0;
+        std::string        particle_trace_path     = "/tmp/lt_particle_trace.bin";
         {
             amrex::ParmParse pp_track("tracking");
             pp_track.query("dt", dt);
@@ -841,6 +869,8 @@ int main (int argc, char* argv[])
             pp_track.query("dt_change_t", dt_change_t);
             pp_track.query("dt_change_z", dt_change_z);
             pp_track.query("dt_after",    dt_after);
+            pp_track.query("n_emission_steps", n_emission_steps);
+            pp_track.query("t_emission",       t_emission);
             pp_track.query("t_start",     t_start);
             pp_track.query("behind_cathode_z",        behind_cathode_z);
             pp_track.query("behind_cathode_betazini", behind_cathode_betazini);
@@ -855,10 +885,29 @@ int main (int argc, char* argv[])
             pp_track.queryarr("dump_kicks_at_steps",  dump_kicks_at_steps);
             pp_track.queryarr("dump_kicks_at_times",  dump_kicks_at_times);
             pp_track.query("dump_kicks_path_prefix",  dump_kicks_path_prefix);
+            pp_track.queryarr("particle_trace_ids",      particle_trace_ids);
+            pp_track.query("particle_trace_interval",    particle_trace_interval);
+            pp_track.query("particle_trace_path",        particle_trace_path);
             pp_track.query("trace_file",              trace_file);
             pp_track.query("trace_every",             trace_every);
         }
         if (dt_after <= 0.0) { dt_after = dt; }
+        // 3-phase emission schedule (ImpactT Nemission/Temission analog):
+        // When n_emission_steps > 0, override dt with fine emission step and
+        // arrange a t-based switch back to the original dt (stored as dt_normal).
+        if (n_emission_steps > 0 && t_emission > 0.0) {
+            dt_normal   = dt;                                    // save original dt (0.3ps)
+            dt          = t_emission / amrex::Real(n_emission_steps); // fine emission dt
+            dt_change_t = t_start + t_emission;        // switch at emission end
+            // dt_after is already set from parmparse (4ps for L0A); dt_change_z
+            // handles the normal→large switch.  We insert dt_normal as an
+            // intermediate step: after emission, run at dt_normal until dt_change_z.
+            amrex::Print() << "[tracking] 3-phase emission: "
+                           << "dt_emission=" << dt << " s for " << n_emission_steps
+                           << " steps (Temission=" << t_emission << " s), then "
+                           << "dt_normal=" << dt_normal << " s until z="
+                           << dt_change_z << " m, then dt_after=" << dt_after << " s\n";
+        }
 
         lucretiatt::tracking::TrackingLoop tracker;
         if (behind_cathode_betazini > 0.0
@@ -876,6 +925,14 @@ int main (int argc, char* argv[])
                 sc->set_z_filter_min(true, behind_cathode_z);
                 amrex::Print() << "[tracking] SC z-filter enabled at z="
                                << behind_cathode_z << " m (skip particles below cathode)\n";
+            }
+            // Also filter the slice SC so behind-cathode particles don't
+            // distort the longitudinal disk-stack sum (critical for emission
+            // accuracy with fine-step Nemission model, task #69).
+            if (slice_sc) {
+                slice_sc->set_z_filter_min(true, behind_cathode_z);
+                amrex::Print() << "[tracking] Slice SC z-filter enabled at z="
+                               << behind_cathode_z << " m\n";
             }
         }
         if (use_centroid_phase != 0) {
@@ -935,8 +992,17 @@ int main (int argc, char* argv[])
             }
             amrex::Print() << "} s -> " << dump_kicks_path_prefix << "<step>.bin\n";
         }
+        // Per-particle trajectory trace setup (task #67).
+        if (!particle_trace_ids.empty() && particle_trace_interval > 0) {
+            std::vector<int> ids_v(particle_trace_ids.begin(), particle_trace_ids.end());
+            tracker.set_particle_trace(ids_v, particle_trace_interval, particle_trace_path);
+            amrex::Print() << "[tracking] particle trace: " << ids_v.size()
+                           << " particles, every " << particle_trace_interval
+                           << " steps -> " << particle_trace_path << "\n";
+        }
         amrex::Real t = t_start;
-        bool        switched = false;
+        bool        switched  = false;   // true after z-switch (phase 2 → 3)
+        bool        emission_done = false;  // true after t-switch (phase 1 → 2)
 
         // Per-step trace file for cross-code calibration. Writes one
         // CSV row per (trace_every) step containing bunch-mean diagnostics.
@@ -1069,11 +1135,27 @@ int main (int argc, char* argv[])
                     switched = true;
                 }
             }
-            if (!switched && t >= dt_change_t) {
-                amrex::Print() << "[tracking] switched dt: "
-                               << dt << " -> " << dt_after
-                               << " s at t = " << t << " s (step " << s << ")\n";
-                switched = true;
+            // Phase 1→2 switch: end of emission phase (t-triggered).
+            // When n_emission_steps > 0: switch from fine emission dt to dt_normal.
+            if (!emission_done && t >= dt_change_t) {
+                if (n_emission_steps > 0 && dt_normal > 0.0) {
+                    amrex::Print() << "[tracking] emission done: dt "
+                                   << dt << " -> " << dt_normal
+                                   << " s at t = " << t << " s (step " << s << ")\n";
+                    dt = dt_normal;  // promote to normal gun dt (0.3ps)
+                } else {
+                    // Legacy 2-phase: emission → dt_after directly.
+                    amrex::Print() << "[tracking] switched dt: "
+                                   << dt << " -> " << dt_after
+                                   << " s at t = " << t << " s (step " << s << ")\n";
+                    switched = true;  // jump straight to phase 3
+                }
+                emission_done = true;
+            }
+            // Phase 2→3 switch: z-triggered (normal → dt_after, e.g. 0.3ps → 4ps).
+            // Only fires after emission is done (or if no emission phase is set).
+            if (emission_done && !switched) {
+                // Also allow direct t-based switch when no z-trigger configured.
             }
             const amrex::Real cur_dt = switched ? dt_after : dt;
             tracker.step(bunch, lattice, t, cur_dt, sc.get(), slice_sc.get());

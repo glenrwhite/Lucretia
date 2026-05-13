@@ -273,9 +273,28 @@ private:
     std::vector<double> m_dump_kicks_at_times;      // physical times (s) at which to dump (fires on first step with t>=target)
     std::vector<bool>   m_dump_kicks_times_fired;   // mirror of m_dump_kicks_at_times: true once fired
     std::string m_dump_kicks_path_prefix  = "/tmp/lt_part_kicks_step";
+
+    // Per-particle trajectory trace: write selected particles' phase-space
+    // state every m_trace_interval steps to a binary file for cross-code
+    // comparison. Each record: int32 step, double t, int32 n_traced, then
+    // n_traced × 7 doubles (global_idx, x, y, z, ux, uy, uz).
+    std::vector<int> m_trace_ids;          // global particle indices to trace
+    int              m_trace_interval = 0; // write every N steps (0 = off)
+    std::string      m_trace_path     = "/tmp/lt_particle_trace.bin";
+    FILE*            m_trace_file     = nullptr;
 public:
     void set_self_force_disabled (bool on) noexcept { m_self_force_disabled = on; }
     bool self_force_disabled () const noexcept { return m_self_force_disabled; }
+
+    /** Enable per-particle trajectory trace. ids = global particle indices
+     *  to track, interval = steps between writes, path = output file. */
+    void set_particle_trace (const std::vector<int>& ids, int interval,
+                             const std::string& path = "/tmp/lt_particle_trace.bin") noexcept
+    {
+        m_trace_ids      = ids;
+        m_trace_interval = interval;
+        m_trace_path     = path;
+    }
 };
 
 } // namespace tracking

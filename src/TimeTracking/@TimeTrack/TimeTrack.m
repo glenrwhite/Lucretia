@@ -39,6 +39,11 @@ properties
     disable_self_force      = []                                 % logical (diagnostic): skip the SC self-force LUT subtraction
     sc_use_b_field          = []                                 % logical: apply SC B field explicitly via Boris (matches ImpactT). Captures non-synchronous v×B coupling. Default off (1/gamma^2 boost shortcut).
     self_force_direct       = []                                 % logical: compute self-force directly each step (no LUT). Costs ~7x per particle but eliminates LUT-rebuild noise with adaptive mesh.
+    n_emission_steps        = 0                                  % ImpactT Nemission: # fine steps during cathode emission (0=off). When >0, uses 3-phase dt schedule.
+    t_emission              = 0                                  % ImpactT Temission: emission window duration (s). dt_emission = t_emission / n_emission_steps.
+    particle_trace_ids      = []                                 % global particle indices to trace (write pos+mom every particle_trace_interval steps)
+    particle_trace_interval = 10                                 % write every N steps (default 10)
+    particle_trace_path     = '/tmp/lt_particle_trace.bin'       % trajectory trace output path
     dump_kicks_at_steps     = []                                 % vector of int step indices at which to dump per-particle SC kicks (DKD path only). Files at /tmp/lt_part_kicks_step<N>.bin.
     dump_kicks_at_times     = []                                 % vector of double simulation times (s) at which to dump per-particle SC kicks (each fires at first step with t>=target). Useful for cross-code comparison when dt schedules differ.
     dump_kicks_path_prefix  = ''                                 % prefix for the dump files; empty -> /tmp/lt_part_kicks_step
@@ -54,6 +59,10 @@ properties
     sc_comoving         = false                                  % SC mesh follows the bunch in z
     sc_adaptive         = false                                  % SC mesh resizes EVERY axis to track current bunch sigmas (supersedes sc_comoving)
     sc_exact_range      = false                                  % SC mesh resized to EXACT alive-particle min/max each step (zero padding, ImpactT-style; supersedes sc_adaptive)
+    sc_outlier_kill_sigma  = 0                                   % when sc_exact_range=true: KILL particles whose offset from bunch centroid > N*sigma in any axis (mark alive=0; persistent). Effective cap = max(N*sigma, abs_floor). Mitigates 1-2 outlier particles dragging the mesh wider and over-coarsening cells, without leaving outliers half-gathered. 0 = no kill. ~4-6 recommended.
+    sc_outlier_kill_floor_xy = 5e-3                              % m: absolute floor on the kill cap in x,y (avoids cascade kill at near-zero sigma during early emission)
+    sc_outlier_kill_floor_z  = 1e-2                              % m: absolute floor on the kill cap in z
+    sc_outlier_kill_verbose = false                              % when sc_outlier_kill_sigma>0: print kill counts per solve to stdout
     sc_hybrid_z_adaptive = false                                 % SC mesh: STATIC xy + ADAPTIVE z (resize z each step to track sigma_z, keep xy frozen at initial RealBox)
     sc_pad_factor       = 5.0                                    % adaptive: half-extent = max(pad_factor * sigma, min_pad)
     sc_resize_hyst      = 2.0                                    % adaptive: resize triggers when new pad > hyst*current OR < (1/hyst)*current. Larger = fewer resizes (less noise but coarser tracking).

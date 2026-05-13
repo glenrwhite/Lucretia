@@ -121,8 +121,8 @@ end
 if isprop(obj, 'use_particle_phase') && ~isempty(obj.use_particle_phase) && obj.use_particle_phase
     fprintf(f, 'tracking.use_particle_phase = 1\n');
 end
-if isprop(obj, 'use_dkd_integrator') && ~isempty(obj.use_dkd_integrator) && obj.use_dkd_integrator
-    fprintf(f, 'tracking.use_dkd_integrator = 1\n');
+if isprop(obj, 'use_dkd_integrator') && ~isempty(obj.use_dkd_integrator)
+    fprintf(f, 'tracking.use_dkd_integrator = %d\n', double(~~obj.use_dkd_integrator));
 end
 if isprop(obj, 'disable_self_force') && ~isempty(obj.disable_self_force) && obj.disable_self_force
     fprintf(f, 'tracking.disable_self_force = 1\n');
@@ -132,6 +132,24 @@ if isprop(obj, 'sc_use_b_field') && ~isempty(obj.sc_use_b_field) && obj.sc_use_b
 end
 if isprop(obj, 'self_force_direct') && ~isempty(obj.self_force_direct) && obj.self_force_direct
     fprintf(f, 'tracking.self_force_direct = 1\n');
+end
+if isprop(obj, 'n_emission_steps') && ~isempty(obj.n_emission_steps) && obj.n_emission_steps > 0
+    fprintf(f, 'tracking.n_emission_steps = %d\n', round(obj.n_emission_steps));
+    fprintf(f, 'tracking.t_emission = %.10g\n', obj.t_emission);
+    % dt_normal (phase 2) is the caller's dt_initial — write it here so main.cpp
+    % can restore it after the emission phase ends (via the dt promotion).
+    % We don't write it directly because main.cpp handles it internally.
+end
+if isprop(obj, 'particle_trace_ids') && ~isempty(obj.particle_trace_ids)
+    ids = int32(obj.particle_trace_ids(:)');
+    fprintf(f, 'tracking.particle_trace_ids =');
+    fprintf(f, ' %d', ids);
+    fprintf(f, '\n');
+    interval = max(1, round(obj.particle_trace_interval));
+    fprintf(f, 'tracking.particle_trace_interval = %d\n', interval);
+    if isprop(obj, 'particle_trace_path') && ~isempty(obj.particle_trace_path)
+        fprintf(f, 'tracking.particle_trace_path = %s\n', char(obj.particle_trace_path));
+    end
 end
 if isprop(obj, 'dump_kicks_at_steps') && ~isempty(obj.dump_kicks_at_steps)
     steps = round(obj.dump_kicks_at_steps(:)');
@@ -187,6 +205,18 @@ if obj.enable_space_charge
     end
     if isprop(obj, 'sc_exact_range') && obj.sc_exact_range
         fprintf(f, 'space_charge.exact_range = 1\n');
+    end
+    if isprop(obj, 'sc_outlier_kill_sigma') && ~isempty(obj.sc_outlier_kill_sigma) && obj.sc_outlier_kill_sigma > 0
+        fprintf(f, 'space_charge.outlier_kill_sigma = %.6g\n', obj.sc_outlier_kill_sigma);
+        if isprop(obj, 'sc_outlier_kill_floor_xy') && ~isempty(obj.sc_outlier_kill_floor_xy) && obj.sc_outlier_kill_floor_xy > 0
+            fprintf(f, 'space_charge.outlier_kill_floor_xy = %.6g\n', obj.sc_outlier_kill_floor_xy);
+        end
+        if isprop(obj, 'sc_outlier_kill_floor_z') && ~isempty(obj.sc_outlier_kill_floor_z) && obj.sc_outlier_kill_floor_z > 0
+            fprintf(f, 'space_charge.outlier_kill_floor_z = %.6g\n', obj.sc_outlier_kill_floor_z);
+        end
+        if isprop(obj, 'sc_outlier_kill_verbose') && obj.sc_outlier_kill_verbose
+            fprintf(f, 'space_charge.outlier_kill_verbose = 1\n');
+        end
     end
     if isprop(obj, 'sc_hybrid_z_adaptive') && obj.sc_hybrid_z_adaptive
         fprintf(f, 'space_charge.hybrid_z_adaptive = 1\n');

@@ -793,8 +793,66 @@ void TrackingLoop::step_dkd (
                                 ? (m_behind_cathode_betazini * c) : Real(0.0);
     const     Real half_dt   = Real(0.5) * dt;
 
-    // Per-particle SC-kick dump (cross-code comparison harness).
+    // Per-particle trajectory trace: write selected particles' state every
+    // m_trace_interval steps. The file header (written once on first trace
+    // step) contains n_trace (int32). Each record: step (int32), t (double),
+    // then n_trace x 7 doubles: (global_idx, x, y, z, ux, uy, uz).
+    // Only runs on rank 0 in MPI (all particles are on rank 0 in current impl).
     ++m_step_count;
+    if (!m_trace_ids.empty() && m_trace_interval > 0
+            && m_step_count % m_trace_interval == 0
+            && amrex::ParallelDescriptor::IOProcessor())
+    {
+        // Open file on first call.
+        if (!m_trace_file) {
+            m_trace_file = std::fopen(m_trace_path.c_str(), "wb");
+            if (m_trace_file) {
+                const std::int32_t n = std::int32_t(m_trace_ids.size());
+                std::fwrite(&n, sizeof(std::int32_t), 1, m_trace_file);
+            }
+        }
+        if (m_trace_file) {
+            const std::int32_t step32 = std::int32_t(m_step_count);
+            const double       t_d    = double(t);
+            std::fwrite(&step32, sizeof(std::int32_t), 1, m_trace_file);
+            std::fwrite(&t_d,    sizeof(double),        1, m_trace_file);
+            // Collect particle data; particles are indexed globally by
+            // their position in the SoA tile (single-rank assumption).
+            using PIter2 = ParIterSoA<RealSoA::nattribs, IntSoA::nattribs>;
+            std::vector<double> trace_buf;
+            trace_buf.reserve(m_trace_ids.size() * 7);
+            int global_ip = 0;
+            std::map<int, std::array<double,7>> found;
+            for (PIter2 pti(bunch, lev); pti.isValid(); ++pti) {
+                auto& soa = pti.GetStructOfArrays();
+                const int np = pti.numParticles();
+                const auto& xs_t = soa.GetRealData(RealSoA::x);
+                const auto& ys_t = soa.GetRealData(RealSoA::y);
+                const auto& zs_t = soa.GetRealData(RealSoA::z);
+                const auto& ux_t = soa.GetRealData(RealSoA::px);
+                const auto& uy_t = soa.GetRealData(RealSoA::py);
+                const auto& uz_t = soa.GetRealData(RealSoA::pz);
+                for (int ip = 0; ip < np; ++ip, ++global_ip) {
+                    if (std::find(m_trace_ids.begin(), m_trace_ids.end(),
+                                  global_ip) != m_trace_ids.end()) {
+                        found[global_ip] = {double(global_ip),
+                            double(xs_t[ip]), double(ys_t[ip]), double(zs_t[ip]),
+                            double(ux_t[ip]), double(uy_t[ip]), double(uz_t[ip])};
+                    }
+                }
+            }
+            for (int tid : m_trace_ids) {
+                auto it = found.find(tid);
+                if (it != found.end()) {
+                    std::fwrite(it->second.data(), sizeof(double), 7, m_trace_file);
+                } else {
+                    double zeros[7] = {double(tid), 0,0,0,0,0,0};
+                    std::fwrite(zeros, sizeof(double), 7, m_trace_file);
+                }
+            }
+            std::fflush(m_trace_file);
+        }
+    }
     bool dump_kicks_now = !m_dump_kicks_at_steps.empty()
         && std::find(m_dump_kicks_at_steps.begin(),
                      m_dump_kicks_at_steps.end(),
