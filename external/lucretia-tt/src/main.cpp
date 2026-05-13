@@ -1192,6 +1192,7 @@ int main (int argc, char* argv[])
         // Print SimpleProfiler summary (rank 0 only)
         if (amrex::ParallelDescriptor::IOProcessor()) {
             lucretiatt::util::SimpleProfiler::instance().print();
+            if (sc) { sc->print_green_cache_stats(); }
         }
 
         BL_PROFILE_VAR_STOP(pmain);

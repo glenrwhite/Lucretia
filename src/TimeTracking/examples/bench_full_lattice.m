@@ -355,6 +355,15 @@ t0 = tic;
 tt.run();
 fprintf('Run time: %.1f s\n', toc(t0));
 
+% Surface SimpleProfiler / Green-fn cache stats from lt's stdout (captured
+% in tt.last_log) -- emitted at end-of-run but invokeBinary buffers stdout
+% unless verbose_run is set. Each block runs from its named header to the
+% next blank line. Use [\s\S] so '.' isn't needed in dotall mode.
+sp_match = regexp(tt.last_log, '\[SimpleProfiler\][\s\S]*?(?=\n\s*\n|$)', 'match', 'once');
+gc_match = regexp(tt.last_log, '\[SpaceCharge\] Green-fn cache stats[\s\S]*?(?=\n\s*\n|$)', 'match', 'once');
+if ~isempty(sp_match), fprintf('%s\n', strtrim(sp_match)); end
+if ~isempty(gc_match), fprintf('%s\n', strtrim(gc_match)); end
+
 % --- Compute lucretia-tt stats ---
 bunches = tt.readDumps();
 fprintf('Dumps: %d\n', numel(bunches));

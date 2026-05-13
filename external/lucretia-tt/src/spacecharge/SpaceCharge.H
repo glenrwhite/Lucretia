@@ -284,6 +284,12 @@ public:
     }
     amrex::Real green_cache_tol () const noexcept { return m_green_cache_tol; }
 
+    /** Report Green-function cache hit/miss counts (direct + image solves)
+     *  to amrex::Print(). Call once at end of run after all SC solves are
+     *  done, e.g. alongside SimpleProfiler::print(). Only meaningful when
+     *  green_cache_tol > 0 (otherwise misses == solve count). */
+    void print_green_cache_stats () const;
+
     /** Restrict SC to particles with z >= z_min. When `on` is true, the
      *  charge deposit, the centroid/sigma, the bunch-range (for adaptive),
      *  and the bunch-mean beta_z all skip particles with z < z_min. Useful
@@ -644,6 +650,13 @@ private:
     amrex::Real                m_image_cutoff        = 0.05;     // m
     int                        m_rho_smooth_passes = 0;
     amrex::Real                m_green_cache_tol   = 0.0;  // 0 = exact match; >0 = relative tolerance for IGF Green-fn cache
+
+    // Cache hit/miss counters for diagnostic. mutable so that const cached
+    // solvers can increment them. Reported via print_green_cache_stats().
+    mutable long               m_igf_direct_hits   = 0;
+    mutable long               m_igf_direct_misses = 0;
+    mutable long               m_igf_image_hits    = 0;
+    mutable long               m_igf_image_misses  = 0;
     int                        m_shape_order    = 1;     // 1 = CIC, 2 = TSC
     bool                       m_z_filter_min_active = false;
     amrex::Real                m_z_filter_min        = 0.0;

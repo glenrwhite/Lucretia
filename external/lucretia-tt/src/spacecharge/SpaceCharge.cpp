@@ -15,7 +15,9 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdint>
+#include <iomanip>
 #include <memory>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -1647,6 +1649,9 @@ void SpaceCharge::compute_phi_IGF_shifted (
             });
         last_cell_size_image = cell_size;
         last_z_shift_image   = z_shift;
+        ++m_igf_image_misses;
+    } else {
+        ++m_igf_image_hits;
     }
 
     obc_solver_image->solve(phi, rho);
@@ -1727,9 +1732,34 @@ void SpaceCharge::compute_phi_IGF_cached (
                 return ablastr::fields::SumOfIntegratedPotential3D(x, y, z, dx, dy, dz);
             });
         last_cell_size = cell_size;
+        ++m_igf_direct_misses;
+    } else {
+        ++m_igf_direct_hits;
     }
 
     obc_solver->solve(phi, rho);
+}
+
+
+void SpaceCharge::print_green_cache_stats () const
+{
+    auto pct = [] (long hits, long total) {
+        return (total > 0) ? (100.0 * double(hits) / double(total)) : 0.0;
+    };
+    const long d_total = m_igf_direct_hits + m_igf_direct_misses;
+    const long i_total = m_igf_image_hits  + m_igf_image_misses;
+    std::ostringstream ss;
+    ss << "\n[SpaceCharge] Green-fn cache stats (tol="
+       << std::fixed << std::setprecision(4) << m_green_cache_tol << "):\n"
+       << "  IGF direct: " << d_total << " calls, "
+       << m_igf_direct_hits  << " hits, "
+       << m_igf_direct_misses << " rebuilds  ("
+       << std::fixed << std::setprecision(1) << pct(m_igf_direct_hits,  d_total) << "% hit)\n"
+       << "  IGF image:  " << i_total << " calls, "
+       << m_igf_image_hits   << " hits, "
+       << m_igf_image_misses  << " rebuilds  ("
+       << std::fixed << std::setprecision(1) << pct(m_igf_image_hits,   i_total) << "% hit)\n";
+    amrex::Print() << ss.str();
 }
 
 } // namespace spacecharge
