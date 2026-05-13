@@ -30,9 +30,12 @@ function bench_full_lattice(varargin)
 %                                   in end-of-L0A eps_nx (5.04x vs 4.14x with
 %                                   smooth=2 alone; tradeoff favors fidelity to
 %                                   imp's mesh convention).
-%   sc_rho_smooth_passes = 0     -- anti-additive with sc_exact_range. Use 2
-%                                   only when sc_exact_range=false (then -13%
-%                                   end-of-L0A eps_nx vs unsmoothed adaptive+pad).
+%   sc_rho_smooth_passes = 8     -- baseline. Pass 12 + sc_shape_order=2 for
+%                                   high-quality runs at ncell>=48 (per-cell
+%                                   SC noise drops 9.2% -> 6.55%; eps_nx ratio
+%                                   2.428 -> 2.379). At ncell=32 this combo
+%                                   adds ~18% runtime for no eps_nx benefit.
+%   sc_shape_order = 1           -- CIC. Pass 2 (TSC) only at ncell>=48.
 %   disable_self_force = true    -- imp does NO self-force subtraction; lt's
 %                                   kSelfForceFactor=0.62 is empirically neutral
 %                                   at high gamma and IMPROVES per-particle noise
@@ -42,6 +45,8 @@ p = inputParser;
 p.addParameter('impactt_dir', '/Users/glenwhite/Documents/GitHub/Lattices/common/ImpactT', @(x) ischar(x) || isstring(x));
 p.addParameter('n_macros',    50000, @isnumeric);
 p.addParameter('n_steps',     9000,  @isnumeric);   % ~16.6 ns to match ImpactT end
+p.addParameter('n_emission_steps', 0, @isnumeric);   % ImpactT Nemission analog: # fine steps during cathode emission. 0=off (default). Matched to ImpactT deck when >0 (e.g. 400 for LCLS).
+p.addParameter('t_emission', [], @(x) isempty(x)||isnumeric(x));  % ImpactT Temission in s. Default []=read from deck.
 p.addParameter('dt_initial',  0.3e-12, @isnumeric);
 p.addParameter('dt_after',    4e-12,  @isnumeric);
 p.addParameter('dt_change_z', [],     @(x) isempty(x) || isnumeric(x));   % m: z at which dt switches (overrides dt_change_t; matches ImpactT type-(-4))
@@ -57,12 +62,17 @@ p.addParameter('sc_integer_cell_shift', true, @islogical);               % adapt
 p.addParameter('slice_gamma_off', [],  @(x) isempty(x) || isnumeric(x));  % disable slice SC when bunch mean gamma >= this (lets 3D mesh handle longitudinal at high gamma)
 p.addParameter('disable_self_force', true, @islogical);                   % skip the empirical self-force subtraction. Default ON: imp does NO self-force subtraction; lt's kSelfForceFactor=0.62 is empirically neutral at high gamma and IMPROVES per-particle noise (-28%) at low gamma. No measurable downside in tracking results.
 p.addParameter('sc_exact_range', true, @islogical);                       % ImpactT-style exact bunch range adaptive mesh (no padding, every step). Default ON: best per-particle noise reduction (89%->61%); mirrors imp's mesh setup. Trade-off: slightly worse end-of-L0A eps_nx vs adaptive+pad.
+p.addParameter('sc_outlier_kill_sigma', 0, @isnumeric);                   % when sc_exact_range=true: KILL particles outside ±N*sigma per axis (mark alive=0; persistent). Mitigates outliers dragging mesh wider. 0 = no kill. Recommended ~4-6.
+p.addParameter('use_dkd_integrator', true, @islogical);                   % DKD (drift-kick-drift) integrator. Default ON (ImpactT-style). Pass false for legacy kick-drift to test integrator contribution to eps_nx gap.
+p.addParameter('disable_sol1', false, @islogical);                        % drop SOL1 element from lattice (eps_nx investigation)
+p.addParameter('disable_wakefield', false, @islogical);                   % drop wakefield_L0A from lattice (eps_nx investigation)
 p.addParameter('sc_image_cutoff', 0.05, @isnumeric);                       % m: cathode image-charge applies only when z_above_cathode < this. Default 0.05m. IMPACT-T's deck uses 0.01m (Zimage); larger lt cutoff may over-focus particles toward axis (task #60 candidate).
 p.addParameter('sc_image_enabled', true, @islogical);                      % master switch for cathode image charge. Default ON (matches imp Flagimg=1).
-p.addParameter('sc_rho_smooth_passes', 8, @isnumeric);                    % # of binomial-smoother passes on rho before IGF solve. Default 8 (workaround for the per-particle SC noise gap vs imp -- task #59). 8 passes give noise 46% (vs 81% at smooth=0) and end-of-L0A eps_nx ratio 3.58 (vs 4.73 at smooth=0). Smoothing scale ~sqrt(N/2)*dx ~ 0.3mm is well below bunch sigma 1.4mm so bulk physics preserved. Pass 0 to disable smoothing for diagnostics.
+p.addParameter('sc_rho_smooth_passes', 8, @isnumeric);                    % # of binomial-smoother passes on rho before IGF solve. Default 8 is the runtime/quality balance from task #59. Pass 12 + sc_shape_order=2 for high-quality runs at ncell>=48: per-cell SC noise drops to 6.55%, eps_nx ratio improves 2.428->2.379. At ncell=32 the combo adds ~18% cost for no eps_nx benefit.
 p.addParameter('slice_radius_factor',  0, @isnumeric);                   % override slice SC bunch radius: a = factor * sigma_xy (default 2.0; pass 0 to use default)
 p.addParameter('sc_hybrid_z_adaptive', false, @islogical);               % SC mesh hybrid mode: static xy + adaptive z (overrides sc_static_xrad behavior in z)
-p.addParameter('sc_shape_order', 1, @isnumeric);                         % particle shape: 1 = CIC (default), 2 = TSC (smoother per-particle field gradient at ~3x deposit/gather cost)
+p.addParameter('sc_shape_order', 1, @isnumeric);                         % particle shape: 1 = CIC (default), 2 = TSC. TSC's quadratic gather gives ~25% lower per-cell SC noise vs CIC. At ncell>=48 TSC + smooth=12 gives best eps_nx (2.379 vs 2.428). At ncell=32 TSC adds cost without eps benefit.
+p.addParameter('sc_ncell', 32, @(x) isempty(x) || isnumeric(x));         % override mesh ncell ([Nx Ny Nz] or scalar). Default 32 (runtime sweet spot: matches imp eps_nx ratio at 2.43 with 1.25x imp wall time). Pass [] to inherit from imp deck (48); pass 48 explicitly to enable TSC+smooth=12 quality knobs.
 p.addParameter('sc_use_b_field', true, @islogical);                      % apply SC B field via Boris (matches ImpactT) -- captures non-synchronous v×B coupling. Default ON (matches ImpactT v×B convention).
 p.addParameter('slice_profile',  0,   @isnumeric);                       % slice SC transverse profile: 0 = uniform disk (default), 1 = Gaussian disk
 p.addParameter('self_force_direct', true, @islogical);                   % compute SC self-force directly each step (no LUT; ~7x cost; avoids LUT-rebuild noise w/ adaptive mesh). Default ON because adaptive mesh is now default.
@@ -70,9 +80,13 @@ p.addParameter('sc_diag_resize_jump', 0, @isnumeric);                    % if >0
 p.addParameter('mpi_nranks', 1, @isnumeric);                              % >1 -> run lt with MPI (uses lucretia-tt_mpi binary; npy*npx must = nranks via auto layout)
 p.addParameter('sc_dump_field_at_step', 0, @isnumeric);                   % >0 -> dump SC mesh field (rho/phi/Ex/Ey/Ez) at this solve count
 p.addParameter('sc_dump_field_path', '', @(x) ischar(x) || isstring(x));  % path for sc mesh dump; empty -> /tmp/sc_field_dump_step<N>.bin
+p.addParameter('particle_trace_ids', [], @isnumeric);                    % global particle indices to trace (write pos+mom every particle_trace_interval steps)
+p.addParameter('particle_trace_interval', 10, @isnumeric);              % write trace every N steps (default 10)
+p.addParameter('particle_trace_path', '/tmp/lt_particle_trace.bin', @(x) ischar(x)||isstring(x)); % trace output path
 p.addParameter('dump_kicks_at_steps', [], @isnumeric);                   % vector of step indices: dump per-particle SC kicks for cross-code comparison
 p.addParameter('dump_kicks_at_times', [], @isnumeric);                   % vector of physical times (s): dump per-particle SC kicks at first step crossing each time
 p.addParameter('dump_kicks_path_prefix', '', @(x) ischar(x) || isstring(x));
+p.addParameter('dump_every', [], @(x) isempty(x) || isnumeric(x));            % override BeamMonitor dump cadence (default ~n_steps/25)
 p.parse(varargin{:});
 opts = p.Results;
 impactt_dir = char(opts.impactt_dir);
@@ -92,18 +106,36 @@ h9 = sscanf(data_lines{9}, '%f');
 Bcurr = h9(1); Bfreq = h9(5); Tini = h9(6);
 Bkenergy = h9(2); Bmass = h9(3);
 q_total = abs(Bcurr) / Bfreq;
+% Read Nemission and Temission from deck line 5 (Flagdist ... Nemission Temission)
+h5 = sscanf(data_lines{5}, '%f');
+Nemission_deck = h5(4);   % ImpactT Nemission (# emission steps)
+Temission_deck = h5(5);   % ImpactT Temission (emission window in s)
 
 % Filter out cathode_source -- we are using partcl.data as the seed,
 % otherwise the cathode would emit a second batch of particles in parallel.
 keep = true(size(lattice));
 for k = 1:numel(lattice)
     if strcmp(lattice{k}.type, 'cathode_source'), keep(k) = false; end
+    if isfield(opts, 'disable_sol1') && opts.disable_sol1 ...
+            && strcmp(lattice{k}.name, 'SOL1')
+        fprintf('  filter: dropped SOL1\n');
+        keep(k) = false;
+    end
+    if isfield(opts, 'disable_wakefield') && opts.disable_wakefield ...
+            && strcmp(lattice{k}.type, 'wakefield')
+        fprintf('  filter: dropped %s (type=wakefield)\n', lattice{k}.name);
+        keep(k) = false;
+    end
 end
 lattice = lattice(keep);
 
 % Replace BeamMonitor with cadence that gives ~25 dumps over the run
 mon_idx = find(cellfun(@(e) strcmp(e.type, 'beam_monitor'), lattice), 1);
-dump_every = max(100, floor(opts.n_steps / 25));
+if isfield(opts, 'dump_every') && ~isempty(opts.dump_every) && opts.dump_every > 0
+    dump_every = round(opts.dump_every);
+else
+    dump_every = max(100, floor(opts.n_steps / 25));
+end
 if ~isempty(mon_idx)
     lattice{mon_idx} = timetracking.BeamMonitor('name', 'mon', 'dump_every', dump_every);
 else
@@ -126,10 +158,41 @@ tt.beam    = struct('partcl_file', fullfile(impactt_dir, 'partcl.data'), ...
 tt.geom_lo    = [-3e-3, -3e-3, -0.05];
 tt.geom_hi    = [ 3e-3,  3e-3,  0.70];
 tt.geom_ncell = geom_imp.ncell(:).';
+if ~isempty(opts.sc_ncell)
+    nc = opts.sc_ncell;
+    if isscalar(nc), nc = [nc nc nc]; end
+    tt.geom_ncell = double(nc(:).');
+    if any(tt.geom_ncell ~= geom_imp.ncell(:).')
+        fprintf('  geom_ncell override: [%d %d %d] (imp deck has [%d %d %d])\n', ...
+                tt.geom_ncell, geom_imp.ncell);
+    end
+end
 
 % Tracking schedule
 tt.t_start     = Tini;
-tt.dt          = opts.dt_initial;
+% ImpactT-style 3-phase emission (Nemission/Temission from deck or user override)
+n_em = round(opts.n_emission_steps);
+t_em = opts.t_emission;
+if isempty(t_em), t_em = Temission_deck; end
+if n_em > 0
+    dt_em = t_em / n_em;                     % fine emission step (e.g. 0.0826 ps)
+    tt.dt = opts.dt_initial;                  % Phase 2 dt (0.3ps); C++ saves as dt_normal then overrides to dt_em for Phase 1
+    tt.dt_after = 4e-12;                      % Phase 3: L0A dt
+    tt.dt_change_t = Tini + t_em;            % Phase 1→2 switch time
+    tt.n_emission_steps = n_em;
+    tt.t_emission = t_em;
+    % Compute extra steps needed: emission phase adds (n_em - n_em_normal) steps
+    n_em_normal = round(t_em / opts.dt_initial);   % steps at normal 0.3ps
+    extra_steps = n_em - n_em_normal;               % extra steps from fine emission
+    tt.n_steps = opts.n_steps + extra_steps;
+    fprintf('  3-phase emission: Nemission=%d, Temission=%.2fps, dt_em=%.4fps\n', ...
+            n_em, t_em*1e12, dt_em*1e12);
+    fprintf('  extra emission steps: %d → n_steps adjusted to %d\n', ...
+            extra_steps, tt.n_steps);
+else
+    tt.dt = opts.dt_initial;
+    tt.n_steps = opts.n_steps;
+end
 % Prefer z-trigger (matches ImpactT exactly); fall back to t-trigger or
 % to whatever readImpactTLattice extracted from the type-(-4) element.
 if ~isempty(opts.dt_change_z)
@@ -142,7 +205,6 @@ elseif isfield(tracking_imp, 'dt_change') && ~isempty(tracking_imp.dt_change)
     tt.dt_change_t = tracking_imp.dt_change;
 end
 tt.dt_after    = opts.dt_after;
-tt.n_steps     = opts.n_steps;
 
 % Behind-cathode drift (universal-betazini, ImpactT compat)
 tt.behind_cathode_z        = 0.0;
@@ -191,6 +253,11 @@ if opts.sc_exact_range
     tt.sc_exact_range = true;
     tt.sc_adaptive = false;          % superseded
     tt.sc_comoving = false;
+    if opts.sc_outlier_kill_sigma > 0
+        tt.sc_outlier_kill_sigma = opts.sc_outlier_kill_sigma;
+        fprintf('  sc_outlier_kill_sigma = %.2f (kill particles outside +/- N*sigma)\n', ...
+                opts.sc_outlier_kill_sigma);
+    end
 end
 if opts.sc_rho_smooth_passes > 0
     tt.sc_rho_smooth_passes = round(opts.sc_rho_smooth_passes);
@@ -211,6 +278,10 @@ if opts.sc_shape_order ~= 1
     name = 'CIC'; if tt.sc_shape_order == 2, name = 'TSC'; end
     fprintf('  shape order = %d (%s)\n', tt.sc_shape_order, name);
 end
+if ~opts.use_dkd_integrator
+    tt.use_dkd_integrator = false;
+    fprintf('  USING LEGACY KICK-DRIFT (use_dkd_integrator=false)\n');
+end
 if opts.sc_use_b_field
     tt.sc_use_b_field = true;
     fprintf('  SC B field via Boris (matches ImpactT v×B convention)\n');
@@ -228,6 +299,13 @@ if opts.sc_diag_resize_jump > 0
     tt.sc_diag_resize_jump = round(opts.sc_diag_resize_jump);
     tt.verbose_run = true;   % diagnostic prints go to stdout; stream them
     fprintf('  diagnostic: per-particle dE on each resize (will stream stdout)\n');
+end
+if ~isempty(opts.particle_trace_ids)
+    tt.particle_trace_ids      = int32(opts.particle_trace_ids(:).');
+    tt.particle_trace_interval = round(opts.particle_trace_interval);
+    tt.particle_trace_path     = char(opts.particle_trace_path);
+    fprintf('  particle_trace: %d particles, every %d steps -> %s\n', ...
+            numel(tt.particle_trace_ids), tt.particle_trace_interval, tt.particle_trace_path);
 end
 if ~isempty(opts.dump_kicks_at_steps)
     tt.dump_kicks_at_steps = round(opts.dump_kicks_at_steps);
@@ -315,8 +393,8 @@ bm.sigma_z  = std(zz);
 bm.sigma_gamma = std(g);
 bm.sigma_E_MeV = std(g) * 0.5109989461;        % MeV
 bm.bunch_len_fwhm = sigma_to_fwhm(zz);          % m (FWHM of z dist)
-bm.eps_nx   = norm_emittance(xx, px./max(pz,1e-30), g);
-bm.eps_ny   = norm_emittance(yy, py./max(pz,1e-30), g);
+bm.eps_nx   = norm_emittance(xx, px./(me*c));
+bm.eps_ny   = norm_emittance(yy, py./(me*c));
 % Longitudinal: eps_nz = sqrt(<dz^2><dgamma^2> - <dz*dgamma>^2) in m
 dz = zz - mean(zz);
 dg = g  - mean(g);
@@ -332,11 +410,10 @@ sl.z_centers    = 0.5*(edges(1:end-1) + edges(2:end));
 for k = 1:n_slice
     msk = (bin == k);
     if sum(msk) < 5, continue; end
-    xk = xx(msk); pxk = px(msk); pzk = pz(msk);
+    xk = xx(msk); pxk = px(msk);
     yk = yy(msk); pyk = py(msk);
-    gk = g(msk);
-    sl.eps_nx_slice(k) = norm_emittance(xk, pxk./max(pzk,1e-30), gk);
-    sl.eps_ny_slice(k) = norm_emittance(yk, pyk./max(pzk,1e-30), gk);
+    sl.eps_nx_slice(k) = norm_emittance(xk, pxk./(me*c));
+    sl.eps_ny_slice(k) = norm_emittance(yk, pyk./(me*c));
     dz = edges(k+1) - edges(k);
     Nk = sum(msk);
     sl.current(k) = Nk / N * dz;   % normalised slice density
@@ -376,8 +453,9 @@ bm.sigma_x  = std(xx);
 bm.sigma_y  = std(yy);
 bm.sigma_gamma = std(gam);
 bm.sigma_E_MeV = std(gam) * 0.5109989461;
-bm.eps_nx   = norm_emittance(xx, px_n./max(pz_n,1e-30), gam);
-bm.eps_ny   = norm_emittance(yy, py_n./max(pz_n,1e-30), gam);
+% fort.50 px_n/py_n already in dimensionless gamma*beta form
+bm.eps_nx   = norm_emittance(xx, px_n);
+bm.eps_ny   = norm_emittance(yy, py_n);
 
 % Pull longitudinal stats from fort.26 (last row)
 ref = timetracking.readImpactTFort18(impactt_dir);
@@ -403,13 +481,18 @@ bm.peak_slice_z      = NaN;
 end
 
 
-function eps_n = norm_emittance(x, xp, g)
-sx  = std(x);
-sxp = std(xp);
-cxxp = mean((x - mean(x)) .* (xp - mean(xp)));
-eps_geom = sqrt(max(sx^2 * sxp^2 - cxxp^2, 0));
-bg = sqrt(g.^2 - 1);
-eps_n = mean(bg) * eps_geom;
+function eps_n = norm_emittance(x, px_n)
+% Normalized transverse emittance via the proper momentum form:
+%   eps_n = sqrt(<x^2><px_n^2> - <x*px_n>^2)
+% px_n is normalized transverse momentum (gamma*beta_x; dimensionless).
+% The previous (xp=px/pz, mean(bg)*sigma_xp) form silently inflated eps
+% by ~12x at gamma~1 because pz had ~75% relative spread on a cold cathode
+% bunch. The proper form is exact at all gamma and matches ImpactT's
+% internal eps_nx calculation.
+sx   = std(x);
+spx  = std(px_n);
+cxpx = mean((x - mean(x)) .* (px_n - mean(px_n)));
+eps_n = sqrt(max(sx^2 * spx^2 - cxpx^2, 0));
 end
 
 
@@ -482,10 +565,9 @@ for k = 1:numel(bunches)
     xx=xx(alive); zz=zz(alive); px=px(alive); py=py(alive); pz=pz(alive);
     if numel(xx) < 5, continue; end
     gam = sqrt(1 + (px.^2+py.^2+pz.^2)/(me*c)^2);
-    xp = px./max(pz,1e-30);
     sx = std(xx);
     sz = std(zz);
-    eps = norm_emittance(xx, xp, gam);
+    eps = norm_emittance(xx, px./(me*c));
     tk = b.time;
     if tk < ref.t(1) || tk > ref.t(end), continue; end
     g_imp = interp1(ref.t, ref.gamma,   tk, 'linear');
