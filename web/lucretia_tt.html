@@ -57,6 +57,7 @@
             <li class="sub"><a href="#elem-impactt">ImpactTField</a></li>
             <li class="sub"><a href="#elem-fieldmap3d">FieldMap3D</a></li>
             <li class="sub"><a href="#elem-wake">WakeField</a></li>
+            <li class="sub"><a href="#elem-collim">Collimator</a></li>
             <li class="sub"><a href="#elem-seedbeam">SeedBeam</a></li>
             <li><a href="#cathode-gen">Cathode beam generation</a></li>
             <li><a href="#output">Output &amp; handoff</a></li>
@@ -111,10 +112,11 @@
 <ul>
     <li><strong>Drift-kick-drift integrator</strong> with relativistic Boris kick (Birdsall-Langdon t/s vectors), midstep field gather, and an optional variable-dt schedule (small dt in the cathode/gun region, large dt past the relativistic transition). See <a href="#physics-algorithms">Physics &amp; algorithms</a>.</li>
     <li><strong>Cathode emission</strong>: ImpactT-style first-order emission model with universal-betazini behind-cathode drift, optional thermal MTE, and image-charge return force from a conducting cathode plane.</li>
-    <li><strong>3D space charge</strong> via FFT-based open-BC Poisson (ABLASTR's IGF solver) with per-particle Lorentz boost, self-force LUT, and three mesh modes: static, co-moving, or per-step adaptive (sigma-tracking).</li>
-    <li><strong>1D mesh-free slice SC</strong> (Lawson disk-stack) for longitudinal &mdash; stays resolved at any bunch length without an FFT and is composable with the 3D mesh (mesh keeps doing transverse).</li>
+    <li><strong>3D space charge</strong> via FFT-based open-BC Poisson (ABLASTR's IGF solver) with per-particle Lorentz boost; CIC or TSC deposit/gather; rho smoothing; five mesh modes (static, co-moving, padded-adaptive, IMPACT-T-style exact-range, or static-xy + adaptive-z hybrid); cathode image-charge mirror handled inside the same IGF solve; tolerance-based Green-function cache for ~24% wall-time saving.</li>
+    <li><strong>1D mesh-free slice SC</strong> (Lawson disk-stack) for longitudinal &mdash; stays resolved at any bunch length without an FFT, with a behind-cathode z-filter for clean emission. Composable with the 3D mesh (mesh keeps doing transverse).</li>
     <li><strong>Field-source elements</strong>: analytic (<code>SWCavity</code>, <code>TWCavity</code>, <code>QuadAnalytic</code>, <code>SolenoidAnalytic</code>, <code>UniformB</code>) and 3D/Fourier-map (<code>FieldMap3D</code>, <code>Solenoid3D</code>, <code>ImpactTField</code>) with off-axis paraxial expansion + higher-order radial corrections.</li>
     <li><strong>Wake fields</strong> via Bane analytic short-range wakes (longitudinal monopole + transverse dipole) on iris-loaded TW structures, applied as a Strang-split impulse after the main push.</li>
+    <li><strong>Aperture collimators</strong> (<code>Collimator</code>) with z-range or fire-once trigger semantics; mirrors IMPACT-T's type-(-11) and type-(-99) elements.</li>
     <li><strong>openPMD HDF5</strong> beam dumps; conversion to Lucretia <code>Beam</code> structs via <code>freezePlaneOut</code> for handoff to s-based <code>TrackThru</code>.</li>
     <li><strong>ImpactT compatibility</strong>: <code>readImpactTLattice</code> parses an <code>ImpactT.in</code> file (incl. <code>rfdata*</code> field maps, variable-dt schedule, wake-field sections) into a lucretia-tt setup; <code>CathodeLaserDist</code> generates ImpactT-format <code>partcl.data</code> from a Hammersley low-discrepancy sampler (no clumping). Algorithms are intentionally aligned at the integrator + emission + paraxial-expansion level &mdash; see <a href="#impactt-compare">Comparison with ImpactT</a>.</li>
 </ul>
@@ -301,7 +303,9 @@ bunches = tt.readDumps();   % cell array of per-step structs
         <tr><td><code>beam</code></td><td>1 particle at origin</td><td>Initial particles. Use a <code>SeedBeam</code> with a pre-written HDF5 seed for non-trivial bunches.</td></tr>
         <tr><td><code>dt</code></td><td><code>1e-12</code></td><td>Initial time step (s)</td></tr>
         <tr><td><code>n_steps</code></td><td><code>100</code></td><td>Number of time steps</td></tr>
-        <tr><td><code>dt_change_t</code> / <code>dt_after</code></td><td><code>[]</code></td><td>Switch <code>dt</code> at a given simulation time. Honoured by the lucretia-tt binary.</td></tr>
+        <tr><td><code>dt_change_t</code> / <code>dt_after</code></td><td><code>[]</code></td><td>Switch <code>dt</code> at a given simulation time.</td></tr>
+        <tr><td><code>dt_change_z</code></td><td><code>[]</code></td><td>Switch to <code>dt_after</code> when the bunch CENTROID first crosses this lab z (m). Mirrors ImpactT's type-(-4) element. Wins over <code>dt_change_t</code> when both are set.</td></tr>
+        <tr><td><code>n_emission_steps</code> / <code>t_emission</code></td><td><code>0</code> / <code>0</code></td><td>ImpactT <code>Nemission</code>/<code>Temission</code> analog. When <code>n_emission_steps &gt; 0</code> the integrator runs a 3-phase dt schedule: fine <code>dt = t_emission / n_emission_steps</code> for the emission window, then <code>dt</code>, then <code>dt_after</code>.</td></tr>
         <tr><td><code>t_start</code></td><td><code>[]</code></td><td>Initial wall-clock time (empty = 0). Set to align with an external code's clock origin (e.g. ImpactT's <code>Tini</code>).</td></tr>
         <tr><td><code>geom_lo</code> / <code>geom_hi</code> / <code>geom_ncell</code></td><td>10&nbsp;cm box, 32&sup3;</td><td>SC mesh extent and resolution</td></tr>
         <tr><td><code>use_dkd_integrator</code></td><td><code>true</code></td><td>ImpactT-style drift-kick-drift integrator + first-order emission. See <a href="#phys-integrator">Time integration (DKD)</a>. Set <code>false</code> for the legacy kick-drift path (regression tests only).</td></tr>
@@ -311,18 +315,37 @@ bunches = tt.readDumps();   % cell array of per-step structs
         <tr><td><code>behind_cathode_z</code></td><td><code>[]</code></td><td>Cathode plane z (m). When set together with <code>behind_cathode_betazini</code>, particles below this z drift at universal speed (see <a href="#phys-cathode-drift">Behind-cathode drift</a>).</td></tr>
         <tr><td><code>behind_cathode_betazini</code></td><td><code>[]</code></td><td>Universal &beta;<sub>z</sub> for behind-cathode drift. Typically <code>sqrt(1 - 1/(1 + Bkenergy/Bmass)<sup>2</sup>)</code>.</td></tr>
         <tr><td><code>enable_space_charge</code></td><td><code>false</code></td><td>Turn on the IGF Poisson solver (see <a href="#phys-sc-3d">3D space charge</a>)</td></tr>
-        <tr><td><code>sc_comoving</code></td><td><code>false</code></td><td>Mesh follows the bunch in z (recenters when the centroid drifts past the central 50% of the box)</td></tr>
-        <tr><td><code>sc_adaptive</code></td><td><code>false</code></td><td>Mesh half-extents are recomputed every step as <code>max(pad_factor &middot; &sigma;<sub>i</sub>, min_pad)</code>. Supersedes <code>sc_comoving</code>; closest to ImpactT's per-step adaptive mesh. Has known LUT-noise caveat &mdash; see <a href="#imp-calib">Calibration results</a>.</td></tr>
+        <tr><td><code>sc_comoving</code></td><td><code>false</code></td><td>Mesh follows the bunch in z (recenters when the centroid drifts past the central 50% of the box).</td></tr>
+        <tr><td><code>sc_adaptive</code></td><td><code>false</code></td><td>Mesh half-extents are recomputed every step as <code>max(pad_factor &middot; &sigma;<sub>i</sub>, min_pad)</code>. Supersedes <code>sc_comoving</code>.</td></tr>
+        <tr><td><code>sc_exact_range</code></td><td><code>false</code></td><td>ImpactT-style exact alive-particle min/max each step (zero padding). Supersedes <code>sc_adaptive</code> and <code>sc_comoving</code>; closest to IMPACT-T's mesh and the recommended SC mode for cross-code work (default in <code>bench_full_lattice</code>).</td></tr>
+        <tr><td><code>sc_outlier_kill_sigma</code></td><td><code>0</code></td><td>When <code>sc_exact_range = true</code>: kill (mark <code>alive=0</code>, persistent) particles whose offset from the bunch centroid exceeds N&middot;&sigma; in any axis, with an absolute floor of <code>sc_outlier_kill_floor_xy</code> / <code>_z</code>. Stops 1&ndash;2 outliers from dragging the mesh wide and over-coarsening cells. <code>0</code> disables; ~4&ndash;6 recommended.</td></tr>
+        <tr><td><code>sc_outlier_kill_floor_xy</code> / <code>sc_outlier_kill_floor_z</code></td><td><code>5e-3</code> / <code>1e-2</code></td><td>Absolute floor (m) on the kill cap to avoid cascade kills at near-zero sigma during early emission.</td></tr>
+        <tr><td><code>sc_hybrid_z_adaptive</code></td><td><code>false</code></td><td>Hybrid mesh: static xy + adaptive z (resize z each step to track <code>&sigma;<sub>z</sub></code>; xy stays at the initial <code>geom_*</code>).</td></tr>
         <tr><td><code>sc_pad_factor</code> / <code>sc_min_pad_xy</code> / <code>sc_min_pad_z</code></td><td><code>5.0</code> / <code>1e-3</code> / <code>1e-3</code></td><td>Adaptive-mesh padding controls (multiples of bunch &sigma;, minimum half-extent in m).</td></tr>
+        <tr><td><code>sc_resize_hyst</code></td><td><code>2.0</code></td><td>Adaptive: resize triggers when the new pad factor differs from current by more than this factor. Larger = fewer resizes (less per-step field-jump noise, coarser tracking).</td></tr>
+        <tr><td><code>sc_cent_drift_threshold</code></td><td><code>0.5</code></td><td>Adaptive: recenter when <code>|centroid drift| &gt; frac &middot; half-extent</code> on any axis. Raise to 0.9 to suppress per-step centroid recenters on relativistic bunches.</td></tr>
+        <tr><td><code>sc_integer_cell_shift</code></td><td><code>false</code></td><td>Adaptive: when only the centroid trigger fires, snap the new box centre to <code>old_centre + N &middot; dx</code> so each particle's fractional cell position is preserved &mdash; the deposit pattern is identical, so the resize introduces no per-particle field jump.</td></tr>
+        <tr><td><code>sc_rho_smooth_passes</code></td><td><code>0</code></td><td>Number of binomial-(1,2,1)/4 smoother passes applied to the deposited charge density before the IGF solve. <code>1&ndash;2</code> cuts CIC noise at low cost; <code>8</code> is the bench default at <code>ncell=32</code>; <code>12</code> with <code>sc_shape_order=2</code> is the high-quality combo at <code>ncell &ge; 48</code>.</td></tr>
+        <tr><td><code>sc_shape_order</code></td><td><code>1</code></td><td>Particle deposit/gather shape: <code>1</code> = CIC (linear, 8-node), <code>2</code> = TSC (quadratic, 27-node, smoother field gradients at ~3&times; cost).</td></tr>
+        <tr><td><code>sc_use_b_field</code></td><td><code>false</code></td><td>Apply the SC magnetic field <code>(B<sub>x</sub>, B<sub>y</sub>)</code> explicitly through the Boris kick instead of relying on the <code>1/&gamma;<sup>2</sup></code> shortcut. Captures non-synchronous <code>v &times; B</code> coupling and matches ImpactT's convention.</td></tr>
+        <tr><td><code>self_force_direct</code></td><td><code>false</code></td><td>Compute the SC self-force directly each step (no LUT). ~7&times; per-particle cost but eliminates LUT-rebuild noise under per-step adaptive meshes. Default ON in <code>bench_full_lattice</code>.</td></tr>
+        <tr><td><code>disable_self_force</code></td><td><code>false</code></td><td>Diagnostic flag that skips the self-force subtraction entirely. ImpactT does no self-force subtraction; on the LCLS injector this is empirically neutral and improves per-particle noise &mdash; bench default ON.</td></tr>
+        <tr><td><code>sc_green_cache_tol</code></td><td><code>0</code></td><td>Relative tolerance on the IGF Green-function cache. Skips <code>setGreensFunction</code> when <code>cell_size</code> and the gamma-stretched z shift drift by less than this fraction. <code>0.01</code> saves ~24&ndash;32% of run time at &minus;0.17% &epsilon;<sub>nx</sub> &mdash; sweet spot. <code>0</code> = exact match (rebuild every step).</td></tr>
         <tr><td><code>enable_slice_sc</code></td><td><code>false</code></td><td>Enable 1D mesh-free slice SC (longitudinal). Replaces the 3D-mesh longitudinal contribution; 3D mesh keeps doing transverse. See <a href="#phys-sc-slice">Slice SC</a>.</td></tr>
         <tr><td><code>slice_sc_n</code></td><td><code>256</code></td><td>Number of longitudinal slices for the slice SC density estimator.</td></tr>
         <tr><td><code>slice_sc_radius_factor</code></td><td><code>2.0</code></td><td>Bunch radius for the disk-stack formula = <code>factor &middot; &sigma;<sub>x,y</sub></code>.</td></tr>
+        <tr><td><code>slice_sc_profile</code></td><td><code>0</code></td><td>Slice transverse profile: <code>0</code> = uniform disk, <code>1</code> = Gaussian disk (analytic 2D Gaussian sheet on-axis E<sub>z</sub>, uses <code>&sigma;<sub>x,y</sub></code> directly).</td></tr>
+        <tr><td><code>slice_sc_gamma_off</code></td><td><code>[]</code></td><td>Disable slice SC once the bunch mean &gamma; reaches this value &mdash; lets 3D mesh handle longitudinal at high energy where slice over-counts vs ImpactT.</td></tr>
         <tr><td><code>sc_image_plane</code></td><td><code>false</code></td><td>Deposit mirror charges on the SC mesh so the IGF Poisson satisfies <code>&phi;=0</code> on the cathode plane.</td></tr>
         <tr><td><code>sc_image_plane_z</code></td><td><code>0.0</code></td><td>Lab-frame z of the cathode plane (mirror axis).</td></tr>
         <tr><td><code>sc_image_cutoff</code></td><td><code>0.05</code></td><td>Image deposit only fires for particles within this distance (m) of the cathode (matches IMPACT-T's <code>Zimage</code>).</td></tr>
         <tr><td><code>sc_verbose</code></td><td><code>0</code></td><td><code>0</code> = quiet, <code>1</code> = print recenter / per-step SC diagnostics.</td></tr>
+        <tr><td><code>sc_diag_resize_jump</code></td><td><code>0</code></td><td><code>1</code> = print per-particle &Delta;E statistics on each mesh resize (diagnostic of field-discontinuity noise).</td></tr>
+        <tr><td><code>sc_dump_field_at_step</code> / <code>sc_dump_field_path</code></td><td><code>0</code> / <code>''</code></td><td>Write rho/phi/E<sub>x,y,z</sub> mesh values to a binary file at the given solve count (cross-code SC field harness). Empty path defaults to <code>/tmp/sc_field_dump_step&lt;N&gt;.bin</code>.</td></tr>
         <tr><td><code>trace_file</code></td><td><code>''</code></td><td>Path to a per-step CSV trace file (bunch-mean diagnostics every <code>trace_every</code> steps). Empty = no trace.</td></tr>
         <tr><td><code>trace_every</code></td><td><code>1</code></td><td>Step interval for trace rows.</td></tr>
+        <tr><td><code>particle_trace_ids</code> / <code>particle_trace_interval</code> / <code>particle_trace_path</code></td><td><code>[]</code> / <code>10</code> / <code>'/tmp/lt_particle_trace.bin'</code></td><td>Per-particle trajectory trace: write <code>(t, x, y, z, p<sub>x</sub>, p<sub>y</sub>, p<sub>z</sub>)</code> for the listed global IDs every N steps to a flat binary &mdash; for cross-code per-particle diff against ImpactT.</td></tr>
+        <tr><td><code>dump_kicks_at_steps</code> / <code>dump_kicks_at_times</code> / <code>dump_kicks_path_prefix</code></td><td><code>[]</code> / <code>[]</code> / <code>''</code></td><td>Per-particle SC kick dump (DKD path). At each listed step or first step crossing each listed wall-clock time (s), write per-particle <code>(E<sub>SC</sub>, B<sub>SC</sub>)</code> to <code>&lt;prefix&gt;&lt;step&gt;.bin</code>. Useful when the two codes' dt schedules differ.</td></tr>
         <tr><td><code>target</code></td><td><code>'cpu'</code></td><td><code>'cpu'</code> or <code>'gpu'</code> &mdash; combined with <code>mpi_nranks</code>, picks the staged binary (<code>lucretia-tt</code> / <code>_mpi</code> / <code>_gpu</code> / <code>_gpu_mpi</code>)</td></tr>
         <tr><td><code>mpi_nranks</code></td><td><code>1</code></td><td>&gt;1 invokes <code>mpirun -np N</code> and selects the <code>_mpi</code> variant of the binary chosen by <code>target</code></td></tr>
         <tr><td><code>mpirun_extra_args</code></td><td><code>''</code></td><td>Extra flags spliced into <code>mpirun</code>, typically NUMA binding (see <a href="#mpi-numa">MPI &amp; NUMA</a>)</td></tr>
@@ -822,6 +845,40 @@ rfm = timetracking.FieldMap3D('z', 0, 'length', 0.1, ...
 </code></pre>
 </article>
 
+<article class="elem-card" id="elem-collim">
+    <h3>Collimator <a class="section-link" href="#elem-collim">#</a></h3>
+    <p class="elem-purpose">Rectangular aperture &mdash; kills particles outside <code>[xmin,xmax] &times; [ymin,ymax]</code> at the end of every step. Mirror of ImpactT type-(-11).</p>
+    <table>
+        <thead><tr><th>Param</th><th>Default</th><th>Units</th><th>Meaning</th></tr></thead>
+        <tbody>
+            <tr><td><code>name</code></td><td><code>'COLL'</code></td><td>&mdash;</td><td>Element label</td></tr>
+            <tr><td><code>z_start</code> / <code>z_end</code></td><td><code>0.0</code></td><td>m</td><td>Lab z range over which the aperture check fires (z-range mode)</td></tr>
+            <tr><td><code>xmin</code> / <code>xmax</code></td><td>&plusmn;<code>1e30</code></td><td>m</td><td>Transverse aperture (x)</td></tr>
+            <tr><td><code>ymin</code> / <code>ymax</code></td><td>&plusmn;<code>1e30</code></td><td>m</td><td>Transverse aperture (y)</td></tr>
+            <tr><td><code>kill_backward</code></td><td><code>false</code></td><td>bool</td><td>Also kill particles with <code>p<sub>z</sub> &lt; 0</code> in the active range (mirrors ImpactT's <code>stop_bkw</code> flag)</td></tr>
+            <tr><td><code>fire_once</code></td><td><code>false</code></td><td>bool</td><td>If true: fires ONCE at the step when bunch CENTROID first crosses <code>z_target</code>; ALL alive particles outside the aperture are killed regardless of their individual z (matches ImpactT's <code>lostXY</code> trigger).</td></tr>
+            <tr><td><code>z_target</code></td><td><code>0.0</code></td><td>m</td><td>Centroid trigger z for <code>fire_once</code> mode</td></tr>
+        </tbody>
+    </table>
+    <p>
+        Killed particles get <code>alive=0</code> and are parked at
+        <code>z = -1e9</code> so they fall out of bunch statistics. The
+        aperture check runs after the second half-drift but before the
+        next step starts, on every integration step the element is active.
+        <code>readImpactTLattice</code> emits a Collimator for each
+        type-(-11) line (with <code>fire_once = true</code>) and for each
+        type-(-99) backward-particle filter (with <code>kill_backward = true</code>).
+    </p>
+<pre><code>% Hard 3 mm round-ish aperture across the gun-to-L0A drift
+coll = timetracking.Collimator('z_start', 0.05, 'z_end', 1.5, ...
+    'xmin', -3e-3, 'xmax', 3e-3, 'ymin', -3e-3, 'ymax', 3e-3);
+
+% IMPACT-T-style fire-once aperture at the L0A entrance
+clip = timetracking.Collimator('fire_once', true, 'z_target', 1.5, ...
+    'xmin', -2e-3, 'xmax', 2e-3, 'ymin', -2e-3, 'ymax', 2e-3);
+</code></pre>
+</article>
+
 <article class="elem-card" id="elem-seedbeam">
     <h3>SeedBeam <a class="section-link" href="#elem-seedbeam">#</a></h3>
     <p class="elem-purpose">Initial bunch specification &mdash; not a lattice element, but the input particle source for <code>TimeTrack</code>. Two modes: simple colocated bunch, or a custom HDF5 seed.</p>
@@ -1234,29 +1291,64 @@ B_x &larr; B_x + (y/c<sup>2</sup>) &middot; (&omega; &middot; f1 &middot; r<sup>
         own &gamma; (infinite-bin energy-binning limit). Critical for
         chirped bunches where head and tail differ by 2&times;+ in &gamma;.</li>
 </ol>
-<p>The mesh can be configured in three modes:</p>
+<p>The mesh can be configured in five modes (each supersedes the previous if multiple flags are set):</p>
 <dl>
-    <dt><strong>Static</strong> (<code>sc_adaptive=false, sc_comoving=false</code>)</dt>
+    <dt><strong>Static</strong> (all mesh flags off)</dt>
     <dd>Mesh fixed at <code>(geom_lo, geom_hi)</code>. Cheap but accurate
         only when the bunch stays small relative to the box.</dd>
-    <dt><strong>Co-moving</strong> (<code>sc_comoving=true</code>)</dt>
+    <dt><strong>Co-moving</strong> (<code>sc_comoving = true</code>)</dt>
     <dd>Mesh follows the bunch in z; recenters when the centroid drifts
         past the central 50% of the box. Suitable for long beamlines
         where the bunch travels far but its dimensions don't vary much.</dd>
-    <dt><strong>Adaptive</strong> (<code>sc_adaptive=true</code>)</dt>
+    <dt><strong>Adaptive (padded)</strong> (<code>sc_adaptive = true</code>)</dt>
     <dd>Mesh half-extents are recomputed every step as
-        <code>max(pad_factor &middot; &sigma;<sub>i</sub>, min_pad)</code> on each axis;
-        co-moving in z is implicit. Closest to ImpactT's per-step adaptive
-        mesh. Currently has a known LUT-noise issue that inflates
-        projected transverse emittance by ~5&times; on the LCLS injector
-        (slice emittance remains close to ImpactT).</dd>
+        <code>max(pad_factor &middot; &sigma;<sub>i</sub>, min_pad)</code>
+        on each axis; co-moving in z is implicit. Resize hysteresis
+        (<code>sc_resize_hyst</code>) and centroid-only integer-cell
+        snapping (<code>sc_integer_cell_shift</code>) suppress per-step
+        field-jump noise without losing tracking accuracy.</dd>
+    <dt><strong>Adaptive (exact-range)</strong> (<code>sc_exact_range = true</code>)</dt>
+    <dd>Mesh resized to the exact alive-particle min/max each step (zero
+        padding). Mirrors IMPACT-T's per-step mesh. The recommended SC mode
+        for cross-code calibration; default in <code>bench_full_lattice</code>.
+        Combine with <code>sc_outlier_kill_sigma &asymp; 4&ndash;6</code> to
+        prevent 1&ndash;2 outliers from over-coarsening the cells.</dd>
+    <dt><strong>Hybrid</strong> (<code>sc_hybrid_z_adaptive = true</code>)</dt>
+    <dd>Static xy + adaptive z &mdash; resizes z each step to track
+        <code>&sigma;<sub>z</sub></code> while keeping xy frozen at the
+        initial <code>geom_*</code>. Useful when transverse mesh density
+        is set by an aperture / drift radius rather than by the bunch.</dd>
 </dl>
 <p>
-    Image-charge planes are also handled by the SC stage: each
-    <code>CathodeSource</code> with <code>image_charge=true</code>
-    contributes a row of mirror charges to the deposit, so the IGF solver
-    sees a charge distribution that satisfies <code>&phi; = 0</code> on
-    the cathode plane (controlled by <code>sc_image_plane</code>).
+    <strong>Image charge.</strong> Each <code>CathodeSource</code> with
+    <code>image_charge = true</code> contributes a row of mirror charges to
+    the deposit so the IGF solver sees a distribution satisfying
+    <code>&phi; = 0</code> on the cathode plane (controlled by
+    <code>sc_image_plane</code>). The image kernel computes a separate
+    mirror &phi; with a z-reversed deposit in physical space, and the
+    image B-field sign is flipped at the gather to mirror IMPACT-T's
+    <code>FlagImage</code> path through <code>gradEB_FieldQuant</code>.
+    The image deposit gates off automatically once
+    <code>z &gt; sc_image_cutoff</code> (default 5 cm).
+</p>
+<p>
+    <strong>Charge smoothing.</strong> Optional binomial-(1,2,1)/4 passes
+    on the deposited density (<code>sc_rho_smooth_passes</code>) cut CIC
+    shot noise without losing the physical signal. Production bench uses
+    <code>8</code> passes; the high-quality combo for <code>ncell &ge; 48</code>
+    is <code>12</code> passes plus <code>sc_shape_order = 2</code> (TSC).
+</p>
+<p>
+    <strong>Green-function cache.</strong> The IGF Green-function
+    construction (per-cell antiderivative + forward FFT of G) is the
+    largest single cost on a CPU run &mdash; ~30% of the total &mdash;
+    and it depends only on the cell sizes and the gamma-stretched z
+    shift. The solver caches the constructed G and reuses it whenever
+    those parameters drift by less than <code>sc_green_cache_tol</code>.
+    A tolerance of <code>0.01</code> saves ~24% of wall time on
+    adaptive-mesh runs (~32% on static-mesh) at &minus;0.17%
+    &epsilon;<sub>nx</sub>. Hit-rate diagnostics print to stdout at
+    end-of-run.
 </p>
 
 <h3 id="phys-sc-slice">Slice space charge: 1D mesh-free longitudinal</h3>
@@ -1359,10 +1451,23 @@ B_x &larr; B_x + (y/c<sup>2</sup>) &middot; (&omega; &middot; f1 &middot; r<sup>
     <li><strong>GPU acceleration</strong> (CUDA via AMReX). One push kernel
         runs on either CPU-OpenMP or GPU; multi-GPU via CUDA-aware MPI.</li>
     <li><strong>1D mesh-free slice SC</strong> (Lawson disk-stack).
-        Stays resolved at any bunch length without an FFT.</li>
-    <li><strong>3D adaptive mesh</strong> that tracks bunch sigmas every
-        step (transverse + longitudinal). ImpactT's adaptive mesh exists
-        but has a fixed <code>Xrad</code>/<code>Yrad</code> outer radius.</li>
+        Stays resolved at any bunch length without an FFT, with a
+        cathode z-filter so behind-cathode particles do not pollute the
+        slice grid during emission.</li>
+    <li><strong>3D adaptive meshes</strong> that track bunch sigmas every
+        step &mdash; both ImpactT-style exact-range
+        (<code>sc_exact_range</code>) and padded
+        (<code>sc_adaptive</code>), with hysteresis, integer-cell snap,
+        and outlier-kill controls to suppress per-step field-jump noise.</li>
+    <li><strong>Charge-density smoothing</strong>
+        (<code>sc_rho_smooth_passes</code>) and a <strong>TSC quadratic
+        deposit/gather</strong> (<code>sc_shape_order = 2</code>) for
+        users who want to trade compute time for lower mesh noise.</li>
+    <li><strong>Tolerance-based IGF Green-function cache</strong>
+        (<code>sc_green_cache_tol</code>) &mdash; reuses the constructed
+        Green function across steps when the cell sizes drift by less
+        than the chosen tolerance. ~24% wall-time saving at the default
+        <code>0.01</code> tolerance.</li>
     <li><strong>openPMD HDF5</strong> particle dumps with full per-particle
         history; readable by any openPMD-aware tool.</li>
     <li><strong>Bunch handoff to s-based tracking</strong> via
@@ -1373,9 +1478,12 @@ B_x &larr; B_x + (y/c<sup>2</sup>) &middot; (&omega; &middot; f1 &middot; r<sup>
     <li><strong>Hammersley-sampled cathode generation in pure MATLAB</strong>
         (<code>CathodeLaserDist</code>): no Python / distgen dependency,
         no clumping artefacts.</li>
-    <li><strong>Per-step CSV trace diagnostic</strong>
-        (<code>tracking.trace_file</code>) for cross-code calibration:
-        bunch-mean stats every N steps in a flat CSV.</li>
+    <li><strong>Per-step CSV trace + per-particle trajectory trace +
+        per-particle SC-kick dump</strong> for cross-code calibration:
+        bunch-mean stats every N steps, plus per-particle trajectories
+        (<code>particle_trace_ids</code>) and SC-kick snapshots
+        (<code>dump_kicks_at_steps</code> / <code>dump_kicks_at_times</code>)
+        in flat binary files.</li>
 </ul>
 
 <h4>Capabilities ImpactT has that lucretia-tt does not (yet)</h4>
@@ -1383,16 +1491,25 @@ B_x &larr; B_x + (y/c<sup>2</sup>) &middot; (&omega; &middot; f1 &middot; r<sup>
     <li><strong>Detailed per-step slice diagnostics</strong> in
         <code>fort.27/28/29/30</code> &mdash; lucretia-tt computes slice
         statistics post-hoc from per-particle dumps.</li>
-    <li><strong>Type-(-2) collimators / type-(-99) bend regions</strong>
-        from the ImpactT input file are currently skipped by
-        <code>readImpactTLattice</code> with a warning.</li>
-    <li><strong>Mature transverse SC</strong>. lucretia-tt's adaptive mesh
-        currently has a known LUT-noise issue that inflates the projected
-        transverse emittance by ~5&times; on the LCLS injector benchmark;
-        the slice (peak-current) emittance remains within ~25% of ImpactT.
-        Fix is open work.</li>
-    <li><strong>Bend-region tracking</strong> &mdash; ImpactT supports
-        bend-plane integration; lucretia-tt is straight-axis only.</li>
+    <li><strong>Bend-region tracking</strong> (type-(-99) bend plane) &mdash;
+        ImpactT supports bend-plane integration; lucretia-tt is
+        straight-axis only.</li>
+    <li><strong>Per-step adaptive emission scheduling.</strong> ImpactT's
+        <code>Nemission</code>/<code>Temission</code> finely subdivides the
+        cathode emission window. lucretia-tt now mirrors this through the
+        <code>n_emission_steps</code>/<code>t_emission</code> 3-phase dt
+        schedule, but the calibration is still being tuned &mdash; setting
+        <code>n_emission_steps = 200</code> on the LCLS deck improves
+        &epsilon;<sub>nx</sub> ratio from 2.07 to 2.00 but slightly
+        narrows <code>&sigma;<sub>x</sub></code>.</li>
+    <li><strong>Closing the residual transverse-emittance gap.</strong>
+        lucretia-tt's projected &epsilon;<sub>nx</sub> on the full LCLS
+        injector benchmark sits at ~2&times; ImpactT (down from ~5.7&times; in
+        early May). The remaining gap is concentrated in the gun &mdash;
+        SOL1 overlap region and is under investigation (per-particle
+        trajectory diff vs ImpactT, image-charge <code>&sigma;<sub>z</sub></code>
+        coupling). Slice (peak-current) emittance tracks ImpactT to a
+        few percent.</li>
 </ul>
 
 <h4>Implementation differences (matter only for byte-for-byte parity)</h4>
@@ -1428,28 +1545,44 @@ B_x &larr; B_x + (y/c<sup>2</sup>) &middot; (&omega; &middot; f1 &middot; r<sup>
 </table>
 <p>
     LCLS injector full lattice (50,000 macros, with SC, gun + SOL1 + L0A
-    structure, end of L0A at z &asymp; 5 m):
+    structure, end of L0A at z &asymp; 5 m). Numbers are with the current
+    <code>bench_full_lattice</code> defaults
+    (<code>sc_exact_range</code> + image-charge fix +
+    <code>sc_rho_smooth_passes = 8</code> + slice-SC z-filter +
+    Green-fn cache at tol = 0.01):
 </p>
 <table>
     <thead>
-        <tr><th>Quantity</th><th>lucretia-tt</th><th>ImpactT</th><th>Ratio</th><th>Note</th></tr>
+        <tr><th>Quantity</th><th>lucretia-tt</th><th>ImpactT</th><th>Ratio</th></tr>
     </thead>
     <tbody>
-        <tr><td>&gamma;<sub>mean</sub></td><td>93.6</td><td>94.5</td><td>&minus;0.9%</td><td>&mdash;</td></tr>
-        <tr><td>&sigma;<sub>z</sub></td><td>1.18 mm</td><td>1.28 mm</td><td>&minus;7%</td><td>&mdash;</td></tr>
-        <tr><td>&epsilon;<sub>nz</sub></td><td>273 &mu;m&middot;rad</td><td>290 &mu;m&middot;rad</td><td>&minus;6%</td><td>&mdash;</td></tr>
-        <tr><td>&sigma;<sub>x</sub></td><td>1.00 mm</td><td>0.73 mm</td><td>+37%</td><td>SC LUT noise</td></tr>
-        <tr><td>&sigma;<sub>&gamma;</sub></td><td>0.74</td><td>0.36</td><td>2.0&times;</td><td>under investigation</td></tr>
-        <tr><td>&epsilon;<sub>nx</sub> (projected)</td><td>6.29 &mu;m&middot;rad</td><td>1.10 &mu;m&middot;rad</td><td>5.7&times;</td><td>SC LUT noise (head/tail)</td></tr>
-        <tr><td>&epsilon;<sub>nx</sub> (peak-current slice)</td><td>1.23 &mu;m&middot;rad</td><td>~1.0 &mu;m&middot;rad</td><td>~1.2&times;</td><td>core OK</td></tr>
+        <tr><td>&gamma;<sub>mean</sub></td><td>93.6</td><td>94.5</td><td>&minus;0.9%</td></tr>
+        <tr><td>&sigma;<sub>x</sub></td><td>0.96 mm</td><td>0.73 mm</td><td>+32%</td></tr>
+        <tr><td>&sigma;<sub>z</sub></td><td>1.20 mm</td><td>1.28 mm</td><td>&minus;6%</td></tr>
+        <tr><td>&sigma;<sub>&gamma;</sub></td><td>0.49</td><td>0.36</td><td>+36%</td></tr>
+        <tr><td>&epsilon;<sub>nz</sub></td><td>275 &mu;m&middot;rad</td><td>290 &mu;m&middot;rad</td><td>&minus;5%</td></tr>
+        <tr><td>&epsilon;<sub>nx</sub> (projected)</td><td>2.28 &mu;m&middot;rad</td><td>1.10 &mu;m&middot;rad</td><td>2.07&times;</td></tr>
+        <tr><td>&epsilon;<sub>nx</sub> (peak-current slice)</td><td>~1.05 &mu;m&middot;rad</td><td>~1.0 &mu;m&middot;rad</td><td>~1.05&times;</td></tr>
     </tbody>
 </table>
 <p>
-    The transverse projected-emittance discrepancy is localised to the
-    head / tail of the bunch where mesh noise dominates; the bunch core
-    (peak-current slice) tracks ImpactT to within ~25%. The
-    <code>bench_full_lattice.m</code> driver in
-    <code>src/TimeTracking/examples/</code> reproduces these numbers.
+    Single-rank wall time on a 12-core M-series Mac is ~240&nbsp;s &mdash;
+    roughly on par with ImpactT at 10 ranks on the same problem &mdash;
+    after the Green-fn cache landed. Setting
+    <code>n_emission_steps = 200</code> drops &epsilon;<sub>nx</sub> ratio
+    further to ~2.00 but slightly narrows <code>&sigma;<sub>x</sub></code>
+    (~9%); the optimal Nemission for a clean cross-code match is still
+    being calibrated.
+</p>
+<p>
+    The transverse projected-emittance gap (~2&times; ImpactT, down from
+    ~5.7&times; in early May) is localised to the gun&nbsp;&mdash;&nbsp;SOL1
+    overlap region. Slice (peak-current) emittance tracks ImpactT to a
+    few percent. Subtask focus going forward: per-particle trajectory diff
+    against ImpactT and image-charge <code>&sigma;<sub>z</sub></code>
+    coupling. The <code>bench_full_lattice.m</code> driver in
+    <code>src/TimeTracking/examples/</code> reproduces these numbers; pass
+    <code>'sc_green_cache_tol', 0</code> for a bit-equivalent baseline.
 </p>
 <p>
     For partcl-seeded comparison runs, drop the <code>cathode_source</code>
