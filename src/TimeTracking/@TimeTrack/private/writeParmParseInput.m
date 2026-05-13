@@ -229,6 +229,9 @@ if obj.enable_space_charge
     if isprop(obj, 'sc_rho_smooth_passes') && ~isempty(obj.sc_rho_smooth_passes) && obj.sc_rho_smooth_passes > 0
         fprintf(f, 'space_charge.rho_smooth_passes = %d\n', round(obj.sc_rho_smooth_passes));
     end
+    if isprop(obj, 'sc_green_cache_tol') && ~isempty(obj.sc_green_cache_tol) && obj.sc_green_cache_tol > 0
+        fprintf(f, 'space_charge.green_cache_tol = %.10g\n', obj.sc_green_cache_tol);
+    end
     if isprop(obj, 'sc_shape_order') && ~isempty(obj.sc_shape_order) && obj.sc_shape_order ~= 1
         fprintf(f, 'space_charge.shape_order = %d\n', round(obj.sc_shape_order));
     end

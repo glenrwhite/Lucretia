@@ -739,6 +739,8 @@ int main (int argc, char* argv[])
             pp_sc.query("slice_profile",       slice_profile);
             int sc_rho_smooth_passes = 0;
             pp_sc.query("rho_smooth_passes",   sc_rho_smooth_passes);
+            amrex::Real sc_green_cache_tol = 0.0;
+            pp_sc.query("green_cache_tol",     sc_green_cache_tol);
             int sc_hybrid_z = 0;
             pp_sc.query("hybrid_z_adaptive",   sc_hybrid_z);
             int sc_shape_order = 1;
@@ -780,6 +782,9 @@ int main (int argc, char* argv[])
                 }
                 if (sc_rho_smooth_passes > 0) {
                     sc->set_rho_smooth_passes(sc_rho_smooth_passes);
+                }
+                if (sc_green_cache_tol > amrex::Real(0.0)) {
+                    sc->set_green_cache_tol(sc_green_cache_tol);
                 }
                 if (sc_shape_order != 1) {
                     sc->set_shape_order(sc_shape_order);

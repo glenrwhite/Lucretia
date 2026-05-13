@@ -69,6 +69,7 @@ p.addParameter('disable_wakefield', false, @islogical);                   % drop
 p.addParameter('sc_image_cutoff', 0.05, @isnumeric);                       % m: cathode image-charge applies only when z_above_cathode < this. Default 0.05m. IMPACT-T's deck uses 0.01m (Zimage); larger lt cutoff may over-focus particles toward axis (task #60 candidate).
 p.addParameter('sc_image_enabled', true, @islogical);                      % master switch for cathode image charge. Default ON (matches imp Flagimg=1).
 p.addParameter('sc_rho_smooth_passes', 8, @isnumeric);                    % # of binomial-smoother passes on rho before IGF solve. Default 8 is the runtime/quality balance from task #59. Pass 12 + sc_shape_order=2 for high-quality runs at ncell>=48: per-cell SC noise drops to 6.55%, eps_nx ratio improves 2.428->2.379. At ncell=32 the combo adds ~18% cost for no eps_nx benefit.
+p.addParameter('sc_green_cache_tol', 0.01, @isnumeric);                    % relative tolerance for IGF Green-fn cache: skip setGreensFunction when (cell_size, z_shift) drift by less than this fraction. Default 0.01 (1%): saves 24% wall-time on production adaptive-mesh bench with -0.17% eps_nx (within run-to-run noise) and ~32% on static-mesh runs. Pass 0 for bit-equivalent baseline. tol=0.05 is WORSE than 0.01 (slower in noise + -2.8% eps_nx); 0.01 is the sweet spot.
 p.addParameter('slice_radius_factor',  0, @isnumeric);                   % override slice SC bunch radius: a = factor * sigma_xy (default 2.0; pass 0 to use default)
 p.addParameter('sc_hybrid_z_adaptive', false, @islogical);               % SC mesh hybrid mode: static xy + adaptive z (overrides sc_static_xrad behavior in z)
 p.addParameter('sc_shape_order', 1, @isnumeric);                         % particle shape: 1 = CIC (default), 2 = TSC. TSC's quadratic gather gives ~25% lower per-cell SC noise vs CIC. At ncell>=48 TSC + smooth=12 gives best eps_nx (2.379 vs 2.428). At ncell=32 TSC adds cost without eps benefit.
@@ -261,6 +262,11 @@ if opts.sc_exact_range
 end
 if opts.sc_rho_smooth_passes > 0
     tt.sc_rho_smooth_passes = round(opts.sc_rho_smooth_passes);
+end
+if opts.sc_green_cache_tol > 0
+    tt.sc_green_cache_tol = opts.sc_green_cache_tol;
+    fprintf('  sc_green_cache_tol = %.4f (skip Green-fn rebuild within this relative tol)\n', ...
+            opts.sc_green_cache_tol);
 end
 if isfield(opts, 'slice_radius_factor') && opts.slice_radius_factor > 0
     tt.slice_sc_radius_factor = opts.slice_radius_factor;

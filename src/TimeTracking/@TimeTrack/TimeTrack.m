@@ -74,6 +74,7 @@ properties
     sc_image_plane_z    = 0.0                                    % m: lab-frame cathode plane (mirror axis)
     sc_image_cutoff     = 0.05                                   % m: image deposit only fires for particles within this distance of the cathode (matches IMPACT-T's Zimage)
     sc_rho_smooth_passes = 0                                     % # of binomial (1,2,1)/4 smoother passes applied to deposited rho before IGF solve (0 = off; 1-2 cuts CIC noise without losing physical signal)
+    sc_green_cache_tol   = 0                                     % relative tolerance (e.g. 0.01 = 1%) for the IGF Green-function cache. 0 = exact match required (rebuild every step on gamma-stretched z mesh; ~30% of total runtime). >0 = skip setGreensFunction when cell_size and z_shift drift by less than this fraction. ~20-25% total runtime saving at tol=0.01.
     sc_shape_order      = 1                                      % particle deposit/gather shape: 1 = CIC (linear, 8-node), 2 = TSC (quadratic, 27-node, smoother field gradients at ~3x cost)
     sc_verbose          = 0                                      % space_charge.verbose: 0 = quiet, 1 = print recenter / per-step diagnostics
     sc_diag_resize_jump = 0                                      % space_charge.diag_resize_jump: 1 = print per-particle dE statistics on each mesh resize (diagnostic of field-discontinuity noise); 0 = off
