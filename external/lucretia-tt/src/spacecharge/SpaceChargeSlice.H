@@ -83,6 +83,14 @@ public:
      *  the bunch z-extent (CIC clamp). */
     amrex::Real E_z_at (amrex::Real z) const noexcept;
 
+    /** Enable cathode z-filter: skip particles with z < z_min in slice SC.
+     *  Prevents behind-cathode particles from distorting the slice grid.
+     *  Use the same z_min as the mesh SC z_filter (typically z=0, the cathode). */
+    void set_z_filter_min (bool on, amrex::Real z_min = 0.0) noexcept {
+        m_z_filter_min_active = on;
+        m_z_filter_min        = z_min;
+    }
+
     // ---- Diagnostics ----
     int  n_slices  () const noexcept { return m_n_slices; }
     amrex::Real bunch_radius () const noexcept { return m_a; }
@@ -104,6 +112,12 @@ private:
     amrex::Real m_total_Q = 0.0;
     amrex::Real m_gamma_off = std::numeric_limits<amrex::Real>::infinity();
     int         m_profile   = 0;     // 0 = uniform disk, 1 = Gaussian disk
+    // Cathode z-filter: when active, skip particles with z < m_z_filter_min.
+    // Prevents behind-cathode particles from distorting the slice grid during
+    // emission (same filtering as SpaceCharge::m_z_filter_min). Set via
+    // set_z_filter_min(); mirrors the mesh SC z_filter from cathode tracking.
+    bool        m_z_filter_min_active = false;
+    amrex::Real m_z_filter_min        = 0.0;
 
     std::vector<amrex::Real> m_Q_slice;   // physical charge per slice (C)
     std::vector<amrex::Real> m_Ez_slice;  // E_z at slice centre (V/m)

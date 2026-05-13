@@ -60,6 +60,9 @@ void SpaceChargeSlice::compute (particles::TimeBunch& bunch)
         for (int i = 0; i < np; ++i) {
             if (alives[i] == 0) { continue; }
             const Real zp = zs[i];
+            // Cathode z-filter: skip below-cathode particles so they don't
+            // distort the slice grid during emission (mirrors mesh SC z_filter).
+            if (m_z_filter_min_active && zp < m_z_filter_min) { continue; }
             if (zp < z_min) z_min = zp;
             if (zp > z_max) z_max = zp;
             sum_x  += xs[i];
@@ -176,6 +179,7 @@ void SpaceChargeSlice::compute (particles::TimeBunch& bunch)
         for (int i = 0; i < np; ++i) {
             if (alives[i] == 0) { continue; }
             const Real zp = zs[i];
+            if (m_z_filter_min_active && zp < m_z_filter_min) { continue; }
             const Real qw = qs[i] * ws[i];               // physical charge of macroparticle
             const Real f  = (zp - m_z_lo) / m_dz - Real(0.5);
             int idx0 = int(std::floor(f));
