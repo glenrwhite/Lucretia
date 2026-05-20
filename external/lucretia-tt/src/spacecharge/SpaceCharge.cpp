@@ -464,7 +464,16 @@ void SpaceCharge::deposit_charge (particles::TimeBunch& bunch)
 
     auto const* dx = m_geom.CellSize();
     auto const* lo = m_geom.ProbLo();
-    const Real inv_dV = Real(1.0) / (dx[0] * dx[1] * dx[2]);
+    // Task #22 deposit-γ fix: imp's chgdens_Depositor divides rho by
+    // γ_bunch (Depositor.f90:80), absorbing the rest-frame density
+    // (ρ_rest = ρ_lab / γ). lt's deposit historically didn't, leaving
+    // lt's E-field γ× larger than imp's at high γ. When
+    // m_deposit_rest_frame_rho is true, lt divides rho by γ_bunch
+    // matching imp's convention.
+    const Real inv_g_dep = (m_deposit_rest_frame_rho && m_last_beta_z != Real(0.0))
+        ? std::sqrt(Real(1.0) - m_last_beta_z * m_last_beta_z)   // = 1/γ
+        : Real(1.0);
+    const Real inv_dV = inv_g_dep / (dx[0] * dx[1] * dx[2]);
     const Real inv_dx = Real(1.0) / dx[0];
     const Real inv_dy = Real(1.0) / dx[1];
     const Real inv_dz = Real(1.0) / dx[2];

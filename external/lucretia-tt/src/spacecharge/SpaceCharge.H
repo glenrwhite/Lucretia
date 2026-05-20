@@ -368,6 +368,15 @@ public:
     void unset_image_plane () noexcept { m_image_plane_enabled = false; }
     bool image_plane_enabled () const noexcept { return m_image_plane_enabled; }
 
+    /** Task #22 deposit-γ fix: when true, divide deposited rho by γ_bunch
+     *  in deposit_charge() to match imp's chgdens_Depositor convention
+     *  (Depositor.f90:80). lt's E-field magnitude was γ× imp's at high γ
+     *  because lt deposited rho_lab while imp deposits rho_rest = rho_lab/γ.
+     *  Pair with sc_transverse_gamma_boost=1 (the textbook external γ boost)
+     *  to get the correct lab-frame E. */
+    void set_deposit_rest_frame_rho (bool on) noexcept { m_deposit_rest_frame_rho = on; }
+    bool deposit_rest_frame_rho () const noexcept { return m_deposit_rest_frame_rho; }
+
     /** Shift the Geometry's RealBox so the mesh is centered on z_new
      *  (longitudinal only; transverse extent unchanged). BoxArray is
      *  preserved so existing MultiFabs stay valid; rho is reset to 0. */
@@ -646,6 +655,7 @@ private:
     std::string                m_dump_field_path  = "";   // path; auto-generated if empty
     int                        m_solve_count      = 0;    // counts solve() calls
     bool                       m_image_plane_enabled = false;
+    bool                       m_deposit_rest_frame_rho = false;   // task #22
     amrex::Real                m_image_plane_z       = 0.0;
     amrex::Real                m_image_cutoff        = 0.05;     // m
     int                        m_rho_smooth_passes = 0;

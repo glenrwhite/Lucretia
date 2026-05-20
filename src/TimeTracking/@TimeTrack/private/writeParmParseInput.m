@@ -189,6 +189,9 @@ end
 if isprop(obj, 'sc_transverse_gamma_boost')
     fprintf(f, 'tracking.sc_transverse_gamma_boost = %d\n', round(obj.sc_transverse_gamma_boost));
 end
+if isprop(obj, 'sc_deposit_rest_frame_rho')
+    fprintf(f, 'space_charge.deposit_rest_frame_rho = %d\n', round(obj.sc_deposit_rest_frame_rho));
+end
 
 if obj.enable_space_charge
     fprintf(f, '\n# ---- Space charge ----\n');

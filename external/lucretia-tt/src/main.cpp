@@ -695,6 +695,7 @@ int main (int argc, char* argv[])
             int sc_image_enabled  = 0;
             amrex::Real sc_image_z_cath = 0.0;
             amrex::Real sc_image_cutoff = 0.05;
+            int sc_deposit_rest_frame_rho = 0;   // task #22
             int slice_sc_enabled  = 0;
             int slice_n           = 256;
             amrex::Real slice_radius_factor = 2.0;
@@ -731,6 +732,7 @@ int main (int argc, char* argv[])
             pp_sc.query("image_plane_enabled", sc_image_enabled);
             pp_sc.query("image_plane_z",       sc_image_z_cath);
             pp_sc.query("image_cutoff",        sc_image_cutoff);
+            pp_sc.query("deposit_rest_frame_rho", sc_deposit_rest_frame_rho);
             pp_sc.query("slice_enabled",       slice_sc_enabled);
             pp_sc.query("slice_n",             slice_n);
             pp_sc.query("slice_radius_factor", slice_radius_factor);
@@ -779,6 +781,11 @@ int main (int argc, char* argv[])
                 }
                 if (sc_image_enabled != 0) {
                     sc->set_image_plane(sc_image_z_cath, sc_image_cutoff);
+                }
+                if (sc_deposit_rest_frame_rho != 0) {
+                    sc->set_deposit_rest_frame_rho(true);
+                    amrex::Print() << "Space charge: deposit ρ /= γ_bunch "
+                                   << "(rest-frame density; matches imp Depositor.f90:80)\n";
                 }
                 if (sc_rho_smooth_passes > 0) {
                     sc->set_rho_smooth_passes(sc_rho_smooth_passes);

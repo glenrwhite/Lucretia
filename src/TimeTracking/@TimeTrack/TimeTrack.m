@@ -48,6 +48,7 @@ properties
     field_audit_interval    = 0                                  % write every N steps (0 = off)
     field_audit_file        = '/tmp/lt_field_audit.csv'          % CSV output path for the field audit
     sc_transverse_gamma_boost = 1                                % 1 = γ_bunch * E_perp_solver (textbook PIC, task #20 fix); 0 = no boost (matches imp empirical, task #22 Substrate eps EOL 3.74 → 1.11)
+    sc_deposit_rest_frame_rho = 0                                % task #22: 1 = divide deposited rho by γ_bunch (matches imp Depositor.f90:80). Pair with sc_transverse_gamma_boost=1 for textbook-correct E_lab.
     dump_kicks_at_steps     = []                                 % vector of int step indices at which to dump per-particle SC kicks (DKD path only). Files at /tmp/lt_part_kicks_step<N>.bin.
     dump_kicks_at_times     = []                                 % vector of double simulation times (s) at which to dump per-particle SC kicks (each fires at first step with t>=target). Useful for cross-code comparison when dt schedules differ.
     dump_kicks_path_prefix  = ''                                 % prefix for the dump files; empty -> /tmp/lt_part_kicks_step
