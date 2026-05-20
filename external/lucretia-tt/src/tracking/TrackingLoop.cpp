@@ -669,8 +669,10 @@ void TrackingLoop::step (
                 //  -- explaining the constant 0.32 = 1/γ_eff lt/imp eps-growth
                 //  ratio in the gun region.)
                 const Real g_b_sc = sc->last_gamma();
-                const Real Ex_lab_sc = g_b_sc * Ex_corr;
-                const Real Ey_lab_sc = g_b_sc * Ey_corr;
+                const Real g_boost = (m_sc_transverse_gamma_boost != 0)
+                                     ? g_b_sc : Real(1.0);
+                const Real Ex_lab_sc = g_boost * Ex_corr;
+                const Real Ey_lab_sc = g_boost * Ey_corr;
                 // Ez: keep legacy (pre 2026-05-15) /γ² form. Empirically
                 // changing Ez to /γ over-defocuses through drift+L0A;
                 // the Ez normalization may already absorb a γ from
@@ -1257,8 +1259,18 @@ void TrackingLoop::step_dkd (
                     // 4.21 → 4.41 (worse). Suggests another bug masked
                     // by the /γ² normalization. See substrate_sc_test_ez.
                     const Real g_b_sc = sc->last_gamma();
-                    const Real Ex_lab_sc = g_b_sc * Ex_corr;
-                    const Real Ey_lab_sc = g_b_sc * Ey_corr;
+                    // Transverse SC γ-boost mode (configurable via
+                    // tracking.sc_transverse_gamma_boost):
+                    //   1 (default) = Ex_lab = γ_bunch * Ex_solver
+                    //     (textbook PIC rest-frame solve + Lorentz boost;
+                    //     task #20 fix closed gun-region eps growth)
+                    //   0 = no boost (matches imp's empirical convention;
+                    //     task #22 SOL1+ region match: eps EOL 3.74 → 1.11
+                    //     on Substrate, but gun-region eps drops to 0.44)
+                    const Real g_boost = (m_sc_transverse_gamma_boost != 0)
+                                         ? g_b_sc : Real(1.0);
+                    const Real Ex_lab_sc = g_boost * Ex_corr;
+                    const Real Ey_lab_sc = g_boost * Ey_corr;
                     const Real inv_g2_dkd = (g_b_sc > Real(0.0))
                                             ? Real(1.0) / (g_b_sc * g_b_sc)
                                             : Real(1.0);

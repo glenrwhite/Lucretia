@@ -859,6 +859,7 @@ int main (int argc, char* argv[])
         int         disable_self_force      = 0;
         int         self_force_direct       = 0;
         int         sc_use_b_field          = 0;
+        int         sc_transverse_gamma_boost = 1;
         amrex::Vector<int>         dump_kicks_at_steps;
         amrex::Vector<amrex::Real> dump_kicks_at_times;
         std::string dump_kicks_path_prefix  = "/tmp/lt_part_kicks_step";
@@ -892,6 +893,7 @@ int main (int argc, char* argv[])
             pp_track.query("disable_self_force",      disable_self_force);
             pp_track.query("self_force_direct",       self_force_direct);
             pp_track.query("sc_use_b_field",          sc_use_b_field);
+            pp_track.query("sc_transverse_gamma_boost", sc_transverse_gamma_boost);
             pp_track.queryarr("dump_kicks_at_steps",  dump_kicks_at_steps);
             pp_track.queryarr("dump_kicks_at_times",  dump_kicks_at_times);
             pp_track.query("dump_kicks_path_prefix",  dump_kicks_path_prefix);
@@ -977,6 +979,12 @@ int main (int argc, char* argv[])
             tracker.set_sc_use_b_field(true);
             amrex::Print() << "[tracking] SC: explicit B field via Boris pusher "
                            << "(matches ImpactT; replaces 1/gamma^2 boost shortcut)\n";
+        }
+        tracker.set_sc_transverse_gamma_boost(sc_transverse_gamma_boost);
+        if (sc_transverse_gamma_boost == 0) {
+            amrex::Print() << "[tracking] SC: transverse γ_bunch boost DISABLED "
+                           << "(matches imp empirical convention; Substrate eps EOL "
+                           << "3.74 → 1.11 per task #22)\n";
         }
         if (self_force_direct != 0) {
             tracker.set_self_force_direct(true);

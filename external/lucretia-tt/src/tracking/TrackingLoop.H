@@ -181,6 +181,16 @@ public:
     void set_sc_use_b_field (bool on) noexcept { m_sc_use_b_field = on; }
     bool sc_use_b_field_enabled () const noexcept { return m_sc_use_b_field; }
 
+    /** Transverse SC γ-multiplication mode.
+     *  1 (default) — Ex_lab = γ_bunch · Ex_solver (textbook rest-frame
+     *    Lorentz boost; task #20 fix that closed gun-region eps growth).
+     *  0 — no boost (matches imp's empirical convention; task #22 SOL1+
+     *    region match: Substrate eps EOL 3.74 → 1.11, but gun-region eps
+     *    drops to ~0.44 at z=150mm. See project_lucretia_tt_sc_gamma_
+     *    boost_paradox.md). */
+    void set_sc_transverse_gamma_boost (int mode) noexcept { m_sc_transverse_gamma_boost = mode; }
+    int  sc_transverse_gamma_boost () const noexcept { return m_sc_transverse_gamma_boost; }
+
     /** Per-particle SC-kick dump. When the integrator's internal step
      *  counter equals one of `steps`, write all alive particles' state +
      *  SC field/momentum-kick contributions to
@@ -279,6 +289,7 @@ private:
     bool        m_self_force_disabled     = false;  // diagnostic: skip the self-force LUT subtraction
     bool        m_self_force_direct       = false;  // off: LUT lookup; on: direct Coulomb sum each step (no rebuild noise w/ adaptive mesh)
     bool        m_sc_use_b_field          = false;  // off: 1/gamma^2 boost shortcut; on: explicit B + Boris (matches ImpactT)
+    int         m_sc_transverse_gamma_boost = 1;    // 1: γ_bunch * E_perp (default); 0: no boost (matches imp empirically)
     int         m_step_count              = 0;      // incremented by step() / step_dkd() before any work
     std::vector<int>    m_dump_kicks_at_steps;      // step indices at which to dump per-particle SC kicks
     std::vector<double> m_dump_kicks_at_times;      // physical times (s) at which to dump (fires on first step with t>=target)

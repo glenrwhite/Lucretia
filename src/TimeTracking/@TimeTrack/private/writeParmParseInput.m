@@ -186,6 +186,9 @@ if isprop(obj, 'field_audit_ids') && ~isempty(obj.field_audit_ids) ...
         fprintf(f, 'tracking.field_audit_path = %s\n', char(obj.field_audit_file));
     end
 end
+if isprop(obj, 'sc_transverse_gamma_boost')
+    fprintf(f, 'tracking.sc_transverse_gamma_boost = %d\n', round(obj.sc_transverse_gamma_boost));
+end
 
 if obj.enable_space_charge
     fprintf(f, '\n# ---- Space charge ----\n');
