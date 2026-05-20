@@ -175,6 +175,17 @@ if isprop(obj, 'trace_file') && ~isempty(obj.trace_file)
         fprintf(f, 'tracking.trace_every        = %d\n', round(obj.trace_every));
     end
 end
+if isprop(obj, 'field_audit_ids') && ~isempty(obj.field_audit_ids) ...
+        && isprop(obj, 'field_audit_interval') && obj.field_audit_interval > 0
+    ids = int32(obj.field_audit_ids(:)');
+    fprintf(f, 'tracking.field_audit_ids =');
+    fprintf(f, ' %d', ids);
+    fprintf(f, '\n');
+    fprintf(f, 'tracking.field_audit_interval = %d\n', round(obj.field_audit_interval));
+    if isprop(obj, 'field_audit_file') && ~isempty(obj.field_audit_file)
+        fprintf(f, 'tracking.field_audit_path = %s\n', char(obj.field_audit_file));
+    end
+end
 
 if obj.enable_space_charge
     fprintf(f, '\n# ---- Space charge ----\n');

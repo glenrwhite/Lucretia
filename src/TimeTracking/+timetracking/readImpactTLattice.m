@@ -241,11 +241,24 @@ for k = 1:numel(lat_lines)
             ymin      = v(9);
             ymax      = v(10);
             if z_trigger < 0
-                % stop_bkw: kill backward particles in ALL z. No aperture.
+                % stop_bkw: ImpactT's lostREC_BeamBunch is called every
+                % step (AccSimulator.f90 ~1696) and kills any particle
+                % satisfying (z <= 0 AND uz < 0) -- "behind cathode AND
+                % going further backward". The type-(-11) element with
+                % z_trigger<0 mirrors this. We restrict the z range to
+                % (-inf, 0] so above-cathode particles whose pz briefly
+                % goes negative from an RF deceleration kick are NOT
+                % killed (imp keeps them: they sit in lostREC's "z>0"
+                % half-plane, which the routine doesn't gate on). The
+                % aperture is disabled (xmin/ymin = -inf, xmax/ymax =
+                % +inf) so `out_xy` never triggers -- only the back
+                % branch kills.
                 lattice{end+1} = timetracking.Collimator('name', nm, ...
-                    'z_start',       -1, ...
-                    'z_end',         elem_z_max + 100, ...
-                    'kill_backward', true); %#ok<AGROW>
+                    'z_start',       -1e30, ...
+                    'z_end',         0, ...
+                    'kill_backward', true, ...
+                    'xmin', -1e30, 'xmax', 1e30, ...
+                    'ymin', -1e30, 'ymax', 1e30); %#ok<AGROW>
             else
                 % Thin aperture at z=z_trigger. Fire ONCE when the bunch
                 % centroid first crosses z_trigger; kill ALL alive

@@ -167,7 +167,15 @@ classdef CathodeLaserDist < handle
     % a pre-generated SeedBeam.
     %
     %   z_cathode : lab-frame z of the cathode plane (m)
-    %   pulse_t0  : centre time of the emission pulse (s, often = Tini)
+    %   pulse_t0  : ImpactT-equivalent leading-edge / Tini reference (s).
+    %               Internally we shift this forward by the pulse half-window
+    %               so lt's CathodeSource (which centers the CDF on its own
+    %               pulse_t0) reproduces ImpactT's behind-cathode model
+    %               (head emerges at t=Tini, tail later via drift). Without
+    %               this shift, lt's bunch was centered ON Tini -- 4*sigma
+    %               earlier than imp's bunch, putting it in a different RF
+    %               phase region and causing 6× longitudinal mismatch on
+    %               long-Gaussian setups (Substrate, FWHM=23 ps).
     %
     % Distribution-shape mapping (CathodeSource now supports all three
     % temporal and transverse shapes that CathodeLaserDist does):
@@ -180,21 +188,29 @@ classdef CathodeLaserDist < handle
         if nargin < 2 || isempty(z_cathode), z_cathode = 0.0;        end
         if nargin < 3 || isempty(pulse_t0),  pulse_t0  = 0.0;        end
 
-        % Temporal pulse: shape + size convention
+        % Temporal pulse: shape + size convention + leading-edge -> centre offset.
+        % ImpactT pulse_t0 is the leading edge of the pulse (CathodeLaserDist
+        % does z = z - max(z) so the head crosses cathode at t=Tini). lt's
+        % CathodeSource samples symmetrically around its pulse_t0, so we
+        % advance pulse_t0 by the pulse's half-window so the centroids match.
         switch lower(obj.t_type)
             case 'gaussian'
                 t_pulse_shape = 'gaussian';
                 t_dur         = 2 * sqrt(2*log(2)) * obj.sigma_t;   % FWHM
+                t_offset      = 4 * obj.sigma_t;                    % half-window for typical N (Hammersley max ~ 4 sigma)
             case 'super_gaussian'
                 t_pulse_shape = 'super_gaussian';
                 t_dur         = obj.sigma_t;                        % sigma
+                t_offset      = 4 * obj.sigma_t;                    % CathodeSource SG support is ±4*sigma
             case 'uniform'
                 t_pulse_shape = 'flat_top';
                 t_dur         = 2 * sqrt(3) * obj.sigma_t;          % full width
+                t_offset      = sqrt(3) * obj.sigma_t;              % half-width
             otherwise
                 error('CathodeLaserDist:toCathodeSource:badTType', ...
                       'unrecognised t_type ''%s''', obj.t_type);
         end
+        pulse_t0 = pulse_t0 + t_offset;
 
         % Transverse: spot + profile
         switch lower(obj.r_type)

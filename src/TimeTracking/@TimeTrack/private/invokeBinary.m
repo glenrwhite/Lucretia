@@ -14,8 +14,17 @@ end
 envP = timetracking.linux_matlab_env_prefix();
 
 if nranks <= 1
-    cmd = sprintf('cd "%s" && %s"%s" "%s" 2>&1', ...
-                  obj.work_dir, envP, obj.binary, in_file);
+    % Single-rank: clamp OMP_NUM_THREADS to 6 on Apple Silicon hybrid
+    % CPUs (M-series). Empirical sweep on Substrate (2026-05-19):
+    %   1=174s, 2=102s, 4=64s, 6=59s (sweet spot), 8=90s, 10=179s.
+    % 8+ spills onto efficiency cores and regresses below 1-thread.
+    % Override via OMP_NUM_THREADS env if user has explicitly set it.
+    omp_clamp = '';
+    if isempty(getenv('OMP_NUM_THREADS_LT_OVERRIDE'))
+        omp_clamp = 'OMP_NUM_THREADS=6 ';
+    end
+    cmd = sprintf('cd "%s" && %s%s"%s" "%s" 2>&1', ...
+                  obj.work_dir, envP, omp_clamp, obj.binary, in_file);
 else
     mpirun = '';
     if isprop(obj, 'mpirun_bin') && ~isempty(obj.mpirun_bin)

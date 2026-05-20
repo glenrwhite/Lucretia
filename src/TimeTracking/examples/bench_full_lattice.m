@@ -30,11 +30,16 @@ function bench_full_lattice(varargin)
 %                                   in end-of-L0A eps_nx (5.04x vs 4.14x with
 %                                   smooth=2 alone; tradeoff favors fidelity to
 %                                   imp's mesh convention).
-%   sc_rho_smooth_passes = 8     -- baseline. Pass 12 + sc_shape_order=2 for
-%                                   high-quality runs at ncell>=48 (per-cell
-%                                   SC noise drops 9.2% -> 6.55%; eps_nx ratio
-%                                   2.428 -> 2.379). At ncell=32 this combo
-%                                   adds ~18% runtime for no eps_nx benefit.
+%   sc_rho_smooth_passes = 0     -- default changed 2026-05-19 (task #21):
+%                                   imp does NO rho smoothing, and Substrate
+%                                   eps EOL ratio improved 4.21 → 3.74 (-11%)
+%                                   AND runtime dropped 40% (170s → 104s) at
+%                                   sm=0 vs prior sm=8 default. Pass 12 +
+%                                   sc_shape_order=2 for high-quality runs
+%                                   at ncell>=48 (per-cell SC noise drops
+%                                   9.2% -> 6.55%; eps_nx ratio 2.428 ->
+%                                   2.379). At ncell=32 this combo adds
+%                                   ~18% runtime for no eps_nx benefit.
 %   sc_shape_order = 1           -- CIC. Pass 2 (TSC) only at ncell>=48.
 %   disable_self_force = true    -- imp does NO self-force subtraction; lt's
 %                                   kSelfForceFactor=0.62 is empirically neutral
@@ -68,7 +73,7 @@ p.addParameter('disable_sol1', false, @islogical);                        % drop
 p.addParameter('disable_wakefield', false, @islogical);                   % drop wakefield_L0A from lattice (eps_nx investigation)
 p.addParameter('sc_image_cutoff', 0.05, @isnumeric);                       % m: cathode image-charge applies only when z_above_cathode < this. Default 0.05m. IMPACT-T's deck uses 0.01m (Zimage); larger lt cutoff may over-focus particles toward axis (task #60 candidate).
 p.addParameter('sc_image_enabled', true, @islogical);                      % master switch for cathode image charge. Default ON (matches imp Flagimg=1).
-p.addParameter('sc_rho_smooth_passes', 8, @isnumeric);                    % # of binomial-smoother passes on rho before IGF solve. Default 8 is the runtime/quality balance from task #59. Pass 12 + sc_shape_order=2 for high-quality runs at ncell>=48: per-cell SC noise drops to 6.55%, eps_nx ratio improves 2.428->2.379. At ncell=32 the combo adds ~18% cost for no eps_nx benefit.
+p.addParameter('sc_rho_smooth_passes', 0, @isnumeric);                    % # of binomial-smoother passes on rho before IGF solve. Default 0 (2026-05-19 change, task #21): matches imp's zero smoothing; Substrate eps EOL 4.21→3.74 + 40% runtime reduction. Pass 12 + sc_shape_order=2 for high-quality runs at ncell>=48 (per-cell SC noise drops to 6.55%, eps_nx ratio 2.428->2.379, but adds ~18% cost at ncell=32 for no eps_nx benefit).
 p.addParameter('sc_green_cache_tol', 0.01, @isnumeric);                    % relative tolerance for IGF Green-fn cache: skip setGreensFunction when (cell_size, z_shift) drift by less than this fraction. Default 0.01 (1%): saves 24% wall-time on production adaptive-mesh bench with -0.17% eps_nx (within run-to-run noise) and ~32% on static-mesh runs. Pass 0 for bit-equivalent baseline. tol=0.05 is WORSE than 0.01 (slower in noise + -2.8% eps_nx); 0.01 is the sweet spot.
 p.addParameter('slice_radius_factor',  0, @isnumeric);                   % override slice SC bunch radius: a = factor * sigma_xy (default 2.0; pass 0 to use default)
 p.addParameter('sc_hybrid_z_adaptive', false, @islogical);               % SC mesh hybrid mode: static xy + adaptive z (overrides sc_static_xrad behavior in z)

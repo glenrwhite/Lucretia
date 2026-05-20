@@ -259,6 +259,17 @@ private:
     bool        m_behind_cathode_drift_on = false;
     amrex::Real m_cathode_z               = 0.0;
     amrex::Real m_behind_cathode_betazini = 0.0;
+    // Mirrors ImpactT's `flagcathode` state (AccSimulator.f90 ~1474):
+    // starts true (all particles behind cathode → universal-betazini
+    // emission drift). Flips to false PERMANENTLY at the start of the
+    // first step where max(z_alive) > m_cathode_z. From then on, behind-
+    // cathode particles drift at their OWN velocity (cathode_z=-inf
+    // effectively), which spreads their emergence times so they sample
+    // different RF phases — the physics imp produces. Without this
+    // toggle, lt's universal drift forces all particles to emerge in a
+    // narrow time window with the same RF phase and the bunch never
+    // gains its proper transverse spread through the gun.
+    bool        m_flagcathode_active      = true;
     bool        m_use_centroid_phase      = false;
     amrex::Real m_centroid_t_offset       = 0.0;
     bool        m_use_midstep_field       = false;
@@ -282,6 +293,18 @@ private:
     int              m_trace_interval = 0; // write every N steps (0 = off)
     std::string      m_trace_path     = "/tmp/lt_particle_trace.bin";
     FILE*            m_trace_file     = nullptr;
+
+    // Per-particle FIELD-GATHER audit (task #19). Writes one CSV row per
+    // (step, particle) for selected particles, captured INSIDE the kick
+    // loop so we record the external field gathered at the particle's
+    // current position + the time argument actually used by the gather.
+    // CSV columns: step, t, id, x, y, z, ux, uy, uz, Ex, Ey, Ez, Bx, By, Bz
+    // Used to compare lt vs imp at matched particle indices and verify
+    // they see the same fields at the same positions.
+    std::vector<int> m_audit_ids;
+    int              m_audit_interval = 0;
+    std::string      m_audit_path     = "/tmp/lt_field_audit.csv";
+    FILE*            m_audit_file     = nullptr;
 public:
     void set_self_force_disabled (bool on) noexcept { m_self_force_disabled = on; }
     bool self_force_disabled () const noexcept { return m_self_force_disabled; }
@@ -294,6 +317,17 @@ public:
         m_trace_ids      = ids;
         m_trace_interval = interval;
         m_trace_path     = path;
+    }
+
+    /** Enable per-particle field-gather audit (task #19). For each tracked
+     *  particle, write one CSV row per audit step capturing the particle
+     *  state + external fields at the kick-loop gather point. */
+    void set_field_audit (const std::vector<int>& ids, int interval,
+                          const std::string& path = "/tmp/lt_field_audit.csv") noexcept
+    {
+        m_audit_ids      = ids;
+        m_audit_interval = interval;
+        m_audit_path     = path;
     }
 };
 

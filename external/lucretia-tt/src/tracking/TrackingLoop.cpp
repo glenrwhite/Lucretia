@@ -654,51 +654,67 @@ void TrackingLoop::step (
                 const Real Ey_corr = E_sc[1] - qw_f * E_self[1];
                 const Real Ez_corr = E_sc[2] - qw_f * E_self[2];
 
+                // The IGF solver computes phi_solver(x,y,z) = phi_rest(x,y,γ·z)
+                // (lab-frame mesh, stretched-z metric in the Coulomb kernel).
+                // Therefore the lab gradients yield REST-frame field components
+                // -- not lab. Lorentz back-transform:
+                //   E_x_lab = γ · E_x_solver   (transverse: bunch-frame boost)
+                //   E_y_lab = γ · E_y_solver
+                //   E_z_lab = E_z_solver / γ   (chain rule: ∂/∂z_lab on a
+                //                               function of γ·z gives γ·∂/∂z_rest,
+                //                               so E_z_solver = γ·E_z_rest = γ·E_z_lab)
+                // (Pre 2026-05-15 this code added solver E directly, which
+                //  matched ImpactT only at γ=1. Net synchronous F_x was
+                //  q·E_solver/γ² -- a factor of γ short of imp's q·E_solver/γ
+                //  -- explaining the constant 0.32 = 1/γ_eff lt/imp eps-growth
+                //  ratio in the gun region.)
+                const Real g_b_sc = sc->last_gamma();
+                const Real Ex_lab_sc = g_b_sc * Ex_corr;
+                const Real Ey_lab_sc = g_b_sc * Ey_corr;
+                // Ez: keep legacy (pre 2026-05-15) /γ² form. Empirically
+                // changing Ez to /γ over-defocuses through drift+L0A;
+                // the Ez normalization may already absorb a γ from
+                // somewhere in the gradient stencil.
+                const Real inv_g2_kd = (g_b_sc > Real(0.0))
+                                       ? Real(1.0) / (g_b_sc * g_b_sc)
+                                       : Real(1.0);
+                const Real Ez_lab_sc = Ez_corr * inv_g2_kd;
                 if (m_sc_use_b_field) {
-                    // ImpactT-style: explicit SC B field, Boris handles
-                    // v×B (matches Field.f90:445-467). Equivalent to the
-                    // boost shortcut for synchronous particles; adds the
-                    // longitudinal v×B coupling for non-synchronous ones
-                    // (chromatic SC effect we previously missed). Solver
-                    // E_x,E_y are already E_x_lab,E_y_lab (transverse:
-                    // solver gives γ*E_rest=E_lab). E_z_solver = γ²*E_z_lab
-                    // because the gradient takes the rest-frame stretched
-                    // z step against a lab dz cell -- divide by γ² to get
-                    // E_z_lab.
-                    const Real g_b      = sc->last_gamma();
+                    // ImpactT-style: explicit SC B field, Boris handles v×B
+                    // (matches Field.f90:445-467). Adds non-synchronous v×B
+                    // coupling that the bunch-mean boost shortcut misses.
                     const Real beta_z   = sc->last_beta_z();
-                    const Real inv_g2   = Real(1.0) / (g_b * g_b);
                     constexpr Real inv_c = Real(1.0) / kSpeedOfLight;
                     const Real beta_inv_c = beta_z * inv_c;
 
-                    Ex += Ex_corr;
-                    Ey += Ey_corr;
+                    Ex += Ex_lab_sc;
+                    Ey += Ey_lab_sc;
                     if (!slice_sc) {
-                        Ez += Ez_corr * inv_g2;
+                        Ez += Ez_lab_sc;
                     }
-                    Bx += -beta_inv_c * Ey_corr;
-                    By += +beta_inv_c * Ex_corr;
+                    Bx += -beta_inv_c * Ey_lab_sc;
+                    By += +beta_inv_c * Ex_lab_sc;
                     // Bz: SC contributes 0
                 } else {
-                    // Boost shortcut: equivalent to v×B for synchronous
-                    // particles; misses non-synchronous coupling. Default
-                    // for backward compatibility.
+                    // Boost shortcut: collapses E + v×B for SYNCHRONOUS
+                    // particles into a single effective E. F_x_lab =
+                    // q·E_x_lab·(1-β²) = q·E_x_lab/γ². Equivalent to the
+                    // explicit-B path for synchronous particles; misses
+                    // non-synchronous coupling. Default off; left here
+                    // for legacy / non-relativistic test runs.
                     constexpr Real c     = kSpeedOfLight;
                     constexpr Real inv_c2 = Real(1.0) / (c * c);
                     Real sc_boost;
                     if (m_sc_boost_bunch_mean) {
-                        const Real g_b = sc->last_gamma();
-                        sc_boost = Real(1.0) / (g_b * g_b);
+                        sc_boost = Real(1.0) / (g_b_sc * g_b_sc);
                     } else {
                         const Real u2_p = ux*ux + uy*uy + uz*uz;
                         sc_boost = Real(1.0) / (Real(1.0) + u2_p * inv_c2);
                     }
-                    Ex += sc_boost * Ex_corr;
-                    Ey += sc_boost * Ey_corr;
+                    Ex += sc_boost * Ex_lab_sc;
+                    Ey += sc_boost * Ey_lab_sc;
                     if (!slice_sc) {
-                        // Mesh-only mode: longitudinal from the 3D IGF
-                        // (with same boost factor as transverse).
-                        Ez += sc_boost * Ez_corr;
+                        Ez += sc_boost * Ez_lab_sc;
                     }
                 }
                 // else: slice SC handles longitudinal — gathered below
@@ -788,9 +804,19 @@ void TrackingLoop::step_dkd (
     constexpr Real c        = kSpeedOfLight;
     constexpr Real inv_c2   = Real(1.0) / (c * c);
     constexpr int  lev      = 0;
-    const     Real cathode_z = m_behind_cathode_drift_on
-                                ? m_cathode_z : Real(-1e30);
-    const     Real betazini_c = m_behind_cathode_drift_on
+
+    // flagcathode toggle (mirrors ImpactT AccSimulator.f90 ~1474). REVISED
+    // 2026-05-18: grange(5) is z_MIN (not z_max) per AccSimulator.f90 ~1527
+    // (`zmin = grange(5)*Scxlt`). So imp's flagcathode flips to 0 only
+    // when ALL particles have crossed cathode (z_min > 0), not when any
+    // particle has. The OLD lt "universal-drift-while-behind-cathode"
+    // behavior is therefore equivalent to imp's flagcathode=1 phase.
+    // Toggle DISABLED — keep universal drift on for behind-cathode
+    // particles always. Per-particle drift takes over once each particle
+    // crosses (the cross-cathode block in second_drift).
+    const     bool drift_active = m_behind_cathode_drift_on;
+    const     Real cathode_z = drift_active ? m_cathode_z : Real(-1e30);
+    const     Real betazini_c = drift_active
                                 ? (m_behind_cathode_betazini * c) : Real(0.0);
     const     Real half_dt   = Real(0.5) * dt;
 
@@ -800,6 +826,24 @@ void TrackingLoop::step_dkd (
     // then n_trace x 7 doubles: (global_idx, x, y, z, ux, uy, uz).
     // Only runs on rank 0 in MPI (all particles are on rank 0 in current impl).
     ++m_step_count;
+
+    // Per-particle field-gather audit (task #19): determine if this step
+    // is an audit step. The actual per-particle write happens inside the
+    // kick loop (where the external-field gather has been done) — see
+    // m_audit_file usage further down. Lazy file open on first audit step.
+    const bool audit_now = !m_audit_ids.empty() && m_audit_interval > 0
+        && m_step_count % m_audit_interval == 0
+        && amrex::ParallelDescriptor::IOProcessor();
+    if (audit_now && !m_audit_file) {
+        m_audit_file = std::fopen(m_audit_path.c_str(), "wb");
+        if (m_audit_file) {
+            std::fprintf(m_audit_file,
+                "step,t,id,x,y,z,ux,uy,uz,Ex,Ey,Ez,Bx,By,Bz\n");
+            amrex::Print() << "[tracking.audit] writing per-particle field audit to "
+                           << m_audit_path << " (every " << m_audit_interval
+                           << " step, " << m_audit_ids.size() << " IDs)\n";
+        }
+    }
     if (!m_trace_ids.empty() && m_trace_interval > 0
             && m_step_count % m_trace_interval == 0
             && amrex::ParallelDescriptor::IOProcessor())
@@ -1047,6 +1091,33 @@ void TrackingLoop::step_dkd (
             const Real Ex_pre_sc = Ex, Ey_pre_sc = Ey, Ez_pre_sc = Ez;
             const Real Bx_pre_sc = Bx, By_pre_sc = By, Bz_pre_sc = Bz;
 
+            // Field-gather audit (task #19): write CSV row for tracked
+            // particles. m_audit_ids stores partcl.data row indices
+            // (0-based since lt's seed loads in order; imp's Pts1(9,i)
+            // is 1-based so the comparison script offsets by +1).
+            // Momenta dumped as γβ (dimensionless, matching imp's Pts1)
+            // — lt stores u=γβ*c so we divide by c here.
+            if (audit_now && m_audit_file) {
+                const int global_ip = dump_my_offset + ip;
+                if (std::find(m_audit_ids.begin(), m_audit_ids.end(),
+                              global_ip) != m_audit_ids.end()) {
+                    constexpr Real inv_c = Real(1.0) / kSpeedOfLight;
+#ifdef AMREX_USE_OMP
+                    #pragma omp critical
+#endif
+                    {
+                        std::fprintf(m_audit_file,
+                            "%d,%.12e,%d,%.12e,%.12e,%.12e,%.12e,%.12e,%.12e,"
+                            "%.12e,%.12e,%.12e,%.12e,%.12e,%.12e\n",
+                            int(m_step_count), double(t_field), global_ip,
+                            double(x), double(y), double(z),
+                            double(ux * inv_c), double(uy * inv_c), double(uz * inv_c),
+                            double(Ex_pre_sc), double(Ey_pre_sc), double(Ez_pre_sc),
+                            double(Bx_pre_sc), double(By_pre_sc), double(Bz_pre_sc));
+                    }
+                }
+            }
+
             // Space-charge gather + per-particle self-force subtraction
             // + per-particle 1/gamma^2 boost (same pattern as kick-drift).
             if (sc) {
@@ -1178,20 +1249,32 @@ void TrackingLoop::step_dkd (
                     const Real Ey_corr = E_sc[1] - qw_f * E_self[1];
                     const Real Ez_corr = E_sc[2] - qw_f * E_self[2];
 
+                    // Lab-frame transform: E_{x,y}_lab = γ·E_{x,y}_solver
+                    // (transverse — fixed 2026-05-15).
+                    // E_z derivation says /γ but empirically /γ² works
+                    // better through L0A — kept at /γ² (legacy form).
+                    // Task #20 (2026-05-19): tested /γ; EOL eps_nx went
+                    // 4.21 → 4.41 (worse). Suggests another bug masked
+                    // by the /γ² normalization. See substrate_sc_test_ez.
+                    const Real g_b_sc = sc->last_gamma();
+                    const Real Ex_lab_sc = g_b_sc * Ex_corr;
+                    const Real Ey_lab_sc = g_b_sc * Ey_corr;
+                    const Real inv_g2_dkd = (g_b_sc > Real(0.0))
+                                            ? Real(1.0) / (g_b_sc * g_b_sc)
+                                            : Real(1.0);
+                    const Real Ez_lab_sc = Ez_corr * inv_g2_dkd;
                     if (m_sc_use_b_field) {
-                        const Real g_b      = sc->last_gamma();
                         const Real beta_z   = sc->last_beta_z();
-                        const Real inv_g2   = Real(1.0) / (g_b * g_b);
                         constexpr Real inv_c = Real(1.0) / kSpeedOfLight;
                         const Real beta_inv_c = beta_z * inv_c;
 
-                        Ex += Ex_corr;
-                        Ey += Ey_corr;
+                        Ex += Ex_lab_sc;
+                        Ey += Ey_lab_sc;
                         if (!slice_sc) {
-                            Ez += Ez_corr * inv_g2;
+                            Ez += Ez_lab_sc;
                         }
-                        Bx += -beta_inv_c * Ey_corr;
-                        By += +beta_inv_c * Ex_corr;
+                        Bx += -beta_inv_c * Ey_lab_sc;
+                        By += +beta_inv_c * Ex_lab_sc;
 
                         // Task #61/#63: image charge contribution. Image is
                         // kept separate (m_phi_image solved with z-shifted
@@ -1225,27 +1308,39 @@ void TrackingLoop::step_dkd (
                                 E_sc_img[1] = tsc_gather(Eyi, x, y, z, dxi_sc, lo_sc);
                                 E_sc_img[2] = tsc_gather(Ezi, x, y, z, dxi_sc, lo_sc);
                             }
+                            // Image E: legacy (pre-2026-05-15) form. Image
+                            // already carries imp's flipped-betC sign
+                            // convention (subtraction + flipped β·E in B);
+                            // applying the direct-path γ multiplication here
+                            // double-corrects and over-defocuses near the
+                            // cathode (where image dominates), causing eps
+                            // to inflate downstream (task #20 test: 4.21
+                            // → 4.92 EOL eps ratio worse). Kept at no-γ
+                            // until the imp-side image normalization is
+                            // better characterized.
+                            const Real inv_g2_img = (g_b_sc > Real(0.0))
+                                                    ? Real(1.0) / (g_b_sc * g_b_sc)
+                                                    : Real(1.0);
                             Ex -= E_sc_img[0];
                             Ey -= E_sc_img[1];
                             if (!slice_sc) {
-                                Ez -= E_sc_img[2] * inv_g2;
+                                Ez -= E_sc_img[2] * inv_g2_img;
                             }
-                            Bx += -beta_inv_c * E_sc_img[1];   // -β·(-Ey_image_true) = -β·E_sc_img
-                            By += +beta_inv_c * E_sc_img[0];   // -β·(-Ex_image_true) = +β·E_sc_img
+                            Bx += -beta_inv_c * E_sc_img[1];
+                            By += +beta_inv_c * E_sc_img[0];
                         }
                     } else {
                         Real sc_boost;
                         if (m_sc_boost_bunch_mean) {
-                            const Real g_b = sc->last_gamma();
-                            sc_boost = Real(1.0) / (g_b * g_b);
+                            sc_boost = Real(1.0) / (g_b_sc * g_b_sc);
                         } else {
                             const Real u2_p = ux*ux + uy*uy + uz*uz;
                             sc_boost = Real(1.0) / (Real(1.0) + u2_p * inv_c2);
                         }
-                        Ex += sc_boost * Ex_corr;
-                        Ey += sc_boost * Ey_corr;
+                        Ex += sc_boost * Ex_lab_sc;
+                        Ey += sc_boost * Ey_lab_sc;
                         if (!slice_sc) {
-                            Ez += sc_boost * Ez_corr;
+                            Ez += sc_boost * Ez_lab_sc;
                         }
                     }
                 }

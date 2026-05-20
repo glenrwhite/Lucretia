@@ -114,13 +114,26 @@ struct CathodeSource
     amrex::Real pulse_cdf (amrex::Real t) const;
 
     /** Sample a transverse position (x, y) consistent with the chosen
-     *  TransverseProfile. Used internally by emit_new_particles; exposed
-     *  here for tests. */
-    void sample_xy (amrex::Real& x, amrex::Real& y) const;
+     *  TransverseProfile, given two pre-drawn uniform[0,1] inputs
+     *  (u_r drives radial / first-component; u_phi drives angle /
+     *  second-component). Used internally by emit_new_particles;
+     *  exposed here for tests. Switching from internal RNG to
+     *  caller-supplied uniforms lets emit_new_particles consume a
+     *  Hammersley low-discrepancy sequence (matches the MATLAB
+     *  CathodeLaserDist sampler used to generate ImpactT's
+     *  partcl.data so per-slice sampling noise is comparable). */
+    void sample_xy (amrex::Real u_r, amrex::Real u_phi,
+                    amrex::Real& x, amrex::Real& y) const;
 
     /** Build the tabulated CDFs used by SuperGaussian sampling. Called
      *  by the constructor; safe to re-call (rebuilds from scratch). */
     void build_lookup_tables ();
+
+    /** Build the Hammersley low-discrepancy table consumed by
+     *  emit_new_particles: m_n_macroparticles_total rows, kHammersleyDims
+     *  columns of uniform[0,1] samples. Cheap (~6 doubles per row) and
+     *  built lazily on first emission. */
+    void build_hammersley_table () const;
 
     /** No external field contribution. Image-charge handled by TrackingLoop. */
     AMREX_GPU_HOST_DEVICE AMREX_FORCE_INLINE
@@ -169,6 +182,24 @@ struct CathodeSource
     // ImpactT-style emission options (off by default).
     bool        m_longitudinal_thermal = false;
     amrex::Real m_z_init_spread        = 0.0;     // m: initial z in [z_cathode - spread, z_cathode]
+
+    // ---- Hammersley state (deterministic, low-discrepancy sampler) ----
+    //
+    // Pre-built on first call to emit_new_particles. Each row holds the
+    // 6 uniform[0,1] samples consumed for one particle:
+    //   col 0: i/N         -- t_birth fraction within step (best-uniformity dim)
+    //   col 1: vdc base 2  -- u_r  for sample_xy
+    //   col 2: vdc base 3  -- u_phi for sample_xy
+    //   col 3: vdc base 5  -- u_ux thermal momentum
+    //   col 4: vdc base 7  -- u_uy thermal momentum
+    //   col 5: vdc base 11 -- u_uz thermal (only when longitudinal_thermal)
+    //                         OR z-init-spread fraction (when z_init_spread>0)
+    // The same dim is reused for u_uz vs z_init since the two ImpactT-style
+    // options are not used together (slot is mutually exclusive in practice).
+    static constexpr int kHammersleyDims = 6;
+    mutable std::vector<amrex::Real> m_hammersley;       // size N * 6
+    mutable int                      m_n_emitted_count = 0;   // global running counter
+    mutable bool                     m_hammersley_built = false;
 };
 
 } // namespace elements

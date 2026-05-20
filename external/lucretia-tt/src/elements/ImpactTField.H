@@ -220,14 +220,26 @@ struct ImpactTField
             dEz_dz  = ezp1 * cos_t;
             dEz_dt  = -m_omega * ez1 * sin_t;
         }
+        // Higher-order Bz expansion (ImpactT getfldtfour_SolRF lines 932-934).
+        // For DC solenoid (omega=0, sin_t=0, cos_t=1), the additional terms
+        // are: Bx += scale_B * bzppp * x * r^2 / 16,
+        //      By += scale_B * bzppp * y * r^2 / 16,
+        //      Bz += -scale_B * bzpp1 * r^2 / 4.
+        // These are 2nd-order in r and matter for off-axis particles in a
+        // solenoid with rapidly varying axial gradient (gun-region solenoid
+        // entry/exit fringes).
+        amrex::Real bzpp1_local = amrex::Real(0.0);
+        amrex::Real bzppp_local = amrex::Real(0.0);
         if (m_B_nf > 0) {
-            amrex::Real dF;
+            amrex::Real F_b, dF_b, ddF_b, dddF_b;
             const amrex::Real zz = z_local - m_B_zmin - amrex::Real(0.5) * m_B_zlen;
-            amrex::Real F = fourier_eval(m_B_coeffs.data(), m_B_nf,
-                                         m_B_zlen, zz, &dF);
-            Bz_axis = m_scale_B * F  * cos_t;
-            dBz_dz  = m_scale_B * dF * cos_t;
-            dBz_dt  = -m_omega  * m_scale_B * F * sin_t;
+            fourier_eval_higher(m_B_coeffs.data(), m_B_nf, m_B_zlen, zz,
+                                F_b, dF_b, ddF_b, dddF_b);
+            Bz_axis = m_scale_B * F_b   * cos_t;
+            dBz_dz  = m_scale_B * dF_b  * cos_t;
+            dBz_dt  = -m_omega  * m_scale_B * F_b * sin_t;
+            bzpp1_local = m_scale_B * ddF_b;
+            bzppp_local = m_scale_B * dddF_b;
         }
 
         // Higher-order corrections (in 1/m^2 effective at given r^2)
@@ -235,8 +247,13 @@ struct ImpactTField
         const amrex::Real f1_r2  = f1  * r2;
         const amrex::Real f1p_r2 = f1p * r2;
 
+        // Higher-order Bz r^2 correction (ImpactT line 934, DC term):
+        //   Bz = Bz_axis - bzpp1*r^2/4
+        // For our standing-wave RF gun (B-block empty), this term is 0.
+        // For solenoid (E-block empty, B-block has Fourier coefs),
+        // bzpp1 = scale_B * d^2F/dz^2 -- non-zero near solenoid fringes.
         Ez = (ez1 + f1_r2) * cos_t;
-        Bz = Bz_axis;
+        Bz = Bz_axis - bzpp1_local * r2 * amrex::Real(0.25) * cos_t;
 
         // Ex, Ey: paraxial transverse with f1p correction (ImpactT line 873)
         Ex = -x * (ezp1 * amrex::Real(0.5) + f1p_r2 * amrex::Real(0.25)) * cos_t
@@ -244,13 +261,18 @@ struct ImpactTField
         Ey = -y * (ezp1 * amrex::Real(0.5) + f1p_r2 * amrex::Real(0.25)) * cos_t
            - amrex::Real(0.5) * x * dBz_dt;
 
-        // Bx, By: dEz/dt-driven contribution with f1 correction (ImpactT line 876)
-        // tmpbx = pos(2)*xlrep/c * (ez1/2 + f1*r^2/4) * sin
+        // Bx, By: dEz/dt-driven contribution with f1 correction (ImpactT line 876),
+        // plus higher-order solenoid r^3 correction (ImpactT lines 932-933):
+        //   Bx += scale_B * bzppp * x * r^2 / 16
+        //   By += scale_B * bzppp * y * r^2 / 16
+        // (DC term, multiplied by cos_t which is 1 for solenoid).
         const amrex::Real xlrep_over_c = m_omega / (c * c);
         Bx = -amrex::Real(0.5) * x * dBz_dz
-           + y * xlrep_over_c * (ez1 * amrex::Real(0.5) + f1_r2 * amrex::Real(0.25)) * sin_t;
+           + y * xlrep_over_c * (ez1 * amrex::Real(0.5) + f1_r2 * amrex::Real(0.25)) * sin_t
+           + bzppp_local * x * r2 * amrex::Real(1.0/16.0) * cos_t;
         By = -amrex::Real(0.5) * y * dBz_dz
-           - x * xlrep_over_c * (ez1 * amrex::Real(0.5) + f1_r2 * amrex::Real(0.25)) * sin_t;
+           - x * xlrep_over_c * (ez1 * amrex::Real(0.5) + f1_r2 * amrex::Real(0.25)) * sin_t
+           + bzppp_local * y * r2 * amrex::Real(1.0/16.0) * cos_t;
     }
 
     // Block 1: E_z Fourier

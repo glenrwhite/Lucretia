@@ -22,6 +22,57 @@ constexpr amrex::Real kFwhmToSigma    =  1.0 / (2.0 * 1.17741002251547469);
 
 constexpr int kSGTableN = 4096;     // matches the MATLAB CathodeLaserDist sampler
 
+// van der Corput sequence in base b. Bit-reverses the integer i in base b.
+amrex::Real van_der_corput (int i, int b)
+{
+    amrex::Real x = 0.0;
+    amrex::Real f = 1.0 / amrex::Real(b);
+    int k = i;
+    while (k > 0) {
+        x += f * amrex::Real(k % b);
+        k /= b;
+        f /= amrex::Real(b);
+    }
+    return x;
+}
+
+// Acklam's rational approximation to the inverse standard-Normal CDF.
+// Accurate to ~1e-9 over (1e-15, 1 - 1e-15). Used to convert Hammersley
+// uniforms to Normal samples (replaces amrex::RandomNormal).
+amrex::Real normal_inv_cdf (amrex::Real p)
+{
+    static constexpr amrex::Real a[6] = {
+        -3.969683028665376e+01,  2.209460984245205e+02, -2.759285104469687e+02,
+         1.383577518672690e+02, -3.066479806614716e+01,  2.506628277459239e+00};
+    static constexpr amrex::Real b[5] = {
+        -5.447609879822406e+01,  1.615858368580409e+02, -1.556989798598866e+02,
+         6.680131188771972e+01, -1.328068155288572e+01};
+    static constexpr amrex::Real c[6] = {
+        -7.784894002430293e-03, -3.223964580411365e-01, -2.400758277161838e+00,
+        -2.549732539343734e+00,  4.374664141464968e+00,  2.938163982698783e+00};
+    static constexpr amrex::Real d[4] = {
+         7.784695709041462e-03,  3.224671290700398e-01,  2.445134137142996e+00,
+         3.754408661907416e+00};
+    if (p < 1e-15)        p = 1e-15;
+    else if (p > 1 - 1e-15) p = 1 - 1e-15;
+    amrex::Real q, r, x;
+    if (p < 0.02425) {
+        q = std::sqrt(-2.0 * std::log(p));
+        x = (((((c[0]*q+c[1])*q+c[2])*q+c[3])*q+c[4])*q+c[5]) /
+            ((((d[0]*q+d[1])*q+d[2])*q+d[3])*q+1.0);
+    } else if (p > 0.97575) {
+        q = std::sqrt(-2.0 * std::log(1.0 - p));
+        x = -(((((c[0]*q+c[1])*q+c[2])*q+c[3])*q+c[4])*q+c[5]) /
+             ((((d[0]*q+d[1])*q+d[2])*q+d[3])*q+1.0);
+    } else {
+        q = p - 0.5;
+        r = q * q;
+        x = (((((a[0]*r+a[1])*r+a[2])*r+a[3])*r+a[4])*r+a[5]) * q /
+            (((((b[0]*r+b[1])*r+b[2])*r+b[3])*r+b[4])*r+1.0);
+    }
+    return x;
+}
+
 } // anonymous
 
 
@@ -102,26 +153,34 @@ void CathodeSource::build_lookup_tables ()
 }
 
 
-void CathodeSource::sample_xy (amrex::Real& x, amrex::Real& y) const
+void CathodeSource::sample_xy (amrex::Real u_r, amrex::Real u_phi,
+                               amrex::Real& x, amrex::Real& y) const
 {
     using amrex::Real;
+    // Clamp u_r away from 1.0 to keep log() finite (Gaussian-radial path).
+    if (u_r < 1e-15)        u_r = 1e-15;
+    else if (u_r > 1 - 1e-15) u_r = 1 - 1e-15;
+    const Real th = Real(2.0) * kPi * u_phi;
     switch (m_transverse_profile) {
     case TransverseProfile::Gaussian: {
-        x = m_spot_size * Real(amrex::RandomNormal(0.0, 1.0));
-        y = m_spot_size * Real(amrex::RandomNormal(0.0, 1.0));
+        // Radial Gaussian inverse CDF: r = sigma * sqrt(-2 ln(1 - u)).
+        // Matches CathodeLaserDist's r_type='gaussian' sampling so the
+        // joint (r, phi) realization is the same dimensionality and
+        // ordering as imp's partcl.data.
+        const Real r = m_spot_size * std::sqrt(-2.0 * std::log(1.0 - u_r));
+        x = r * std::cos(th);
+        y = r * std::sin(th);
         break;
     }
     case TransverseProfile::UniformDisk: {
-        const Real r  = m_spot_size * std::sqrt(Real(amrex::Random()));
-        const Real th = Real(2.0) * kPi * Real(amrex::Random());
+        const Real r = m_spot_size * std::sqrt(u_r);
         x = r * std::cos(th);
         y = r * std::sin(th);
         break;
     }
     case TransverseProfile::SuperGaussian: {
         // Inverse-CDF table lookup
-        const Real u  = Real(amrex::Random());
-        const Real fi = u * Real(kSGTableN - 1);
+        const Real fi = u_r * Real(kSGTableN - 1);
         int        i  = int(fi);
         if (i < 0)               i = 0;
         if (i >= kSGTableN - 1)  i = kSGTableN - 2;
@@ -130,12 +189,31 @@ void CathodeSource::sample_xy (amrex::Real& x, amrex::Real& y) const
             ? Real(0.0)
             : m_radial_inv_cdf_table[i]
               + frac * (m_radial_inv_cdf_table[i + 1] - m_radial_inv_cdf_table[i]);
-        const Real th = Real(2.0) * kPi * Real(amrex::Random());
         x = r * std::cos(th);
         y = r * std::sin(th);
         break;
     }
     }
+}
+
+
+void CathodeSource::build_hammersley_table () const
+{
+    if (m_n_macroparticles_total <= 0) { m_hammersley_built = true; return; }
+    const int N = m_n_macroparticles_total;
+    m_hammersley.assign(std::size_t(N) * kHammersleyDims, amrex::Real(0.0));
+    // Dim 0: i/N (best uniformity -- maps onto t_birth fraction)
+    // Dims 1..5: van der Corput in primes 2, 3, 5, 7, 11
+    static constexpr int primes[5] = {2, 3, 5, 7, 11};
+    for (int i = 0; i < N; ++i) {
+        m_hammersley[std::size_t(i) * kHammersleyDims + 0] =
+            (amrex::Real(i) + amrex::Real(0.5)) / amrex::Real(N);
+        for (int d = 1; d < kHammersleyDims; ++d) {
+            m_hammersley[std::size_t(i) * kHammersleyDims + d] =
+                van_der_corput(i + 1, primes[d - 1]);
+        }
+    }
+    m_hammersley_built = true;
 }
 
 
@@ -210,6 +288,21 @@ int CathodeSource::emit_new_particles (
         return 0;
     }
 
+    // Lazily build the Hammersley low-discrepancy table on first emission.
+    // All per-particle uniforms below are read from this table by global
+    // index (m_n_emitted_count + i), so the marginal AND joint distributions
+    // match the MATLAB CathodeLaserDist sampler that produces ImpactT's
+    // partcl.data -- this drops per-slice sampling noise vs the prior
+    // amrex::Random/RandomNormal path.
+    if (!m_hammersley_built) { build_hammersley_table(); }
+
+    // Cap n_emit at the remaining table budget. The CDF-based n_emit estimate
+    // can over-shoot the total in the final emission step due to round().
+    if (m_n_emitted_count + n_emit > m_n_macroparticles_total) {
+        n_emit = m_n_macroparticles_total - m_n_emitted_count;
+    }
+    if (n_emit <= 0) { return 0; }
+
     // Initial offset above the cathode. 1 nm gives unphysically huge
     // image-charge force at the first step; 1 um is a reasonable
     // approximation to the photoemission depth and keeps the image-force
@@ -226,65 +319,51 @@ int CathodeSource::emit_new_particles (
 
     std::vector<amrex::ParticleReal> xs(n_emit), ys(n_emit), zs(n_emit);
     std::vector<amrex::ParticleReal> uxs(n_emit), uys(n_emit), uzs(n_emit);
+    std::vector<amrex::ParticleReal> t_births(n_emit);
 
     for (int i = 0; i < n_emit; ++i)
     {
-        // Transverse position via the configured profile (Gaussian,
-        // UniformDisk, or SuperGaussian via inverse-CDF table).
+        const std::size_t row = std::size_t(m_n_emitted_count + i)
+                              * kHammersleyDims;
+        const amrex::Real u_t   = m_hammersley[row + 0];
+        const amrex::Real u_r   = m_hammersley[row + 1];
+        const amrex::Real u_phi = m_hammersley[row + 2];
+        const amrex::Real u_ux  = m_hammersley[row + 3];
+        const amrex::Real u_uy  = m_hammersley[row + 4];
+        const amrex::Real u_z   = m_hammersley[row + 5];   // shared u_uz / z_init slot
+
+        // Transverse position via the configured profile.
         amrex::Real xi = 0.0, yi = 0.0;
-        sample_xy(xi, yi);
+        sample_xy(u_r, u_phi, xi, yi);
         xs[i] = amrex::ParticleReal(xi);
         ys[i] = amrex::ParticleReal(yi);
+
         if (m_z_init_spread > amrex::Real(0.0)) {
-            // Uniform random behind cathode. Combined with the universal-
-            // betazini drift in TrackingLoop, this gives a uniform spread
-            // in cross-cathode times of width z_init_spread/(betazini*c).
             zs[i] = m_z_cathode
-                  - m_z_init_spread * amrex::ParticleReal(amrex::Random());
+                  - m_z_init_spread * amrex::ParticleReal(u_z);
         } else {
             zs[i] = m_z_cathode + z_offset;
         }
 
-        // Thermal momentum (proper-velocity units)
-        uxs[i] = sigma_u * amrex::ParticleReal(amrex::RandomNormal(0.0, 1.0));
-        uys[i] = sigma_u * amrex::ParticleReal(amrex::RandomNormal(0.0, 1.0));
+        // Thermal momentum: invert standard-Normal CDF on Hammersley
+        // uniforms. Matches CathodeLaserDist::generate's gauss_inv path.
+        uxs[i] = sigma_u * amrex::ParticleReal(normal_inv_cdf(u_ux));
+        uys[i] = sigma_u * amrex::ParticleReal(normal_inv_cdf(u_uy));
         if (m_longitudinal_thermal) {
-            // Half-Maxwell on uz: |Normal(0, sigma_u)|. Per-particle
-            // thermal longitudinal momentum matching the MTE = m_mte
-            // convention (mean uz = sigma_u * sqrt(2/pi), std uz =
-            // sigma_u * sqrt(1 - 2/pi)). With m_mte = 414 meV this gives
-            // mean uz ~ 2.16e5 m/s, std uz ~ 1.63e5 m/s -- numerically
-            // identical to ImpactT's distgen-generated partcl.data
-            // distribution (verified 2026-05-04).
-            uzs[i] = sigma_u
-                * amrex::ParticleReal(std::abs(amrex::RandomNormal(0.0, 1.0)));
+            // Half-Maxwell on uz: |Normal(0, sigma_u)|. Re-uses the same
+            // Hammersley dim that drives z_init_spread (the two ImpactT-
+            // style options aren't used together in practice).
+            uzs[i] = sigma_u * amrex::ParticleReal(
+                std::abs(normal_inv_cdf(u_z)));
         } else {
-            uzs[i] = 0.0;  // legacy: no longitudinal kick at emission
+            uzs[i] = 0.0;
         }
-    }
 
-    // Birth time: sample UNIFORMLY in [t, t+dt] per particle.
-    //
-    // Previously all particles in an emission step got the same
-    // mid-step t_birth = t + dt/2, then were pushed by full dt with
-    // identical initial conditions (z = z_cathode + 1 um, uz = 0,
-    // thermal MTE on ux,uy). Result: particles in one emission step
-    // saw IDENTICAL field history -> identical final energy ->
-    // discrete energy clusters (one spike per emission step) in the
-    // exit beam. With 1M macros over ~20 emission steps this gave
-    // P-spikes 5x the median bin count, visible in fort.18-style
-    // histograms.
-    //
-    // Sampling t_birth uniformly within [t, t+dt] per particle gives
-    // each particle a different effective alive-duration on its first
-    // step. The TrackingLoop kernel uses dt_eff = min(dt, t+dt-t_birth)
-    // to accumulate field kicks over only that fraction of dt for
-    // freshly-emitted particles. This breaks the synchronization that
-    // produced the spikes without changing the bunch's mean dynamics.
-    std::vector<amrex::ParticleReal> t_births(n_emit);
-    for (int i = 0; i < n_emit; ++i) {
-        t_births[i] = amrex::ParticleReal(
-            t + dt * amrex::Real(amrex::Random()));
+        // Birth time: spread within [t, t+dt] using the Hammersley
+        // best-uniformity dim (i/N). Per-particle stagger breaks the
+        // emission-step P-spike pattern (see prior comment) without
+        // injecting RNG noise.
+        t_births[i] = amrex::ParticleReal(t + dt * u_t);
     }
 
     bunch.AddParticlesFromArrays(
@@ -293,6 +372,7 @@ int CathodeSource::emit_new_particles (
         uxs.data(), uys.data(), uzs.data(),
         weight, t_births.data());
 
+    m_n_emitted_count += n_emit;
     return n_emit;
 }
 

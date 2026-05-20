@@ -868,6 +868,10 @@ int main (int argc, char* argv[])
         amrex::Vector<int> particle_trace_ids;
         int                particle_trace_interval = 0;
         std::string        particle_trace_path     = "/tmp/lt_particle_trace.bin";
+        // Per-particle field-gather audit (task #19): CSV of (id, x,y,z, ux,uy,uz, Ex..Bz)
+        amrex::Vector<int> field_audit_ids;
+        int                field_audit_interval = 0;
+        std::string        field_audit_path     = "/tmp/lt_field_audit.csv";
         {
             amrex::ParmParse pp_track("tracking");
             pp_track.query("dt", dt);
@@ -894,6 +898,9 @@ int main (int argc, char* argv[])
             pp_track.queryarr("particle_trace_ids",      particle_trace_ids);
             pp_track.query("particle_trace_interval",    particle_trace_interval);
             pp_track.query("particle_trace_path",        particle_trace_path);
+            pp_track.queryarr("field_audit_ids",         field_audit_ids);
+            pp_track.query("field_audit_interval",       field_audit_interval);
+            pp_track.query("field_audit_path",           field_audit_path);
             pp_track.query("trace_file",              trace_file);
             pp_track.query("trace_every",             trace_every);
         }
@@ -1005,6 +1012,14 @@ int main (int argc, char* argv[])
             amrex::Print() << "[tracking] particle trace: " << ids_v.size()
                            << " particles, every " << particle_trace_interval
                            << " steps -> " << particle_trace_path << "\n";
+        }
+        // Per-particle field-gather audit setup (task #19).
+        if (!field_audit_ids.empty() && field_audit_interval > 0) {
+            std::vector<int> ids_v(field_audit_ids.begin(), field_audit_ids.end());
+            tracker.set_field_audit(ids_v, field_audit_interval, field_audit_path);
+            amrex::Print() << "[tracking] field audit: " << ids_v.size()
+                           << " particles, every " << field_audit_interval
+                           << " steps -> " << field_audit_path << "\n";
         }
         amrex::Real t = t_start;
         bool        switched  = false;   // true after z-switch (phase 2 → 3)

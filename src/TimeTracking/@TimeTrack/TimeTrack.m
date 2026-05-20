@@ -44,6 +44,9 @@ properties
     particle_trace_ids      = []                                 % global particle indices to trace (write pos+mom every particle_trace_interval steps)
     particle_trace_interval = 10                                 % write every N steps (default 10)
     particle_trace_path     = '/tmp/lt_particle_trace.bin'       % trajectory trace output path
+    field_audit_ids         = []                                 % task #19 audit: 0-based partcl.data row indices to dump (id, x,y,z, ux,uy,uz, Ex,Ey,Ez, Bx,By,Bz) as CSV
+    field_audit_interval    = 0                                  % write every N steps (0 = off)
+    field_audit_file        = '/tmp/lt_field_audit.csv'          % CSV output path for the field audit
     dump_kicks_at_steps     = []                                 % vector of int step indices at which to dump per-particle SC kicks (DKD path only). Files at /tmp/lt_part_kicks_step<N>.bin.
     dump_kicks_at_times     = []                                 % vector of double simulation times (s) at which to dump per-particle SC kicks (each fires at first step with t>=target). Useful for cross-code comparison when dt schedules differ.
     dump_kicks_path_prefix  = ''                                 % prefix for the dump files; empty -> /tmp/lt_part_kicks_step
@@ -199,7 +202,13 @@ methods
     %       row 5: z   (m, relative to bunch z-centroid)
     %       row 6: P   (GeV/c, total momentum |p|*c in GeV)
     %   B.Bunch.Q = 1 x N: physical charge per macroparticle (C)
-    %   B.Bunch.stop = 1 x N: zeros (no particles dead initially)
+    %   B.Bunch.stop = 1 x N: 0 = alive, 1 = killed upstream (collimator
+    %                  etc.). Dead particles remain in the matrix at their
+    %                  park location (z_rel = -1e9) so particle-ID
+    %                  alignment is preserved; downstream code filters
+    %                  via stop == 0. lt's on-disk signal for "dead" is
+    %                  z < -1e6 (Collimator.cpp parks at z = -1e9; the
+    %                  in-memory IntSoA::alive flag is not dumped).
     %
     % Note: rows 1..5 are taken at the dump TIME (not at a specific s).
     % If the bunch is short relative to its transit length scale (so
@@ -243,22 +252,45 @@ methods
         yy = double(target.y(:));
         zz = double(target.z(:));
 
+        % Identify dead/collimated particles via lt's park sentinel
+        % (Collimator.cpp parks killed particles at z = -1e9; the
+        % in-memory IntSoA::alive flag is not written to dumps).
+        dead = zz < -1.0e6;
+        live = ~dead;
+
         % Lucretia row 6 = total momentum P in GeV/c.
         % |p| in kg.m/s -> GeV/c via |p|*c / 1.602e-19 / 1e9.
         p2  = px.*px + py.*py + pz.*pz;
         Pgev = sqrt(p2) * c / 1.602176634e-19 / 1e9;
 
-        % Slopes (small-angle)
-        xp = px ./ max(pz, 1e-30);
-        yp = py ./ max(pz, 1e-30);
+        % Slopes (small-angle). Skip dead particles -- their pz is stale
+        % from before the kill and dividing by it injects garbage into
+        % rows 2/4 that would corrupt downstream beamFit / emittance code
+        % that doesn't gate on stop.
+        xp = zeros(N, 1);
+        yp = zeros(N, 1);
+        xp(live) = px(live) ./ max(pz(live), 1e-30);
+        yp(live) = py(live) ./ max(pz(live), 1e-30);
 
-        % Centred z (longitudinal position relative to bunch centroid)
-        z_rel = zz - mean(zz);
+        % Centred z (relative to ALIVE-particle centroid). Including the
+        % parked-dead particles in mean(zz) shifts the centroid by ~1e9
+        % per dead particle and corrupts z_rel for the live bunch.
+        if any(live)
+            z_centroid = mean(zz(live));
+        else
+            z_centroid = 0;
+        end
+        z_rel       = zz - z_centroid;
+        z_rel(dead) = -1.0e9;          % keep park sentinel visible to downstream
 
         bunch       = struct();
         bunch.x     = [xx.'; xp.'; yy.'; yp.'; z_rel.'; Pgev.'];
         bunch.Q     = abs(double(target.q(:)).' .* double(target.w(:)).');  % C
-        bunch.stop  = zeros(1, N);
+        % Lucretia convention: stop == 0 alive, > 0 killed. lt dumps don't
+        % carry the killing-element index, so use 1 as a generic marker
+        % (matches CheckBeamMomenta.m).
+        bunch.stop       = zeros(1, N);
+        bunch.stop(dead) = 1;
 
         beam.BunchInterval = 0;
         beam.Bunch         = bunch;
